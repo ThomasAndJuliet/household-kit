@@ -1,0 +1,12 @@
+[package]
+name = "household-settings"
+description = "The household apps' shared settings: one shared.toml, one file per app, the lookup between them, locked atomic writes and a folder watch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+notify = { version = "8", default-features = false }

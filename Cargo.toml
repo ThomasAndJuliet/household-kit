@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# File::try_lock (household-settings' folder lock)
+rust-version = "1.89"
+publish = false
+repository = "https://github.com/ThomasAndJuliet/household-kit"
+
+[workspace.dependencies]
+tokio = { version = "1", default-features = false }

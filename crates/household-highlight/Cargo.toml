@@ -1,0 +1,13 @@
+[package]
+name = "household-highlight"
+description = "Code colours by token class (household rule 25b): the class of a syntax scope and the colour role of a class, without a highlighter or a theme"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+household-tones = { path = "../household-tones" }
