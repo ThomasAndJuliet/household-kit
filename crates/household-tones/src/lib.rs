@@ -23,6 +23,6 @@ pub mod tones;
 
 pub use apca::{apca, apca_over, apca_rgb8};
 pub use color::{Oklab, Oklch, Srgb, Srgba};
-pub use fonts::{TextUse, max_lc, passes, passes_for, required_lc, required_lc_for};
+pub use fonts::{Level, TextUse, level, max_lc, passes, passes_for, required_lc, required_lc_for};
 pub use roles::{Arrangement, Mode, Role, Surface};
 pub use tones::*;

@@ -48,7 +48,7 @@ This is household-ui's `reference/household_settings.rs` at 514be8f (the 15 Oct 
 - `tones`: `SURFACE_LIGHTNESS`, `surface`, `over`, `text_tone`, `grey`, `dark_tone`, `MUTED_*`, `muted_accent`, `on_muted`, WCAG `luminance`/`contrast_ratio` (used only by `on_muted`), and `held_component`.
 - `roles`: `Role` (darkest … lightest) with `tone(mode)` and `mirrors()`, `hover(surface, wash)` for darkish, `Arrangement::{A, B}` with `role(surface)`, and `text_role(size, body)`.
 - `apca`: `apca(text, bg)`, `apca_rgb8`, and `apca_over` for translucent text. It is tested against apca-w3's own test values: #888 on #fff is Lc 63.056469930209424, and #fff on #888 is −68.54146436644962.
-- `fonts`: `font_lookup(lc)` is a port of apca-w3 0.1.9's `fontLookupAPCA`, table "Public Beta 0.1.7 (G), May 28 2022". `required_lc(size_px, weight)` inverts it on a 0.1 Lc grid. `required_lc_for(…, TextUse)` applies the README's notes for body, sub-fluent and spot text. `max_lc` is Lc 90 above 24 px at weight 300 or more. `passes`/`passes_for` judge a style. `NON_TEXT_MIN_LC` (15) and `TEXT_MIN_LC` (30) are the table's 999/777 boundaries.
+- `fonts`: `required_lc(size_px, weight)` and `level` read APCA's table sorted by font size. This is `byFontSize` in apca-w3's `data/LUT-GseriesMay28-2022.js`, Public Beta 0.1.7 (G), the table apcacontrast.com and ARC publish. It is interpolated linearly between size rows; a weight between columns takes the lighter one's. The result is monotonic in size, and in weight up to 700 (the table holds 800 and 900 back at small sizes). `font_lookup(lc)` ports `fontLookupAPCA`, the Lc-sorted table, for reference; it asks more at 14 and 15 px, so it is not used to judge. `required_lc_for(…, TextUse)` applies the README's notes for body, sub-fluent and spot text; a spot-only cell (777) asks Lc 30 of spot text. `max_lc` is Lc 90 above 24 px at weight 300 or more. `passes`/`passes_for` judge a style.
 
 **Drift between the tones copies.** household-ui's `tones.rs` has no muted accent. cosmic-term's and Cerea's add the muted accent, identically. cosmic-term's `with_surfaces` is the newer: it also fixes an uncapped light container whose hover is not darker than its base, and it composites with full alpha. Cerea's only redoes the states of a container it capped. The crate follows cosmic-term's. Cerea's `TEXT_DARKEST` (L 0.25 → #222222) and `TEXT_DARK` (L 0.45 → #555555) are rule 25a's tones. Rule 25d replaced them with `Role::Darkest` #222222 and `Role::Dark` #525252, so they are not in the crate; `grey` and `dark_tone` are.
 
@@ -84,7 +84,15 @@ Not chosen yet. There is no LICENSE file and no `license` field. The household-u
 
 ## Open questions
 
-- **APCA's table and the household's text.** Black on white reaches Lc 106, but the table asks Lc 116.7 for 12 px regular and Lc 110 for 14 px regular. Sub-fluent 14 px regular still asks Lc 95, more than darkest on light gives (Lc 91.0). 16 px regular prose asks Lc 90: darkest passes on light (91.0) but not on lightish (79.5). Paper's 20 px body text asks Lc 84.5, and dark gives 75.3 on light. A 32 px regular heading may not exceed Lc 90, and darkest on light gives 91.0. The table's reference font is Barlow; Noto Sans is wider. Rule 25c's flat levels (75/60/45/30) are gone, as Juliet asked, so these pairs need a decision before the apps' CI uses `passes`.
+- **APCA's table and the household's text.** Black on white reaches Lc 106.
+  - 12 px at weights 400–700 is for spot text only.
+  - 14 px regular asks Lc 100 as content and Lc 85 as sub-fluent text. Darkest on light (Lc 91.0) passes as sub-fluent only.
+  - 16 px regular prose asks Lc 90: darkest passes on light (91.0) but not on lightish (79.5).
+  - Paper's 20 px body text asks Lc 86.7 (71.7 + 15), and dark gives 75.3 on light.
+  - A heading above 24 px may not exceed Lc 90, and darkest on light gives 91.0.
+  - The body rule (+15 below Lc 75) jumps: a cell of Lc 70 asks 85, one of 75 asks 75. That is in apca-w3's README and ARC's Gold level as written.
+  - The table's reference font is Barlow (x-height 0.506); Noto Sans's is 0.536 and Libertinus's 0.429. See `~/.cache/ui-audit/apca/required-lc.md`.
+  - Rule 25c's flat levels (75/60/45/30) are gone, as Juliet asked, so these pairs need a decision before the apps' CI uses `passes`.
 - **Rule 25d's own claim.** It says reading text reaches Lc 75 in either arrangement. Dark (#525252) on lightish (#d7d7d7), arrangement B's page, gives Lc 63.8. In dark mode, #d0d0d0 on #272727 gives Lc −74.8.
 - **The code palette.** On lightish the light colours give Lc 56–60. On dark plates Keyword, Function, Number and Tag give Lc 44–56.
 - **Long work.** It has no total deadline and is flagged at 15 s without progress, not stopped. Should a stall also stop it after a while?

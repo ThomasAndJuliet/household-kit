@@ -1,17 +1,28 @@
-//! APCA's font lookup table: the least Lc text of a size and weight needs.
+//! APCA's font lookup tables: the least Lc text of a size and weight needs.
 //!
-//! Source: apca-w3 0.1.9 (Myndex, github.com/Myndex/apca-w3, `src/apca-w3.js`,
-//! `fontLookupAPCA`), table "Public Beta 0.1.7 (G), May 28 2022", for the
-//! APCA-W3 0.0.98G-4g contrast in [`crate::apca`]. Its rows are Lc 0 to 125
-//! in steps of 5, its columns weights 100 to 900, its cells the least font
-//! size in px (reference font Barlow); 999 marks "too low contrast for
-//! anything" and 777 "non-text only". [`font_lookup`] is the library's
-//! function, ported with its interpolation and rounding; [`required_lc`]
-//! inverts it on a 0.1 Lc grid. The README's notes on use (apca-w3 0.1.9
-//! README, "Font Lookup Table", current as of May 27, 2022) are
-//! [`TextUse`] and [`max_lc`].
+//! Source: apca-w3 0.1.9 (Myndex, github.com/Myndex/apca-w3), APCA Public
+//! Beta 0.1.7 (G), for the APCA-W3 0.0.98G-4g contrast in [`crate::apca`]:
 //!
-//! Copyright of the table: © 2022 Myndex Research and Andrew Somers; the
+//! - [`required_lc`] reads the table **sorted by font size**, `byFontSize`
+//!   in `data/LUT-GseriesMay28-2022.js` ("MAIN FONT LOOKUP May 25 2022
+//!   EXPANDED"). It is the table apcacontrast.com and ARC's test method
+//!   publish for looking up a size and weight ("Beta 0.1.7 (G) • Revised
+//!   May 27, 2022"). Between its size rows it is interpolated linearly, as
+//!   its `byFontSizeDelta` array is there for and as ARC permits
+//!   ("Interpolation of the data in the font table is permitted"); a weight
+//!   between two columns takes the lighter column's.
+//! - [`font_lookup`] is the library's `fontLookupAPCA` (`src/apca-w3.js`),
+//!   the same table **sorted by Lc**, giving the least font size at a
+//!   contrast. It is a separate presentation and asks more at 14 and 15 px
+//!   (14 px at weight 400: Lc 110 there, Lc 100 sorted by size), so it is
+//!   not used to judge a style.
+//!
+//! In the tables, 999 marks "too low contrast for anything" (ARC's ⊘) and
+//! 777 "non-text and spot text only" (ARC's ®©). The README's notes on use
+//! (apca-w3 0.1.9 README, "Font Lookup Table", current as of May 27, 2022)
+//! are [`TextUse`] and [`max_lc`].
+//!
+//! Copyright of the tables: © 2022 Myndex Research and Andrew Somers; the
 //! apca-w3 package is under its W3 licence (see its LICENSE.md).
 
 use crate::apca::apca;
@@ -80,6 +91,67 @@ const FONT_DELTA: [[f64; 10]; 25] = [
 /// The weights of the table's columns
 pub const WEIGHTS: [u16; 9] = [100, 200, 300, 400, 500, 600, 700, 800, 900];
 
+/// `byFontSize`: one row per font size in px, and in each the least Lc for
+/// weights 100 to 900 (999 prohibited, 777 non-text and spot text only)
+const BY_FONT_SIZE: [[f64; 10]; 16] = [
+    [10.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0],
+    [12.0, 999.0, 999.0, 999.0, 777.0, 777.0, 777.0, 777.0, 999.0, 999.0],
+    [14.0, 999.0, 999.0, 777.0, 100.0, 100.0, 90.0, 75.0, 999.0, 999.0],
+    [15.0, 999.0, 999.0, 777.0, 100.0, 90.0, 75.0, 70.0, 999.0, 999.0],
+    [16.0, 999.0, 999.0, 777.0, 90.0, 75.0, 70.0, 60.0, 60.0, 999.0],
+    [18.0, 999.0, 777.0, 100.0, 75.0, 70.0, 60.0, 55.0, 55.0, 55.0],
+    [21.0, 999.0, 777.0, 90.0, 70.0, 60.0, 55.0, 50.0, 50.0, 50.0],
+    [24.0, 999.0, 777.0, 75.0, 60.0, 55.0, 50.0, 45.0, 45.0, 45.0],
+    [28.0, 999.0, 100.0, 70.0, 55.0, 50.0, 45.0, 43.0, 43.0, 43.0],
+    [32.0, 999.0, 90.0, 65.0, 50.0, 45.0, 43.0, 40.0, 40.0, 40.0],
+    [36.0, 999.0, 75.0, 60.0, 45.0, 43.0, 40.0, 38.0, 38.0, 38.0],
+    [42.0, 100.0, 70.0, 55.0, 43.0, 40.0, 38.0, 35.0, 35.0, 35.0],
+    [48.0, 90.0, 60.0, 50.0, 40.0, 38.0, 35.0, 33.0, 33.0, 33.0],
+    [60.0, 75.0, 55.0, 45.0, 38.0, 35.0, 33.0, 30.0, 30.0, 30.0],
+    [72.0, 60.0, 50.0, 40.0, 35.0, 33.0, 30.0, 30.0, 30.0, 30.0],
+    [96.0, 50.0, 45.0, 35.0, 33.0, 30.0, 30.0, 30.0, 30.0, 30.0],
+];
+
+/// What the size-sorted table says of a size and weight
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Level {
+    /// Content text needs at least this Lc
+    Lc(f32),
+    /// Only spot text (copyright, placeholder, disabled) and non-text:
+    /// the table's 777, ARC's ®©
+    SpotOnly,
+    /// Too small or too thin for any text: the table's 999, ARC's ⊘
+    Prohibited,
+}
+
+/// The size-sorted table's level for `size_px` at `weight`. Between two
+/// size rows with levels, the level is interpolated; below a weight's
+/// first row with a level, the row below decides (a 777 or 999); above
+/// 96 px, the 96 px row
+pub fn level(size_px: f32, weight: u16) -> Level {
+    let Some(w) = column(weight) else { return Level::Prohibited };
+    let size = f64::from(size_px);
+    let cell = |row: &[f64; 10]| row[w + 1];
+    let at = |v: f64| {
+        if v == 999.0 {
+            Level::Prohibited
+        } else if v == 777.0 {
+            Level::SpotOnly
+        } else {
+            Level::Lc(v as f32)
+        }
+    };
+    let Some(i) = BY_FONT_SIZE.iter().rposition(|row| row[0] <= size) else { return Level::Prohibited };
+    let (row, next) = (&BY_FONT_SIZE[i], BY_FONT_SIZE.get(i + 1));
+    match next {
+        Some(next) if cell(row) < 400.0 && cell(next) < 400.0 => {
+            let t = (size - row[0]) / (next[0] - row[0]);
+            Level::Lc((cell(row) + (cell(next) - cell(row)) * t) as f32)
+        }
+        _ => at(cell(row)),
+    }
+}
+
 /// The least Lc of anything that must be seen: below it (the table's 999)
 /// nothing may use the pair
 pub const NON_TEXT_MIN_LC: f32 = 15.0;
@@ -134,22 +206,22 @@ fn column(weight: u16) -> Option<usize> {
 }
 
 /// The least Lc fluent text (primary content) of `size_px` at `weight`
-/// needs, by the table: the lowest Lc, to 0.1, at which [`font_lookup`]
-/// allows that size. `None` when no contrast is enough (too small or too
-/// thin), or for a weight below 100
+/// needs, by the size-sorted table ([`level`]). `None` when no contrast is
+/// enough for content text there (spot-only, prohibited, or a weight below
+/// 100)
 pub fn required_lc(size_px: f32, weight: u16) -> Option<f32> {
-    let w = column(weight)?;
-    (145..=1250).map(|tenths| f64::from(tenths) / 10.0).find_map(|lc| match font_lookup(lc)[w] {
-        MinFont::Px(min) if min <= size_px => Some(lc as f32),
-        _ => None,
-    })
+    match level(size_px, weight) {
+        Level::Lc(lc) => Some(lc),
+        Level::SpotOnly | Level::Prohibited => None,
+    }
 }
 
 /// What text is for, which moves the table's level (apca-w3's README)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextUse {
     /// Body text, read at length: Lc 15 more where the table asks less
-    /// than Lc 75
+    /// than Lc 75. As the README (and ARC's Gold level) word it, this is
+    /// not monotonic: a cell of Lc 70 asks 85, one of Lc 75 asks 75
     Body,
     /// Fluent text, primary content: the table as it is
     #[default]
@@ -164,7 +236,13 @@ pub enum TextUse {
 
 /// The least Lc text of `size_px` at `weight` needs for `text_use`
 pub fn required_lc_for(size_px: f32, weight: u16, text_use: TextUse) -> Option<f32> {
-    let lc = required_lc(size_px, weight)?;
+    let lc = match level(size_px, weight) {
+        Level::Lc(lc) => lc,
+        // A size for spot text only: the data's "Min non-content text"
+        // level (`fontScoreGmin`, Lc 30)
+        Level::SpotOnly if text_use == TextUse::Spot => return Some(TEXT_MIN_LC),
+        Level::SpotOnly | Level::Prohibited => return None,
+    };
     Some(match text_use {
         TextUse::Body if lc < 75.0 => lc + 15.0,
         TextUse::Body | TextUse::Content => lc,
@@ -219,42 +297,79 @@ mod tests {
         assert_eq!(font_lookup(10.0), [MinFont::Prohibited; 9]);
     }
 
+    /// The size-sorted table's own cells, and between them
     #[test]
     fn the_least_lc_for_a_size_and_weight() {
         for (size, weight, want) in [
             (16.0, 400, Some(90.0)),
-            (14.0, 400, Some(110.0)),
-            (12.0, 400, Some(116.7)),
-            (20.0, 400, Some(69.5)),
-            (18.0, 700, Some(55.0)),
-            (24.0, 300, Some(74.4)),
-            (12.0, 700, Some(105.0)),
-            (48.0, 100, Some(89.4)),
+            (14.0, 400, Some(100.0)),
+            (14.0, 600, Some(90.0)),
+            (14.0, 700, Some(75.0)),
+            (15.0, 700, Some(70.0)),
+            (18.0, 400, Some(75.0)),
+            (24.0, 300, Some(75.0)),
+            (24.0, 400, Some(60.0)),
+            (20.0, 400, Some(75.0 - 5.0 * 2.0 / 3.0)),
+            (96.0, 700, Some(30.0)),
+            (120.0, 400, Some(33.0)),
+            (12.0, 500, None),
+            (13.0, 400, None),
             (9.0, 400, None),
         ] {
             let got = required_lc(size, weight);
             assert!(match (got, want) { (Some(g), Some(w)) => (g - w).abs() < 1e-4, (g, w) => g == w }, "{size} px at {weight}: {got:?}, not {want:?}");
         }
+        assert_eq!(level(12.0, 400), Level::SpotOnly);
+        assert_eq!(level(12.0, 800), Level::Prohibited);
+        assert_eq!(level(14.0, 300), Level::SpotOnly);
         // Between columns, the lighter weight's; none below 100
         assert_eq!(required_lc(16.0, 450), required_lc(16.0, 400));
         assert_eq!(required_lc(16.0, 50), None);
-        assert_eq!(required_lc(16.0, 1000), required_lc(16.0, 900));
+        assert_eq!(required_lc(20.0, 1000), required_lc(20.0, 900));
+    }
+
+    /// Monotonic: a larger size never asks more, nor a heavier weight up to
+    /// 700 (the table holds 800 and 900 back at small sizes on purpose)
+    #[test]
+    fn larger_and_heavier_never_ask_more() {
+        let ask = |size: f32, weight| match level(size, weight) {
+            Level::Lc(lc) => lc,
+            Level::SpotOnly => 200.0,
+            Level::Prohibited => 300.0,
+        };
+        for weight in WEIGHTS {
+            for tenths in 80..1200 {
+                let size = tenths as f32 / 10.0;
+                assert!(ask(size + 0.1, weight) <= ask(size, weight) + 1e-4, "{size} px at {weight}");
+            }
+        }
+        for tenths in 80..1200 {
+            let size = tenths as f32 / 10.0;
+            for pair in WEIGHTS[..7].windows(2) {
+                assert!(ask(size, pair[1]) <= ask(size, pair[0]) + 1e-4, "{size} px, {} then {}", pair[0], pair[1]);
+            }
+        }
     }
 
     #[test]
     fn uses_move_the_level() {
-        assert_eq!(required_lc_for(20.0, 400, TextUse::Body), Some(84.5));
+        assert_eq!(required_lc_for(21.0, 400, TextUse::Body), Some(85.0));
+        assert_eq!(required_lc_for(18.0, 400, TextUse::Body), Some(75.0));
         assert_eq!(required_lc_for(16.0, 400, TextUse::Body), Some(90.0));
         assert_eq!(required_lc_for(16.0, 400, TextUse::SubFluent), Some(75.0));
         assert_eq!(required_lc_for(16.0, 400, TextUse::Spot), Some(65.0));
         assert_eq!(required_lc_for(48.0, 700, TextUse::Spot), Some(TEXT_MIN_LC));
+        // A spot-only size: spot text at Lc 30, nothing else
+        assert_eq!(required_lc_for(12.0, 400, TextUse::Spot), Some(TEXT_MIN_LC));
+        assert_eq!(required_lc_for(12.0, 400, TextUse::SubFluent), None);
+        assert_eq!(required_lc_for(10.0, 400, TextUse::Spot), None);
         assert_eq!((max_lc(32.0, 400), max_lc(24.0, 400), max_lc(32.0, 200)), (Some(90.0), None, None));
     }
 
     #[test]
     fn passes_judges_by_size_and_weight() {
         let (darkest, light) = (Srgb::hex(0x222222), Srgb::hex(0xebebeb));
-        // Lc 91.0: 16 px regular reads; 14 px regular asks Lc 110
+        // Lc 91.0: 16 px regular reads; 14 px regular asks Lc 100
         assert!(passes(darkest, light, 16.0, 400));
         assert!(!passes(darkest, light, 14.0, 400));
         assert!(passes(darkest, light, 14.0, 700));
