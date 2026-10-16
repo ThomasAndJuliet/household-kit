@@ -7,6 +7,7 @@ Shared crates for the household's libcosmic apps (Terminal, Cerea, Lollypop, Dis
 | `household-settings` | The shared settings (rule 33). There is one `shared.toml` and one file per app, looked up app file → shared → default. Writes take a lock, are atomic and keep comments. It also has the folder watch, moving a file, migration with seeding, and Open making a missing shared file. |
 | `household-tones` | The tone maths: OKLab/OKLCH, the 0.94 surface cap, coloured text, the muted accent and what goes on it, and a held surface's hover/selected/pressed. It has Juliet's seven tones and arrangements A/B (rule 25d), APCA-W3 0.0.98G-4g contrast, and APCA's font lookup table (`required_lc`, `passes`). |
 | `household-highlight` | Code colours by token class (rule 25b): scope → class, and class → colour role. The parser stays in the app. |
+| `household-type` | How the rendered views set prose: the **Paper view** and the **Text view**, as the terminal's conversations set them. Fonts, sizes, line spacing, block spacing, indents, measure, code, maths and tables, as plain data, and a sample with where the terminal sets each line, for the apps' drift tests. |
 | `household-wait` | Waiting without freezing (rules 40–43). It covers tiers, deadlines, stalls, cancellation, keyed waits, debounce, coalescing, ordered queues, time slices and timings. |
 
 ## No crate depends on libcosmic or iced
@@ -68,6 +69,38 @@ This is the `ui_wait` draft's core, without its widgets and without libcosmic's 
 | `Person` | none |
 
 Tiers: `Instant` (≤ 100 ms, nothing shown), `Spinner` from 100 ms, `Bar` from 1 s. The messages are `TOO_LONG` ("This took too long and was stopped. Try again.") and `STILL_WAITING` ("Still waiting. Nothing has changed for 15 seconds."). Cancellation is tokio-util's `CancellationToken`. Keyed waits replace the old one (latest wins); `.join()` is opt-in. The tests run on tokio's paused clock, apart from the one that kills a real child process.
+
+### household-type
+
+Juliet, 16 Oct: "paper mode" means the conversations' Paper view, and Cerea's Text view should look like the conversations' Text view. One crate holds both, as two `Style`s: `household_type::paper()` and `household_type::text()`. It is called `household-type`, not `household-paper`, because it holds the Text view too. The values are cosmic-term's (origin/main f79a869e), from `ThreadStyle::with_paper` (`src/thread/view.rs`) and `build_block`, `gap_before` and `CellSpec::new` (`src/thread/rich.rs`).
+
+| | Paper | Text |
+|---|---|---|
+| Text | Libertinus Serif, 20 px, 1.5, justified | the interface's sans-serif, 16 px, 1.5, ragged |
+| Measure | 48 em | 52 em |
+| Headings 1–6 | 1.55 / 1.32 / 1.16 / 1.05 / 1 / 1 of the text, bold; lines 1.2 / 1.3 / 1.35 / 1.4 / 1.4 / 1.4 | the same |
+| Between blocks | 0.7 em; 0.25 em between the first blocks of two items of one list level; 0.5 em more above a heading | the same |
+| Code block | Noto Sans Mono at 0.88 × 0.86 of the text (15.1 px), lines 1.5 of its size | 0.88 (14.1 px) |
+| Inline code | 0.92 × 0.86 (15.8 px), the text's line | 0.92 (14.7 px) |
+| Formulas | 1.1 of the text; display centred, unnumbered | the same |
+| Lists | 1.5 em a level; marks right-aligned 0.45 em before the text, muted; • then ◦; items justified | ragged |
+| Quotation | 1.1 em a level; a 3 px bar at its left edge; muted text, justified | ragged |
+| Code, maths, tables, figures | 0.5 em padding all round (the terminal's plate) | the same |
+| Tables | centred; cells 0.4 em; bold head row at the rows' size; 1.5 px rule under it, 1 px between rows, none under the last | the same |
+| Links | bold | bold |
+
+The size and line spacing are the shared settings (`paper-size`, `paper-line-spacing`, `prose-size`, `prose-line-spacing`); `Style::size` and `Style::line` are their defaults. Everything else is in ems of the size. The colours are not here: `Ink` names the tone (text, strong, muted, rule) and each app takes it from `household-tones`.
+
+**The drift test.** `reference::SAMPLE` is a Markdown page with headings 1–4, paragraphs, inline code, bold, italic, inline maths, a link, a bullet list with a nested item, a numbered list, a quotation, a code block, a table and display maths. `reference::PAPER` and `reference::TEXT` hold where the terminal sets each line (left edge, baseline, width, size), each bullet and number, the quotation's bar, the table's rules and the formula's box, at 20 px in 960 px and at 16 px in 832 px. An app lays the sample out in its own view and calls `reference::compare`. Anything more than half a pixel out fails. Cerea does this in `src/paper_match_tests.rs`. The terminal is to do the same.
+
+**Changing the typography.** Change `paper()` or `text()`, then the terminal. Measure the terminal again with the layout probe in `crates/household-type/probe/` (its opening comment says how). It writes `src/reference/measured.rs`. Then update Cerea. Both apps' tests fail until all three agree.
+
+**Where the terminal's values may break a household rule (to decide, 16 Oct).** These are kept as the terminal has them:
+
+- Rule 25d: "text below 18 px is darkest on any surface". Code blocks (15.1 px Paper, 14.1 px Text) and inline code are set in the body's soft dark tone.
+- Rules 25d and 25e: long body text is in the soft dark tone. A quotation's text is muted (the text at 68 %), which is fainter than that.
+- Rule 25f: the terminal draws a plate behind code, display maths and tables. The rule allows this in a conversation. Cerea removed them in UI batch 5 because its code blocks have no actions. Cerea keeps the plates' padding, so its text sits where the terminal's does.
+- A table's bold head row is in the body's tone, but bold text elsewhere takes the darkest tone.
 
 ## Checks
 

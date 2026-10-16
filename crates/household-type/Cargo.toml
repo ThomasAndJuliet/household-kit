@@ -1,0 +1,10 @@
+[package]
+name = "household-type"
+description = "How the household's rendered views set prose (the Paper view and the Text view): fonts, sizes, line spacing, block spacing, indents, measure, code, maths and tables, as plain data, with a reference sample measured from the terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
