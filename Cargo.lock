@@ -76,6 +76,10 @@ name = "household-tones"
 version = "0.1.0"
 
 [[package]]
+name = "household-type"
+version = "0.1.0"
+
+[[package]]
 name = "household-wait"
 version = "0.1.0"
 dependencies = [
