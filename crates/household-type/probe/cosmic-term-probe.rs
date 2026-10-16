@@ -1,3 +1,7 @@
+// Superseded (16 Oct): cosmic-term now carries this probe as its drift test,
+// src/thread/rich/type_drift.rs, which compares with the reference and, run
+// with CT_TYPE_REFERENCE=<dir>, writes <dir>/measured.rs. Kept for reference.
+//
 // The layout probe that measured household-type's reference
 // (src/reference/measured.rs) in cosmic-term. It is not compiled here.
 //

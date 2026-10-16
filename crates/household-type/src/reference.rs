@@ -3,9 +3,9 @@
 //! bar, the table's rules and the display formula's box, in the column's
 //! coordinates (its left edge, and the first block's top, at 0).
 //!
-//! Measured from cosmic-term origin/main f79a869e (16 Oct) with
-//! `ThreadStyle::with_paper` on COSMIC's light theme and the default
-//! settings: the Paper view at 20 px in a column 960 px wide (its measure),
+//! Measured by cosmic-term's drift test (`src/thread/rich/type_drift.rs`,
+//! 16 Oct, Terminal UI batch 4) with `ThreadStyle::with_paper` on COSMIC's
+//! light theme and the default settings: the Paper view at 20 px in a column 960 px wide (its measure),
 //! the Text view at 16 px in one 832 px wide. The fonts are the ones both
 //! apps bundle (Libertinus Serif) or find on the system (the interface's
 //! sans-serif, Noto Sans Mono); both apps shape with cosmic-text 0.19.

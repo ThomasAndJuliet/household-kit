@@ -79,28 +79,32 @@ Juliet, 16 Oct: "paper mode" means the conversations' Paper view, and Cerea's Te
 | Text | Libertinus Serif, 20 px, 1.5, justified | the interface's sans-serif, 16 px, 1.5, ragged |
 | Measure | 48 em | 52 em |
 | Headings 1–6 | 1.55 / 1.32 / 1.16 / 1.05 / 1 / 1 of the text, bold; lines 1.2 / 1.3 / 1.35 / 1.4 / 1.4 / 1.4 | the same |
-| Between blocks | 0.7 em; 0.25 em between the first blocks of two items of one list level; 0.5 em more above a heading | the same |
+| Between blocks | 0.7 em; 0.25 em between the first blocks of two items of one list, at any depth (a new list at the same depth or further out takes 0.7 em); 0.5 em more above a heading | the same |
 | Code block | Noto Sans Mono at 0.88 × 0.86 of the text (15.1 px), lines 1.5 of its size | 0.88 (14.1 px) |
 | Inline code | 0.92 × 0.86 (15.8 px), the text's line | 0.92 (14.7 px) |
 | Formulas | 1.1 of the text; display centred, unnumbered | the same |
-| Lists | 1.5 em a level; marks right-aligned 0.45 em before the text, muted; • then ◦; items justified | ragged |
-| Quotation | 1.1 em a level; a 3 px bar at its left edge; muted text, justified | ragged |
+| Lists | 1.5 em a level; marks right-aligned 0.45 em before the text, in the one faded tone (muted); • then ◦; items justified | ragged |
+| Quotation | 1.1 em a level; a 3 px bar at its left edge; the body's soft tone, justified | ragged |
 | Code, maths, tables, figures | 0.5 em padding all round (the terminal's plate) | the same |
-| Tables | centred; cells 0.4 em; bold head row at the rows' size; 1.5 px rule under it, 1 px between rows, none under the last | the same |
+| Tables | centred; cells 0.4 em; bold head row at the rows' size, in the darkest; 1.5 px rule under it, 1 px between rows, none under the last | the same |
 | Links | bold | bold |
 
 The size and line spacing are the shared settings (`paper-size`, `paper-line-spacing`, `prose-size`, `prose-line-spacing`); `Style::size` and `Style::line` are their defaults. Everything else is in ems of the size. The colours are not here: `Ink` names the tone (text, strong, muted, rule) and each app takes it from `household-tones`.
 
-**The drift test.** `reference::SAMPLE` is a Markdown page with headings 1–4, paragraphs, inline code, bold, italic, inline maths, a link, a bullet list with a nested item, a numbered list, a quotation, a code block, a table and display maths. `reference::PAPER` and `reference::TEXT` hold where the terminal sets each line (left edge, baseline, width, size), each bullet and number, the quotation's bar, the table's rules and the formula's box, at 20 px in 960 px and at 16 px in 832 px. An app lays the sample out in its own view and calls `reference::compare`. Anything more than half a pixel out fails. Cerea does this in `src/paper_match_tests.rs`. The terminal is to do the same.
+**The drift test.** `reference::SAMPLE` is a Markdown page with headings 1–4, paragraphs, inline code, bold, italic, inline maths, a link, a bullet list with a nested item, a numbered list, a quotation, a code block, a table and display maths. `reference::PAPER` and `reference::TEXT` hold where the terminal sets each line (left edge, baseline, width, size), each bullet and number, the quotation's bar, the table's rules and the formula's box, at 20 px in 960 px and at 16 px in 832 px. An app lays the sample out in its own view and calls `reference::compare`. Anything more than half a pixel out fails. Cerea does this in `src/paper_match_tests.rs`, the terminal in `src/thread/rich/type_drift.rs`.
 
-**Changing the typography.** Change `paper()` or `text()`, then the terminal. Measure the terminal again with the layout probe in `crates/household-type/probe/` (its opening comment says how). It writes `src/reference/measured.rs`. Then update Cerea. Both apps' tests fail until all three agree.
+**Changing the typography.** Change `paper()` or `text()`, then the terminal. Measure the terminal again with its drift test: `CT_TYPE_REFERENCE=<dir> cargo test type_drift` in cosmic-term writes `<dir>/measured.rs` for `src/reference/measured.rs` here (the probe in `crates/household-type/probe/` is the same code, kept for reference). Then update Cerea. Both apps' tests fail until all three agree.
 
-**Where the terminal's values may break a household rule (to decide, 16 Oct).** These are kept as the terminal has them:
+**What the comparison with Cerea found in the terminal, and how it was settled (16 Oct, cosmic-term "Terminal UI batch 4").**
 
-- Rule 25d: "text below 18 px is darkest on any surface". Code blocks (15.1 px Paper, 14.1 px Text) and inline code are set in the body's soft dark tone.
-- Rules 25d and 25e: long body text is in the soft dark tone. A quotation's text is muted (the text at 68 %), which is fainter than that.
-- Rule 25f: the terminal draws a plate behind code, display maths and tables. The rule allows this in a conversation. Cerea removed them in UI batch 5 because its code blocks have no actions. Cerea keeps the plates' padding, so its text sits where the terminal's does.
-- A table's bold head row is in the body's tone, but bold text elsewhere takes the darkest tone.
+- Footnotes are parsed: a reference is its label raised, a note a list item numbered by its label.
+- The Text view follows the shared `prose-line-spacing`.
+- A nested list's first item, and the next outer item after it, take the tight gap (0.25 em), not 0.7 em. A new list at the same depth or further out still takes 0.7 em.
+- A quotation's text is in the body's soft tone, not muted (rules 25d, 25e: long reading).
+- A table's bold head row is in the darkest, as bold is everywhere.
+- List marks are in the one faded tone (`MUTED_ALPHA`).
+- Code (blocks and inline) is in the body's soft tone, as the body is.
+- Rule 25f: the terminal now sets code, display maths and tables on the page with a border instead of a plate (Juliet, 16 Oct: bordered cards); the padding is unchanged, so lines are where they were.
 
 ## Checks
 

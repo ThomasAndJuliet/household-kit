@@ -84,8 +84,10 @@ pub struct Heading {
 pub struct Spacing {
     /// Between any two blocks
     pub block: f32,
-    /// Between two list items of one level: the items' first blocks, both
-    /// with a bullet or number, at the same depth
+    /// Between two list items of one list: the items' first blocks, both
+    /// with a bullet or number, at any depth (a nested list's first item
+    /// under its parent's, and the next outer item after a nested list,
+    /// too); not where a new list starts at the same depth or further out
     pub tight: f32,
     /// Added above a heading
     pub heading_extra: f32,
@@ -152,7 +154,8 @@ pub struct Quote {
     pub bar_width: f32,
     pub bar_radius: f32,
     pub bar_ink: Ink,
-    /// Its text: muted, justified where the body is
+    /// Its text: the body's soft tone (rules 25d, 25e: long reading),
+    /// justified where the body is
     pub ink: Ink,
     pub justify: bool,
 }
@@ -228,7 +231,8 @@ pub struct Inks {
     pub body: Ink,
     pub headings: Ink,
     pub bold: Ink,
-    /// The heading row of a table: bold, in the body's tone
+    /// The heading row of a table: bold, in the darkest, as bold is
+    /// everywhere
     pub table_head: Ink,
     pub code: Ink,
 }
@@ -255,7 +259,7 @@ const COMMON: Style = Style {
     code: Code { scale: 1.0, block: 0.88, inline: 0.92, line_follows_text: true },
     maths: Maths { scale: 1.1, display_centred: true, rise: 0.8, drop: 0.25, numbered: false },
     list: List { indent: 1.5, marker_gap: 0.45, bullets: ["•", "◦"], number_suffix: ".", tasks: ["☐", "☑"], marker_ink: Ink::Muted, justify: false },
-    quote: Quote { indent: 1.1, bar_at: 0.0, bar_width: 3.0, bar_radius: 1.5, bar_ink: Ink::Rule, ink: Ink::Muted, justify: false },
+    quote: Quote { indent: 1.1, bar_at: 0.0, bar_width: 3.0, bar_radius: 1.5, bar_ink: Ink::Rule, ink: Ink::Text, justify: false },
     plate_pad: 0.5,
     table: Table {
         cell_pad: 0.4,
@@ -272,7 +276,7 @@ const COMMON: Style = Style {
     rule: HorizontalRule { at: 0.4, height: 0.8, thickness: 1.0 },
     figures: Figures { image_width: 520.0, image_height: 24.0, chart_width: 42.0, chart_label: 0.8, diagram_height: 40.0 },
     links_bold: true,
-    inks: Inks { body: Ink::Text, headings: Ink::Strong, bold: Ink::Strong, table_head: Ink::Text, code: Ink::Text },
+    inks: Inks { body: Ink::Text, headings: Ink::Strong, bold: Ink::Strong, table_head: Ink::Strong, code: Ink::Text },
 };
 
 /// The Paper view: Libertinus Serif at 20 px, 1.5 apart, justified, 48 ems
@@ -303,6 +307,8 @@ pub struct Block {
     /// A list item's first block (it has the item's bullet or number), and
     /// how many lists deep it is
     pub item: Option<u16>,
+    /// The first item of its list
+    pub first: bool,
 }
 
 impl Style {
@@ -316,10 +322,13 @@ impl Style {
         size * self.heading(level).scale
     }
 
-    /// The room above `next` after `previous`, in ems: list items of one
-    /// level close together, headings with more room above
+    /// The room above `next` after `previous`, in ems: list items close
+    /// together, at any depth, headings with more room above
     pub fn gap(&self, previous: Block, next: Block) -> f32 {
-        let tight = matches!((previous.item, next.item), (Some(a), Some(b)) if a == b);
+        let tight = match (previous.item, next.item) {
+            (Some(before), Some(depth)) => !(next.first && depth <= before),
+            _ => false,
+        };
         let gap = if tight { self.spacing.tight } else { self.spacing.block };
         if next.heading { gap + self.spacing.heading_extra } else { gap }
     }
@@ -367,11 +376,15 @@ mod tests {
     fn gaps() {
         let s = paper();
         let para = Block::default();
-        let item = |d| Block { heading: false, item: Some(d) };
-        let heading = Block { heading: true, item: None };
+        let item = |d| Block { heading: false, item: Some(d), first: false };
+        let first = |d| Block { heading: false, item: Some(d), first: true };
+        let heading = Block { heading: true, item: None, first: false };
         assert_eq!(s.gap(para, item(1)), 0.7);
         assert_eq!(s.gap(item(1), item(1)), 0.25);
-        assert_eq!(s.gap(item(1), item(2)), 0.7);
+        assert_eq!(s.gap(item(1), first(2)), 0.25, "a nested list's first item");
+        assert_eq!(s.gap(item(2), item(1)), 0.25, "and back out");
+        assert_eq!(s.gap(item(2), first(1)), 0.7, "a new list after a nested one");
+        assert_eq!(s.gap(item(1), first(1)), 0.7, "a new list after another");
         assert_eq!(s.gap(para, heading), 1.2);
         assert_eq!(s.gap(heading, para), 0.7);
     }
