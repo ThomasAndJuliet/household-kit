@@ -372,23 +372,75 @@ mod tests {
         assert!((short.lightness() - target).abs() < 0.005, "{} is not the target {target}", short.lightness());
     }
 
-    /// No grey the fill rule moves comes out darker than the page's
-    /// strongest text on the light tint (#222222); a grey already darker
-    /// than the target is left alone, as the rule says of every colour
-    /// beyond it (rule 6, 25 Oct)
+    /// Greys 0 to 1 in steps of a hundredth, as sRGB colours
+    fn greys() -> impl Iterator<Item = Srgb> {
+        (0..=100).map(|i| Srgb::new(i as f32 / 100.0, i as f32 / 100.0, i as f32 / 100.0))
+    }
+
+    /// Greys come out in the order they went in: none is drawn darker than
+    /// one that was darker than it (no lighter grey comes out darker) when
+    /// `draw` is the fill rule
+    fn assert_grey_order_kept(draw: impl Fn(Srgb) -> Srgb, what: &str) {
+        let mut last = (0.0, -1.0);
+        for grey in greys() {
+            let got = draw(grey).lightness();
+            assert!(got >= last.1 - 0.002, "{what}: grey {} → {got}, after {} → {}", grey.to_hex(), last.0, last.1);
+            last = (grey.lightness(), got);
+        }
+    }
+
+    /// On the light tint every grey lighter than the strongest text (#222222)
+    /// comes out #222222, #222222 itself and black stay, and the order of
+    /// the greys is kept: a lighter grey is never drawn darker than a
+    /// darker one (rule 6, 25 Oct; the #464646 and #4d4d4d case, fixed with
+    /// the check against where greys go)
     #[test]
-    fn no_grey_is_darker_than_the_strongest_text_on_the_light_tint() {
+    fn on_the_light_tint_every_lighter_grey_goes_to_the_strongest_text_and_order_is_kept() {
         let (accent, beneath, strongest) = (rgb("#7f2400"), rgb("#ebebeb"), rgb("#222222"));
-        let floor = strongest.lightness();
-        for step in 0..=40 {
-            let v = step as f32 / 40.0;
-            let grey = Srgb::new(v, v, v);
-            let got = on_tint(grey, accent, beneath, strongest);
-            if grey.lightness() < floor {
-                assert_eq!(got, grey, "grey {v} is beyond the target and should stay");
-            } else {
-                assert!(got.lightness() >= floor - 0.004, "grey {v} → {} is darker than #222222", got.to_hex());
+        let draw = |c| on_tint(c, accent, beneath, strongest);
+        assert_grey_order_kept(draw, "light tint");
+        for grey in greys() {
+            let got = draw(grey);
+            if grey.lightness() > strongest.lightness() + 0.002 {
+                assert!(off(got, strongest) <= 2, "grey {} → {}, not #222222", grey.to_hex(), got.to_hex());
+            } else if grey.lightness() < strongest.lightness() - 0.002 {
+                assert_eq!(got, grey, "grey {} is darker than #222222 and should stay", grey.to_hex());
             }
+        }
+        assert_eq!(draw(rgb("#000000")), rgb("#000000"));
+        assert!(off(draw(rgb("#222222")), strongest) <= 2);
+        // The pair that came out in the wrong order
+        assert!(draw(rgb("#464646")).lightness() <= draw(rgb("#4d4d4d")).lightness() + 0.002);
+    }
+
+    /// Mirrored on the dark tint: every grey darker than the strongest text
+    /// (#e6e6e6) comes out #e6e6e6, white stays, and the order is kept
+    /// (rule 6, 25 Oct)
+    #[test]
+    fn on_the_dark_tint_every_darker_grey_goes_to_the_strongest_text_and_order_is_kept() {
+        let (accent, beneath, strongest) = (rgb("#ff9f7d"), rgb("#1e1e1e"), rgb("#e6e6e6"));
+        let draw = |c| on_tint(c, accent, beneath, strongest);
+        assert_grey_order_kept(draw, "dark tint");
+        for grey in greys() {
+            let got = draw(grey);
+            if grey.lightness() < strongest.lightness() - 0.002 {
+                assert!(off(got, strongest) <= 2, "grey {} → {}, not #e6e6e6", grey.to_hex(), got.to_hex());
+            } else if grey.lightness() > strongest.lightness() + 0.002 {
+                assert_eq!(got, grey, "grey {} is lighter than #e6e6e6 and should stay", grey.to_hex());
+            }
+        }
+        assert_eq!(draw(rgb("#ffffff")), rgb("#ffffff"));
+    }
+
+    /// On the solid fill #7f2400 every grey goes to white, except white
+    /// itself, which already is (rule 6, 24 Oct)
+    #[test]
+    fn on_the_solid_fill_every_grey_goes_to_white() {
+        let fill = rgb("#7f2400");
+        assert_grey_order_kept(|c| on_solid(c, fill), "solid #7f2400");
+        for grey in greys() {
+            let got = on_solid(grey, fill);
+            assert!(off(got, Srgb::WHITE) <= 2, "grey {} → {}, not white", grey.to_hex(), got.to_hex());
         }
     }
 
