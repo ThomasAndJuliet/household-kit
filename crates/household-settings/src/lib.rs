@@ -1,7 +1,9 @@
 //! The household's shared settings, from household-ui's
 //! `reference/household_settings.rs` (commit 514be8f, the 15 Oct follow-up:
-//! seeding and Open makes the shared file). Every app uses this crate rather
-//! than a copy of its own.
+//! seeding and Open makes the shared file). No app depends on this crate yet:
+//! Cerea, cosmic-term and CosmicDiscord each keep a copy of their own
+//! (`src/household_settings.rs`), so a fix made in one has to be carried to the
+//! others by hand.
 //!
 //! One folder holds `shared.toml`, read by every household app, and one file
 //! per app (`terminal.toml`, `cerea.toml`, …). A setting is looked up in the
@@ -964,7 +966,7 @@ fn set_item(doc: &mut DocumentMut, name: &str, item: Item) {
 
 /// The 1-based line of byte `at` in `text`
 fn line_of(text: &str, at: usize) -> usize {
-    text[..at.min(text.len())].bytes().filter(|b| *b == b'\n').count() + 1
+    text.bytes().take(at).filter(|b| *b == b'\n').count() + 1
 }
 
 /// The line a top-level key is written on
