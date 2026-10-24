@@ -5,6 +5,8 @@
 //!   25a): large surfaces held below glaring white, coloured text at a
 //!   readable lightness, the muted accent and what goes on it, and the
 //!   hover, selected and pressed states of a held surface.
+//! - [`fill`]: what is drawn on a fill (the fill rule) and the selection
+//!   tint, for solid fills and tints alike (rule 6).
 //! - [`roles`]: Juliet's seven tones named by role, their light and dark
 //!   values and the two arrangements (rule 25d).
 //! - [`apca`]: the APCA-W3 0.0.98G-4g lightness contrast (rule 25c).
@@ -17,12 +19,14 @@
 
 pub mod apca;
 pub mod color;
+pub mod fill;
 pub mod fonts;
 pub mod roles;
 pub mod tones;
 
 pub use apca::{apca, apca_over, apca_rgb8};
 pub use color::{Oklab, Oklch, Srgb, Srgba};
+pub use fill::*;
 pub use fonts::{Level, TextUse, level, max_lc, passes, passes_for, required_lc, required_lc_for};
 pub use roles::{Arrangement, Mode, Role, Surface};
 pub use tones::*;
