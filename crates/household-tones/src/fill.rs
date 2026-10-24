@@ -84,22 +84,25 @@ pub fn grey_weight(chroma: f32) -> f32 {
 /// `greys_to`: its hue and chroma kept, its lightness moved to the fill's
 /// plus [`ON_FILL_REACH`]`.0` where the fill's on colour is lighter, minus
 /// `.1` where darker, and a grey on to `greys_to`'s lightness (never short
-/// of that target). A colour already that far from the fill keeps its own
-/// lightness; chroma is kept as far as sRGB allows at the new lightness
+/// of that target). A colour already as far from the fill as that keeps
+/// its own lightness; chroma is kept as far as sRGB allows at the new lightness
 pub fn on_fill(color: Srgb, fill: Srgb, greys_to: Srgb) -> Srgb {
     let fill_l = fill.lightness();
     let own = color.to_oklch();
     let up = lighter_on(fill);
     let target = if up { fill_l + ON_FILL_REACH.0 } else { fill_l - ON_FILL_REACH.1 }.clamp(0.0, 1.0);
-    let beyond = if up { own.l >= target } else { own.l <= target };
-    if beyond {
-        return color;
-    }
     // The chroma it can keep at the target: a colour the gamut greys there
     // has no hue left to keep either
     let weight = grey_weight(own.chroma.min(max_chroma(target, own.hue)));
     let toward = target + weight * (greys_to.lightness() - target);
+    // Never short of the target, and a grey judged against where greys go:
+    // judged against the target, a grey just past it would keep its own
+    // lightness while a lighter one went on beyond it, out of order
     let l = if up { toward.max(target) } else { toward.min(target) };
+    let beyond = if up { own.l >= l } else { own.l <= l };
+    if beyond {
+        return color;
+    }
     in_srgb(l, own.chroma, own.hue)
 }
 
