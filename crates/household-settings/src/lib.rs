@@ -1109,6 +1109,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
 
+    #[test]
+    fn error_line_numbers_accept_byte_offsets_inside_multibyte_characters() {
+        for at in [0, 1, 2] { assert_eq!(line_of("α\nβ", at), 1); }
+        for at in [3, 4, 5, usize::MAX] { assert_eq!(line_of("α\nβ", at), 2); }
+    }
+
     /// A home of the test's own, never the real one
     struct Home(PathBuf);
 
