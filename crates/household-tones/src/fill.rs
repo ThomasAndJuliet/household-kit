@@ -128,3 +128,277 @@ pub fn dimmed_over(color: Srgb, fill: Srgb) -> Srgb {
     let mix = |c: f32, f: f32| f + (c - f) * ON_FILL_DIMMED_KEEP;
     Srgb::new(mix(color.r, fill.r), mix(color.g, fill.g), mix(color.b, fill.b))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgb(hex: &str) -> Srgb {
+        Srgb::parse(hex).unwrap()
+    }
+
+    /// The largest 8-bit channel difference between two colours
+    fn off(a: Srgb, b: Srgb) -> i32 {
+        let (a, b) = (a.to_rgb8(), b.to_rgb8());
+        (0..3).map(|i| (i32::from(a[i]) - i32::from(b[i])).abs()).max().unwrap()
+    }
+
+    /// Hue difference in degrees, round the circle
+    fn hue_gap(a: f32, b: f32) -> f32 {
+        let d = (a - b).rem_euclid(360.0);
+        d.min(360.0 - d)
+    }
+
+    /// Each `(colour, expected)` row comes out within two units of each
+    /// 8-bit channel: the values of an independent port, which is how the
+    /// approved sheets were checked
+    fn check(rows: &[(&str, &str)], draw: impl Fn(Srgb) -> Srgb, what: &str) {
+        for (color, want) in rows {
+            let got = draw(rgb(color));
+            assert!(off(got, rgb(want)) <= 2, "{what}: {color} → {} not {want}", got.to_hex());
+        }
+    }
+
+    /// On Juliet's dark-red accent (#7f2400), greys of any lightness go all
+    /// the way to white; a colour keeps its hue at the fill's lightness plus
+    /// 0.34; white, already beyond that, is left alone (rule 6, 19 and
+    /// 24 Oct)
+    #[test]
+    fn on_the_dark_red_accent_greys_go_to_white_and_colours_keep_their_hue() {
+        let fill = rgb("#7f2400");
+        check(
+            &[
+                ("#222222", "#ffffff"),
+                ("#555555", "#ffffff"),
+                ("#8a8a8a", "#ffffff"),
+                ("#5c5650", "#ffffff"),
+                ("#56657a", "#e0edff"),
+                ("#c01c28", "#ff7f78"),
+                ("#26a269", "#52c589"),
+                ("#c4a000", "#cca718"),
+                ("#1c71d8", "#71adff"),
+                ("#a347ba", "#dd7ff5"),
+                ("#ffffff", "#ffffff"),
+            ],
+            |c| on_solid(c, fill),
+            "solid on #7f2400",
+        );
+    }
+
+    /// The same on the muted version of that accent (#954b33)
+    #[test]
+    fn on_the_muted_red_fill_the_same_holds() {
+        let fill = rgb("#954b33");
+        check(&[("#222222", "#ffffff"), ("#1c71d8", "#a9cdff")], |c| on_solid(c, fill), "solid on #954b33");
+    }
+
+    /// On a dark theme's light accent (#ff9f7d), black is the on colour:
+    /// greys go to black, and colours are moved 0.36 darker (rule 6, 19 Oct)
+    #[test]
+    fn on_a_light_accent_greys_go_to_black_and_colours_darker() {
+        let fill = rgb("#ff9f7d");
+        assert!(!lighter_on(fill));
+        check(
+            &[("#e6e6e6", "#000000"), ("#9e9e9e", "#000000"), ("#e5c07b", "#684b00"), ("#79c0ff", "#00548a")],
+            |c| on_solid(c, fill),
+            "solid on #ff9f7d",
+        );
+    }
+
+    /// The selection tint of the accent #7f2400 over a light theme's #ebebeb
+    /// shows as #c8aba0, and of #ff9f7d over a dark theme's #1e1e1e as
+    /// #66473c (rule 6, 25 Oct)
+    #[test]
+    fn the_tint_is_the_accent_at_a_third_over_what_is_beneath() {
+        assert!(off(tint(rgb("#7f2400"), rgb("#ebebeb")), rgb("#c8aba0")) <= 2);
+        assert!(off(tint(rgb("#ff9f7d"), rgb("#1e1e1e")), rgb("#66473c")) <= 2);
+    }
+
+    /// On the light theme's tint, greys go to the page's strongest text
+    /// colour (#222222, not black), and a colour is darkened to the tint's
+    /// lightness less 0.36; #222222 is already beyond that and stays
+    /// (rule 6, 25 Oct)
+    #[test]
+    fn on_the_light_tint_greys_go_to_the_strongest_text_colour() {
+        let (accent, beneath, strongest) = (rgb("#7f2400"), rgb("#ebebeb"), rgb("#222222"));
+        check(
+            &[
+                ("#222222", "#222222"),
+                ("#555555", "#222222"),
+                ("#8a8a8a", "#222222"),
+                ("#7f2400", "#7f2400"),
+                ("#c01c28", "#8c0014"),
+                ("#26a269", "#005734"),
+                ("#c4a000", "#584700"),
+                ("#1c71d8", "#004592"),
+            ],
+            |c| on_tint(c, accent, beneath, strongest),
+            "tint of #7f2400 over #ebebeb",
+        );
+    }
+
+    /// On the dark theme's tint the on colour is lighter, so greys go to its
+    /// strongest text colour (#e6e6e6), and colours already light enough
+    /// stay as they are (rule 6, 25 Oct)
+    #[test]
+    fn on_the_dark_tint_greys_go_to_the_strongest_text_colour() {
+        let (accent, beneath, strongest) = (rgb("#ff9f7d"), rgb("#1e1e1e"), rgb("#e6e6e6"));
+        check(
+            &[
+                ("#e6e6e6", "#e6e6e6"),
+                ("#9e9e9e", "#e6e6e6"),
+                ("#ff7b72", "#ff8f86"),
+                ("#7ee787", "#7ee787"),
+                ("#e5c07b", "#e5c07b"),
+                ("#79c0ff", "#79c0ff"),
+            ],
+            |c| on_tint(c, accent, beneath, strongest),
+            "tint of #ff9f7d over #1e1e1e",
+        );
+    }
+
+    /// The terminal's light palette on the tint of #7f2400 over #e8e8e8,
+    /// strongest text #1b1b1b: the grey goes to it, the palette colours stay
+    /// themselves, darker (rule 6, 25 Oct)
+    #[test]
+    fn the_terminal_light_palette_on_the_tint() {
+        let (accent, beneath, strongest) = (rgb("#7f2400"), rgb("#e8e8e8"), rgb("#1b1b1b"));
+        check(
+            &[("#5e5e5e", "#1b1b1b"), ("#A24F50", "#77282c"), ("#437E4F", "#175528"), ("#7D6E1E", "#534700"), ("#516D94", "#2a4469")],
+            |c| on_tint(c, accent, beneath, strongest),
+            "terminal palette on the tint",
+        );
+    }
+
+    /// Every coloured colour that has to move keeps its hue (within 2.5
+    /// degrees) and gains no chroma, and keeps as much chroma as sRGB allows
+    /// at its new lightness, on a light fill and on a dark one: the fill rule
+    /// moves lightness only (rule 6, 19 Oct)
+    #[test]
+    fn colours_keep_their_hue_and_as_much_chroma_as_the_gamut_allows() {
+        let mut moved = 0;
+        for (fill, greys_to) in [("#7f2400", "#ffffff"), ("#954b33", "#ffffff"), ("#ff9f7d", "#000000")] {
+            let (fill, greys_to) = (rgb(fill), rgb(greys_to));
+            for hue in (0..360).step_by(20) {
+                for l in [0.35, 0.55, 0.75] {
+                    let color = Oklch::new(l, 0.12, hue as f32).to_srgb();
+                    let own = color.to_oklch();
+                    let got = on_fill(color, fill, greys_to);
+                    if got == color {
+                        continue;
+                    }
+                    moved += 1;
+                    let new = got.to_oklch();
+                    assert!(hue_gap(own.hue, new.hue) <= 2.5, "hue {hue} l {l} on {fill:?}: {} → {}", own.hue, new.hue);
+                    assert!(new.chroma <= own.chroma + 0.01, "chroma raised: {} → {}", own.chroma, new.chroma);
+                    let possible = own.chroma.min(max_chroma(new.l, own.hue));
+                    assert!(new.chroma >= possible - 0.015, "hue {hue} l {l}: chroma {} where {possible} fits", new.chroma);
+                }
+            }
+        }
+        assert!(moved > 20, "only {moved} colours moved: the sweep tests nothing");
+    }
+
+    /// A colour short of the target is moved to exactly it: the fill's
+    /// lightness plus 0.34 where white reads, minus 0.36 where black does
+    /// (rule 6, 19 Oct)
+    #[test]
+    fn a_colour_short_of_the_target_lands_on_it() {
+        let fill = rgb("#7f2400");
+        let got = on_solid(rgb("#1c71d8"), fill);
+        assert!((got.lightness() - (fill.lightness() + ON_FILL_REACH.0)).abs() < 0.005);
+        let fill = rgb("#ff9f7d");
+        let got = on_solid(rgb("#e5c07b"), fill);
+        assert!((got.lightness() - (fill.lightness() - ON_FILL_REACH.1)).abs() < 0.005);
+    }
+
+    /// A grey weighs 1 up to chroma 0.02, a colour 0 from 0.08, and between
+    /// them it falls steadily (rule 6, 24 Oct, sheet fill-rule-greys)
+    #[test]
+    fn the_grey_weight_is_one_for_greys_none_for_colours_and_falls_between() {
+        assert_eq!(grey_weight(0.0), 1.0);
+        assert_eq!(grey_weight(0.02), 1.0);
+        assert_eq!(grey_weight(0.08), 0.0);
+        assert_eq!(grey_weight(0.3), 0.0);
+        let mut last = 1.0;
+        for i in 0..=60 {
+            let w = grey_weight(0.02 + 0.06 * i as f32 / 60.0);
+            assert!(w <= last + 1e-6, "weight rose at step {i}: {last} → {w}");
+            assert!((0.0..=1.0).contains(&w));
+            last = w;
+        }
+        let mid = grey_weight(0.05);
+        assert!(mid > 0.0 && mid < 1.0);
+    }
+
+    /// Which way a colour moves comes from the fill, not the theme's mode: a
+    /// very light accent has black on it, so colours go darker; a very dark
+    /// one has white, so they go lighter (rule 6, 19 Oct)
+    #[test]
+    fn the_direction_comes_from_the_fill_not_the_mode() {
+        let light = rgb("#f0e0a0");
+        assert!(!lighter_on(light));
+        let darker = on_solid(rgb("#1c71d8"), light);
+        assert!(darker.lightness() < light.lightness() - 0.3, "{darker:?}");
+        assert_eq!(on_solid(rgb("#9e9e9e"), light).to_hex(), "#000000");
+
+        let dark = rgb("#202040");
+        assert!(lighter_on(dark));
+        let lighter = on_solid(rgb("#c01c28"), dark);
+        assert!(lighter.lightness() > dark.lightness() + 0.3, "{lighter:?}");
+        assert_eq!(on_solid(rgb("#555555"), dark).to_hex(), "#ffffff");
+    }
+
+    /// A `greys_to` that is nearer the fill than the target is does not stop
+    /// a grey short: it still lands at the target (rule 6, 24 Oct: "never
+    /// short of the target"); one beyond the target is gone on to
+    #[test]
+    fn greys_are_never_left_short_of_the_target() {
+        let fill = rgb("#7f2400");
+        let target = fill.lightness() + ON_FILL_REACH.0;
+        // #b0b0b0 (0.757) is a little past the target (0.741); #909090 is short of it
+        let past = on_fill(rgb("#555555"), fill, rgb("#b0b0b0"));
+        assert!(past.lightness() >= target - 0.005, "{} is short of {target}", past.lightness());
+        assert!((past.lightness() - rgb("#b0b0b0").lightness()).abs() < 0.005);
+        let short = on_fill(rgb("#555555"), fill, rgb("#909090"));
+        assert!((short.lightness() - target).abs() < 0.005, "{} is not the target {target}", short.lightness());
+        // On a light fill the same, towards darker
+        let fill = rgb("#ff9f7d");
+        let target = fill.lightness() - ON_FILL_REACH.1;
+        let short = on_fill(rgb("#e6e6e6"), fill, rgb("#707070"));
+        assert!((short.lightness() - target).abs() < 0.005, "{} is not the target {target}", short.lightness());
+    }
+
+    /// No grey the fill rule moves comes out darker than the page's
+    /// strongest text on the light tint (#222222); a grey already darker
+    /// than the target is left alone, as the rule says of every colour
+    /// beyond it (rule 6, 25 Oct)
+    #[test]
+    fn no_grey_is_darker_than_the_strongest_text_on_the_light_tint() {
+        let (accent, beneath, strongest) = (rgb("#7f2400"), rgb("#ebebeb"), rgb("#222222"));
+        let floor = strongest.lightness();
+        for step in 0..=40 {
+            let v = step as f32 / 40.0;
+            let grey = Srgb::new(v, v, v);
+            let got = on_tint(grey, accent, beneath, strongest);
+            if grey.lightness() < floor {
+                assert_eq!(got, grey, "grey {v} is beyond the target and should stay");
+            } else {
+                assert!(got.lightness() >= floor - 0.004, "grey {v} → {} is darker than #222222", got.to_hex());
+            }
+        }
+    }
+
+    /// A dimmed colour keeps 0.4 of the way from the fill to itself
+    /// (rule 6: a disabled item on a fill is the on colour, dimmed)
+    #[test]
+    fn dimming_white_over_a_fill_keeps_four_tenths_of_the_way() {
+        let fill = rgb("#7f2400");
+        let got = dimmed_over(Srgb::WHITE, fill);
+        assert!((got.r - (fill.r + (1.0 - fill.r) * 0.4)).abs() < 1e-6);
+        assert!((got.g - (fill.g + (1.0 - fill.g) * 0.4)).abs() < 1e-6);
+        assert!((got.b - (fill.b + (1.0 - fill.b) * 0.4)).abs() < 1e-6);
+        assert_eq!(dimmed_over(fill, fill), fill);
+        assert_eq!(ON_FILL_DIMMED_KEEP, 0.4);
+    }
+}
