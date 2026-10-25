@@ -46,7 +46,15 @@ pub enum Role {
 
 impl Role {
     /// Darkest to lightest
-    pub const ALL: [Role; 7] = [Role::Darkest, Role::Dark, Role::Darkish, Role::Mid, Role::Lightish, Role::Light, Role::Lightest];
+    pub const ALL: [Role; 7] = [
+        Role::Darkest,
+        Role::Dark,
+        Role::Darkish,
+        Role::Mid,
+        Role::Lightish,
+        Role::Light,
+        Role::Lightest,
+    ];
 
     /// Its name, as the rule writes it
     pub fn name(self) -> &'static str {
@@ -130,7 +138,9 @@ impl Arrangement {
 
     /// A surface's colour in `mode`
     pub fn tone(self, surface: Surface, mode: Mode) -> Srgb {
-        self.role(surface).tone(mode).expect("surfaces have tones of their own")
+        self.role(surface)
+            .tone(mode)
+            .expect("surfaces have tones of their own")
     }
 }
 
@@ -138,7 +148,11 @@ impl Arrangement {
 /// captions and interface items at any size; dark only for body text
 /// (`body`, text read in paragraphs) of 18 px or more
 pub fn text_role(size_px: f32, body: bool) -> Role {
-    if body && size_px >= 18.0 { Role::Dark } else { Role::Darkest }
+    if body && size_px >= 18.0 {
+        Role::Dark
+    } else {
+        Role::Darkest
+    }
 }
 
 #[cfg(test)]
@@ -151,18 +165,30 @@ mod tests {
         assert_eq!(Role::Darkest.tone(Mode::Light).unwrap().to_hex(), "#222222");
         assert_eq!(Role::Light.tone(Mode::Dark).unwrap().to_hex(), "#1b1b1b");
         assert_eq!(Role::Darkish.tone(Mode::Light), None);
-        let fixed: Vec<Role> = Role::ALL.into_iter().filter(|r| *r != Role::Darkish).collect();
+        let fixed: Vec<Role> = Role::ALL
+            .into_iter()
+            .filter(|r| *r != Role::Darkish)
+            .collect();
         // Light mode runs darkest to lightest; dark mode mirrors it, except
         // that lightest stays the lightest surface
         let l = |role: Role, mode| role.tone(mode).unwrap().lightness();
         for pair in fixed.windows(2) {
-            assert!(l(pair[0], Mode::Light) < l(pair[1], Mode::Light), "{pair:?}");
+            assert!(
+                l(pair[0], Mode::Light) < l(pair[1], Mode::Light),
+                "{pair:?}"
+            );
         }
         for pair in fixed[..fixed.len() - 1].windows(2) {
-            assert!(l(pair[0], Mode::Dark) > l(pair[1], Mode::Dark), "{pair:?} in dark");
+            assert!(
+                l(pair[0], Mode::Dark) > l(pair[1], Mode::Dark),
+                "{pair:?} in dark"
+            );
         }
         assert!(!Role::Lightest.mirrors() && Role::Light.mirrors());
-        assert!(l(Role::Lightest, Mode::Dark) > l(Role::Lightish, Mode::Dark) && l(Role::Lightest, Mode::Dark) > l(Role::Light, Mode::Dark));
+        assert!(
+            l(Role::Lightest, Mode::Dark) > l(Role::Lightish, Mode::Dark)
+                && l(Role::Lightest, Mode::Dark) > l(Role::Light, Mode::Dark)
+        );
         // Selected sits below the page and the cards in light mode
         assert!(l(Role::Mid, Mode::Light) < l(Role::Lightish, Mode::Light));
     }
@@ -170,16 +196,34 @@ mod tests {
     #[test]
     fn the_arrangements_swap_page_and_cards() {
         assert_eq!(Arrangement::default(), Arrangement::A);
-        assert_eq!((Arrangement::A.role(Surface::Page), Arrangement::A.role(Surface::Card)), (Role::Light, Role::Lightish));
-        assert_eq!((Arrangement::B.role(Surface::PromptBox), Arrangement::B.role(Surface::Sidebar)), (Role::Lightish, Role::Light));
+        assert_eq!(
+            (
+                Arrangement::A.role(Surface::Page),
+                Arrangement::A.role(Surface::Card)
+            ),
+            (Role::Light, Role::Lightish)
+        );
+        assert_eq!(
+            (
+                Arrangement::B.role(Surface::PromptBox),
+                Arrangement::B.role(Surface::Sidebar)
+            ),
+            (Role::Lightish, Role::Light)
+        );
         for a in [Arrangement::A, Arrangement::B] {
             assert_eq!(a.role(Surface::Popup), Role::Lightest);
             assert_eq!(a.role(Surface::SidePanel), a.role(Surface::Card));
             assert_eq!(a.role(Surface::PromptBox), a.role(Surface::Page));
         }
         // Dark arrangement A is COSMIC's dark theme: page #1b1b1b, cards #272727
-        assert_eq!(Arrangement::A.tone(Surface::Page, Mode::Dark).to_hex(), "#1b1b1b");
-        assert_eq!(Arrangement::A.tone(Surface::Card, Mode::Dark).to_hex(), "#272727");
+        assert_eq!(
+            Arrangement::A.tone(Surface::Page, Mode::Dark).to_hex(),
+            "#1b1b1b"
+        );
+        assert_eq!(
+            Arrangement::A.tone(Surface::Card, Mode::Dark).to_hex(),
+            "#272727"
+        );
     }
 
     #[test]
@@ -198,13 +242,36 @@ mod tests {
         use crate::fonts::{TextUse, passes_for};
         let darkest = |mode| Role::Darkest.tone(mode).unwrap();
         for surface in [Role::Light, Role::Lightest] {
-            assert!(passes_for(darkest(Mode::Light), surface.tone(Mode::Light).unwrap(), 16.0, 400, TextUse::Body), "{}", surface.name());
+            assert!(
+                passes_for(
+                    darkest(Mode::Light),
+                    surface.tone(Mode::Light).unwrap(),
+                    16.0,
+                    400,
+                    TextUse::Body
+                ),
+                "{}",
+                surface.name()
+            );
         }
         for surface in [Role::Light, Role::Lightish] {
-            assert!(passes_for(darkest(Mode::Dark), surface.tone(Mode::Dark).unwrap(), 16.0, 400, TextUse::Body), "{} in dark", surface.name());
+            assert!(
+                passes_for(
+                    darkest(Mode::Dark),
+                    surface.tone(Mode::Dark).unwrap(),
+                    16.0,
+                    400,
+                    TextUse::Body
+                ),
+                "{} in dark",
+                surface.name()
+            );
         }
         // Paper's 20 px body text in dark asks Lc 84.5; dark on light gives 75.3
-        let lc = apca(Role::Dark.tone(Mode::Light).unwrap(), Role::Light.tone(Mode::Light).unwrap());
+        let lc = apca(
+            Role::Dark.tone(Mode::Light).unwrap(),
+            Role::Light.tone(Mode::Light).unwrap(),
+        );
         assert!((lc - 75.3).abs() < 0.1, "{lc}");
     }
 }

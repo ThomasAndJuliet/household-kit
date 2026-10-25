@@ -74,11 +74,20 @@ impl Srgb {
 
     /// Each channel held to 0 to 1
     pub fn clamp(self) -> Self {
-        Self::new(self.r.clamp(0.0, 1.0), self.g.clamp(0.0, 1.0), self.b.clamp(0.0, 1.0))
+        Self::new(
+            self.r.clamp(0.0, 1.0),
+            self.g.clamp(0.0, 1.0),
+            self.b.clamp(0.0, 1.0),
+        )
     }
 
     pub fn with_alpha(self, a: f32) -> Srgba {
-        Srgba { r: self.r, g: self.g, b: self.b, a }
+        Srgba {
+            r: self.r,
+            g: self.g,
+            b: self.b,
+            a,
+        }
     }
 
     pub fn to_oklab(self) -> Oklab {
@@ -133,13 +142,18 @@ impl Oklab {
 
     pub fn to_oklch(self) -> Oklch {
         let hue = f64::from(self.b).atan2(f64::from(self.a)).to_degrees();
-        Oklch { l: self.l, chroma: self.a.hypot(self.b), hue: (if hue < 0.0 { hue + 360.0 } else { hue }) as f32 }
+        Oklch {
+            l: self.l,
+            chroma: self.a.hypot(self.b),
+            hue: (if hue < 0.0 { hue + 360.0 } else { hue }) as f32,
+        }
     }
 
     /// The Euclidean distance between two colours, which OKLab makes about
     /// how different they look
     pub fn distance(self, other: Oklab) -> f32 {
-        ((self.l - other.l).powi(2) + (self.a - other.a).powi(2) + (self.b - other.b).powi(2)).sqrt()
+        ((self.l - other.l).powi(2) + (self.a - other.a).powi(2) + (self.b - other.b).powi(2))
+            .sqrt()
     }
 }
 
@@ -151,7 +165,11 @@ impl Oklch {
     pub fn to_oklab(self) -> Oklab {
         let h = f64::from(self.hue).to_radians();
         let c = f64::from(self.chroma);
-        Oklab { l: self.l, a: (c * h.cos()) as f32, b: (c * h.sin()) as f32 }
+        Oklab {
+            l: self.l,
+            a: (c * h.cos()) as f32,
+            b: (c * h.sin()) as f32,
+        }
     }
 
     /// In sRGB, each channel held to 0 to 1
@@ -162,12 +180,20 @@ impl Oklch {
 
 /// sRGB's transfer function, encoded to linear
 pub fn decode(c: f64) -> f64 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 /// Linear to encoded
 pub fn encode(c: f64) -> f64 {
-    if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
 }
 
 impl From<[f32; 3]> for Srgb {
@@ -207,7 +233,11 @@ mod tests {
     #[test]
     fn oklab_matches_ottossons_reference_values() {
         // White and the sRGB primaries, as CSS Color 4 gives them
-        let close = |c: Oklab, want: [f32; 3]| (c.l - want[0]).abs() < 1e-4 && (c.a - want[1]).abs() < 1e-4 && (c.b - want[2]).abs() < 1e-4;
+        let close = |c: Oklab, want: [f32; 3]| {
+            (c.l - want[0]).abs() < 1e-4
+                && (c.a - want[1]).abs() < 1e-4
+                && (c.b - want[2]).abs() < 1e-4
+        };
         let white = Srgb::WHITE.to_oklab();
         assert!(close(white, [1.0, 0.0, 0.0]), "{white:?}");
         let red = Srgb::new(1.0, 0.0, 0.0).to_oklab();

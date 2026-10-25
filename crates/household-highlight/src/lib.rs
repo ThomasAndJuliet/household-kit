@@ -67,7 +67,10 @@ impl Colour {
     /// for the theme's own colours
     pub fn fixed(self, dark: bool) -> Option<u32> {
         match self {
-            Colour::Fixed { light, dark: on_dark } => Some(if dark { on_dark } else { light }),
+            Colour::Fixed {
+                light,
+                dark: on_dark,
+            } => Some(if dark { on_dark } else { light }),
             _ => None,
         }
     }
@@ -147,21 +150,31 @@ pub const PLAIN_SCOPE: &str = "keyword.operator";
 
 /// Whether `prefix` is a prefix of `scope` in whole atoms
 pub fn scope_has_prefix(scope: &str, prefix: &str) -> bool {
-    scope.strip_prefix(prefix).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    scope
+        .strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }
 
 /// One scope by [`SCOPES`]: `None` when no prefix matches (the search goes
 /// on outwards), `Some(None)` for an operator (plain, the search stops),
 /// else its class
 fn scope_class(scope: &str) -> Option<Option<Class>> {
-    let (_, class) = SCOPES.iter().find(|(prefix, _)| scope_has_prefix(scope, prefix))?;
-    Some(if scope_has_prefix(scope, PLAIN_SCOPE) { None } else { Some(*class) })
+    let (_, class) = SCOPES
+        .iter()
+        .find(|(prefix, _)| scope_has_prefix(scope, prefix))?;
+    Some(if scope_has_prefix(scope, PLAIN_SCOPE) {
+        None
+    } else {
+        Some(*class)
+    })
 }
 
 /// The class of a token from its scope stack, outermost first: the
 /// innermost scope that has a class decides, and an operator there leaves
 /// the token plain
-pub fn class_of<'a>(stack: impl IntoIterator<Item = &'a str, IntoIter: DoubleEndedIterator>) -> Option<Class> {
+pub fn class_of<'a>(
+    stack: impl IntoIterator<Item = &'a str, IntoIter: DoubleEndedIterator>,
+) -> Option<Class> {
     stack.into_iter().rev().find_map(scope_class).flatten()
 }
 
@@ -172,29 +185,85 @@ mod tests {
 
     #[test]
     fn the_innermost_scope_with_a_class_decides() {
-        assert_eq!(class_of(["source.rust", "meta.function.rust", "storage.type.function.rust"]), Some(Class::Keyword));
-        assert_eq!(class_of(["source.rust", "entity.name.function.rust"]), Some(Class::Function));
-        assert_eq!(class_of(["source.rust", "comment.line.double-slash.rust", "punctuation.definition.comment.rust"]), Some(Class::Comment));
-        assert_eq!(class_of(["source.rust", "string.quoted.double.rust", "constant.character.escape.rust"]), Some(Class::Constant));
-        assert_eq!(class_of(["source.rust", "constant.numeric.integer.decimal.rust"]), Some(Class::Number));
-        assert_eq!(class_of(["text.html.basic", "meta.tag", "entity.other.attribute-name.class.html"]), Some(Class::Attribute));
-        assert_eq!(class_of(["source.diff", "markup.inserted.diff"]), Some(Class::Inserted));
-        assert_eq!(class_of(["source.diff", "meta.diff.range.unified"]), Some(Class::Comment));
+        assert_eq!(
+            class_of([
+                "source.rust",
+                "meta.function.rust",
+                "storage.type.function.rust"
+            ]),
+            Some(Class::Keyword)
+        );
+        assert_eq!(
+            class_of(["source.rust", "entity.name.function.rust"]),
+            Some(Class::Function)
+        );
+        assert_eq!(
+            class_of([
+                "source.rust",
+                "comment.line.double-slash.rust",
+                "punctuation.definition.comment.rust"
+            ]),
+            Some(Class::Comment)
+        );
+        assert_eq!(
+            class_of([
+                "source.rust",
+                "string.quoted.double.rust",
+                "constant.character.escape.rust"
+            ]),
+            Some(Class::Constant)
+        );
+        assert_eq!(
+            class_of(["source.rust", "constant.numeric.integer.decimal.rust"]),
+            Some(Class::Number)
+        );
+        assert_eq!(
+            class_of([
+                "text.html.basic",
+                "meta.tag",
+                "entity.other.attribute-name.class.html"
+            ]),
+            Some(Class::Attribute)
+        );
+        assert_eq!(
+            class_of(["source.diff", "markup.inserted.diff"]),
+            Some(Class::Inserted)
+        );
+        assert_eq!(
+            class_of(["source.diff", "meta.diff.range.unified"]),
+            Some(Class::Comment)
+        );
         // Operators are plain, even inside something coloured
-        assert_eq!(class_of(["source.rust", "meta.function", "keyword.operator.arithmetic.rust"]), None);
+        assert_eq!(
+            class_of([
+                "source.rust",
+                "meta.function",
+                "keyword.operator.arithmetic.rust"
+            ]),
+            None
+        );
         assert_eq!(class_of(["source.rust", "variable.other.rust"]), None);
         assert_eq!(class_of(Vec::<&str>::new()), None);
         // Whole atoms only
-        assert!(scope_has_prefix("keyword.control", "keyword") && !scope_has_prefix("keywords.x", "keyword"));
+        assert!(
+            scope_has_prefix("keyword.control", "keyword")
+                && !scope_has_prefix("keywords.x", "keyword")
+        );
     }
 
     #[test]
     fn colours_come_from_the_page_by_class() {
         assert_eq!(colour(Class::Comment), Colour::Muted);
         assert_eq!(colour(Class::Heading), Colour::LinkStrong);
-        assert_eq!((colour(Class::Inserted), colour(Class::Deleted)), (Colour::Added, Colour::Removed));
+        assert_eq!(
+            (colour(Class::Inserted), colour(Class::Deleted)),
+            (Colour::Added, Colour::Removed)
+        );
         assert!(italic(Class::Comment) && !italic(Class::Keyword));
-        let fixed: Vec<Class> = Class::ALL.into_iter().filter(|c| colour(*c).fixed(false).is_some()).collect();
+        let fixed: Vec<Class> = Class::ALL
+            .into_iter()
+            .filter(|c| colour(*c).fixed(false).is_some())
+            .collect();
         assert_eq!(fixed.len(), 8);
         let lightness = |hex: u32| {
             let c = Srgb::hex(hex);
@@ -203,15 +272,32 @@ mod tests {
         for class in &fixed {
             let c = colour(*class);
             // Readable on its plate: dark on light, light on dark
-            assert!(lightness(c.fixed(false).unwrap()) < 0.55, "{class:?} on light");
-            assert!(lightness(c.fixed(true).unwrap()) > 0.45, "{class:?} on dark");
+            assert!(
+                lightness(c.fixed(false).unwrap()) < 0.55,
+                "{class:?} on light"
+            );
+            assert!(
+                lightness(c.fixed(true).unwrap()) > 0.45,
+                "{class:?} on dark"
+            );
         }
         // The main classes tell apart
-        let main = [Class::Keyword, Class::Type, Class::Function, Class::String, Class::Number, Class::Tag];
+        let main = [
+            Class::Keyword,
+            Class::Type,
+            Class::Function,
+            Class::String,
+            Class::Number,
+            Class::Tag,
+        ];
         for (i, a) in main.iter().enumerate() {
             for b in &main[i + 1..] {
                 for dark in [false, true] {
-                    assert_ne!(colour(*a).fixed(dark), colour(*b).fixed(dark), "{a:?} {b:?}");
+                    assert_ne!(
+                        colour(*a).fixed(dark),
+                        colour(*b).fixed(dark),
+                        "{a:?} {b:?}"
+                    );
                 }
             }
         }

@@ -47,7 +47,9 @@ pub fn lighter_on(fill: Srgb) -> bool {
 /// Whether OKLCh `l`, `chroma`, `hue` is a colour sRGB can show
 fn in_gamut(l: f32, chroma: f32, hue: f32) -> bool {
     let rgb = Oklch::new(l, chroma, hue).to_oklab().to_srgb_unclamped();
-    [rgb.r, rgb.g, rgb.b].into_iter().all(|c| (-1e-4..=1.0 + 1e-4).contains(&c))
+    [rgb.r, rgb.g, rgb.b]
+        .into_iter()
+        .all(|c| (-1e-4..=1.0 + 1e-4).contains(&c))
 }
 
 /// The most chroma sRGB can show at OKLab lightness `l` and `hue` (degrees)
@@ -58,7 +60,11 @@ pub fn max_chroma(l: f32, hue: f32) -> f32 {
     let (mut lo, mut hi) = (0.0f32, 0.4f32);
     for _ in 0..20 {
         let mid = (lo + hi) / 2.0;
-        if in_gamut(l, mid, hue) { lo = mid } else { hi = mid }
+        if in_gamut(l, mid, hue) {
+            lo = mid
+        } else {
+            hi = mid
+        }
     }
     lo
 }
@@ -90,7 +96,12 @@ pub fn on_fill(color: Srgb, fill: Srgb, greys_to: Srgb) -> Srgb {
     let fill_l = fill.lightness();
     let own = color.to_oklch();
     let up = lighter_on(fill);
-    let target = if up { fill_l + ON_FILL_REACH.0 } else { fill_l - ON_FILL_REACH.1 }.clamp(0.0, 1.0);
+    let target = if up {
+        fill_l + ON_FILL_REACH.0
+    } else {
+        fill_l - ON_FILL_REACH.1
+    }
+    .clamp(0.0, 1.0);
     // The chroma it can keep at the target: a colour the gamut greys there
     // has no hue left to keep either
     let weight = grey_weight(own.chroma.min(max_chroma(target, own.hue)));
@@ -98,7 +109,11 @@ pub fn on_fill(color: Srgb, fill: Srgb, greys_to: Srgb) -> Srgb {
     // Never short of the target, and a grey judged against where greys go:
     // judged against the target, a grey just past it would keep its own
     // lightness while a lighter one went on beyond it, out of order
-    let l = if up { toward.max(target) } else { toward.min(target) };
+    let l = if up {
+        toward.max(target)
+    } else {
+        toward.min(target)
+    };
     let beyond = if up { own.l >= l } else { own.l <= l };
     if beyond {
         return color;
@@ -115,7 +130,11 @@ pub fn on_solid(color: Srgb, fill: Srgb) -> Srgb {
 /// The selection tint as it shows over `beneath`: `accent` at
 /// [`SELECTION_TINT`]
 pub fn tint(accent: Srgb, beneath: Srgb) -> Srgb {
-    over(Srgba::new(accent.r, accent.g, accent.b, SELECTION_TINT), beneath.into()).rgb()
+    over(
+        Srgba::new(accent.r, accent.g, accent.b, SELECTION_TINT),
+        beneath.into(),
+    )
+    .rgb()
 }
 
 /// [`on_fill`] on the selection tint over `beneath`: greys go to
@@ -129,7 +148,11 @@ pub fn on_tint(color: Srgb, accent: Srgb, beneath: Srgb, strongest: Srgb) -> Srg
 /// dim terminal cell, or a disabled item, on its fill
 pub fn dimmed_over(color: Srgb, fill: Srgb) -> Srgb {
     let mix = |c: f32, f: f32| f + (c - f) * ON_FILL_DIMMED_KEEP;
-    Srgb::new(mix(color.r, fill.r), mix(color.g, fill.g), mix(color.b, fill.b))
+    Srgb::new(
+        mix(color.r, fill.r),
+        mix(color.g, fill.g),
+        mix(color.b, fill.b),
+    )
 }
 
 #[cfg(test)]
@@ -143,7 +166,10 @@ mod tests {
     /// The largest 8-bit channel difference between two colours
     fn off(a: Srgb, b: Srgb) -> i32 {
         let (a, b) = (a.to_rgb8(), b.to_rgb8());
-        (0..3).map(|i| (i32::from(a[i]) - i32::from(b[i])).abs()).max().unwrap()
+        (0..3)
+            .map(|i| (i32::from(a[i]) - i32::from(b[i])).abs())
+            .max()
+            .unwrap()
     }
 
     /// Hue difference in degrees, round the circle
@@ -158,7 +184,11 @@ mod tests {
     fn check(rows: &[(&str, &str)], draw: impl Fn(Srgb) -> Srgb, what: &str) {
         for (color, want) in rows {
             let got = draw(rgb(color));
-            assert!(off(got, rgb(want)) <= 2, "{what}: {color} → {} not {want}", got.to_hex());
+            assert!(
+                off(got, rgb(want)) <= 2,
+                "{what}: {color} → {} not {want}",
+                got.to_hex()
+            );
         }
     }
 
@@ -192,7 +222,11 @@ mod tests {
     #[test]
     fn on_the_muted_red_fill_the_same_holds() {
         let fill = rgb("#954b33");
-        check(&[("#222222", "#ffffff"), ("#1c71d8", "#a9cdff")], |c| on_solid(c, fill), "solid on #954b33");
+        check(
+            &[("#222222", "#ffffff"), ("#1c71d8", "#a9cdff")],
+            |c| on_solid(c, fill),
+            "solid on #954b33",
+        );
     }
 
     /// On a dark theme's light accent (#ff9f7d), black is the on colour:
@@ -202,7 +236,12 @@ mod tests {
         let fill = rgb("#ff9f7d");
         assert!(!lighter_on(fill));
         check(
-            &[("#e6e6e6", "#000000"), ("#9e9e9e", "#000000"), ("#e5c07b", "#684b00"), ("#79c0ff", "#00548a")],
+            &[
+                ("#e6e6e6", "#000000"),
+                ("#9e9e9e", "#000000"),
+                ("#e5c07b", "#684b00"),
+                ("#79c0ff", "#00548a"),
+            ],
             |c| on_solid(c, fill),
             "solid on #ff9f7d",
         );
@@ -267,7 +306,13 @@ mod tests {
     fn the_terminal_light_palette_on_the_tint() {
         let (accent, beneath, strongest) = (rgb("#7f2400"), rgb("#e8e8e8"), rgb("#1b1b1b"));
         check(
-            &[("#5e5e5e", "#1b1b1b"), ("#A24F50", "#77282c"), ("#437E4F", "#175528"), ("#7D6E1E", "#534700"), ("#516D94", "#2a4469")],
+            &[
+                ("#5e5e5e", "#1b1b1b"),
+                ("#A24F50", "#77282c"),
+                ("#437E4F", "#175528"),
+                ("#7D6E1E", "#534700"),
+                ("#516D94", "#2a4469"),
+            ],
             |c| on_tint(c, accent, beneath, strongest),
             "terminal palette on the tint",
         );
@@ -280,7 +325,11 @@ mod tests {
     #[test]
     fn colours_keep_their_hue_and_as_much_chroma_as_the_gamut_allows() {
         let mut moved = 0;
-        for (fill, greys_to) in [("#7f2400", "#ffffff"), ("#954b33", "#ffffff"), ("#ff9f7d", "#000000")] {
+        for (fill, greys_to) in [
+            ("#7f2400", "#ffffff"),
+            ("#954b33", "#ffffff"),
+            ("#ff9f7d", "#000000"),
+        ] {
             let (fill, greys_to) = (rgb(fill), rgb(greys_to));
             for hue in (0..360).step_by(20) {
                 for l in [0.35, 0.55, 0.75] {
@@ -292,14 +341,31 @@ mod tests {
                     }
                     moved += 1;
                     let new = got.to_oklch();
-                    assert!(hue_gap(own.hue, new.hue) <= 2.5, "hue {hue} l {l} on {fill:?}: {} → {}", own.hue, new.hue);
-                    assert!(new.chroma <= own.chroma + 0.01, "chroma raised: {} → {}", own.chroma, new.chroma);
+                    assert!(
+                        hue_gap(own.hue, new.hue) <= 2.5,
+                        "hue {hue} l {l} on {fill:?}: {} → {}",
+                        own.hue,
+                        new.hue
+                    );
+                    assert!(
+                        new.chroma <= own.chroma + 0.01,
+                        "chroma raised: {} → {}",
+                        own.chroma,
+                        new.chroma
+                    );
                     let possible = own.chroma.min(max_chroma(new.l, own.hue));
-                    assert!(new.chroma >= possible - 0.015, "hue {hue} l {l}: chroma {} where {possible} fits", new.chroma);
+                    assert!(
+                        new.chroma >= possible - 0.015,
+                        "hue {hue} l {l}: chroma {} where {possible} fits",
+                        new.chroma
+                    );
                 }
             }
         }
-        assert!(moved > 20, "only {moved} colours moved: the sweep tests nothing");
+        assert!(
+            moved > 20,
+            "only {moved} colours moved: the sweep tests nothing"
+        );
     }
 
     /// A colour short of the target is moved to exactly it: the fill's
@@ -361,15 +427,27 @@ mod tests {
         let target = fill.lightness() + ON_FILL_REACH.0;
         // #b0b0b0 (0.757) is a little past the target (0.741); #909090 is short of it
         let past = on_fill(rgb("#555555"), fill, rgb("#b0b0b0"));
-        assert!(past.lightness() >= target - 0.005, "{} is short of {target}", past.lightness());
+        assert!(
+            past.lightness() >= target - 0.005,
+            "{} is short of {target}",
+            past.lightness()
+        );
         assert!((past.lightness() - rgb("#b0b0b0").lightness()).abs() < 0.005);
         let short = on_fill(rgb("#555555"), fill, rgb("#909090"));
-        assert!((short.lightness() - target).abs() < 0.005, "{} is not the target {target}", short.lightness());
+        assert!(
+            (short.lightness() - target).abs() < 0.005,
+            "{} is not the target {target}",
+            short.lightness()
+        );
         // On a light fill the same, towards darker
         let fill = rgb("#ff9f7d");
         let target = fill.lightness() - ON_FILL_REACH.1;
         let short = on_fill(rgb("#e6e6e6"), fill, rgb("#707070"));
-        assert!((short.lightness() - target).abs() < 0.005, "{} is not the target {target}", short.lightness());
+        assert!(
+            (short.lightness() - target).abs() < 0.005,
+            "{} is not the target {target}",
+            short.lightness()
+        );
     }
 
     /// Greys 0 to 1 in steps of a hundredth, as sRGB colours
@@ -384,7 +462,13 @@ mod tests {
         let mut last = (0.0, -1.0);
         for grey in greys() {
             let got = draw(grey).lightness();
-            assert!(got >= last.1 - 0.002, "{what}: grey {} → {got}, after {} → {}", grey.to_hex(), last.0, last.1);
+            assert!(
+                got >= last.1 - 0.002,
+                "{what}: grey {} → {got}, after {} → {}",
+                grey.to_hex(),
+                last.0,
+                last.1
+            );
             last = (grey.lightness(), got);
         }
     }
@@ -402,9 +486,19 @@ mod tests {
         for grey in greys() {
             let got = draw(grey);
             if grey.lightness() > strongest.lightness() + 0.002 {
-                assert!(off(got, strongest) <= 2, "grey {} → {}, not #222222", grey.to_hex(), got.to_hex());
+                assert!(
+                    off(got, strongest) <= 2,
+                    "grey {} → {}, not #222222",
+                    grey.to_hex(),
+                    got.to_hex()
+                );
             } else if grey.lightness() < strongest.lightness() - 0.002 {
-                assert_eq!(got, grey, "grey {} is darker than #222222 and should stay", grey.to_hex());
+                assert_eq!(
+                    got,
+                    grey,
+                    "grey {} is darker than #222222 and should stay",
+                    grey.to_hex()
+                );
             }
         }
         assert_eq!(draw(rgb("#000000")), rgb("#000000"));
@@ -424,9 +518,19 @@ mod tests {
         for grey in greys() {
             let got = draw(grey);
             if grey.lightness() < strongest.lightness() - 0.002 {
-                assert!(off(got, strongest) <= 2, "grey {} → {}, not #e6e6e6", grey.to_hex(), got.to_hex());
+                assert!(
+                    off(got, strongest) <= 2,
+                    "grey {} → {}, not #e6e6e6",
+                    grey.to_hex(),
+                    got.to_hex()
+                );
             } else if grey.lightness() > strongest.lightness() + 0.002 {
-                assert_eq!(got, grey, "grey {} is lighter than #e6e6e6 and should stay", grey.to_hex());
+                assert_eq!(
+                    got,
+                    grey,
+                    "grey {} is lighter than #e6e6e6 and should stay",
+                    grey.to_hex()
+                );
             }
         }
         assert_eq!(draw(rgb("#ffffff")), rgb("#ffffff"));
@@ -440,7 +544,12 @@ mod tests {
         assert_grey_order_kept(|c| on_solid(c, fill), "solid #7f2400");
         for grey in greys() {
             let got = on_solid(grey, fill);
-            assert!(off(got, Srgb::WHITE) <= 2, "grey {} → {}, not white", grey.to_hex(), got.to_hex());
+            assert!(
+                off(got, Srgb::WHITE) <= 2,
+                "grey {} → {}, not white",
+                grey.to_hex(),
+                got.to_hex()
+            );
         }
     }
 

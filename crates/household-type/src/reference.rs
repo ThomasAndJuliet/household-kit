@@ -67,8 +67,18 @@ pub struct Reference {
     pub marks: &'static [Mark],
 }
 
-pub const PAPER: Reference = Reference { size: 20.0, line: 1.5, width: 960.0, marks: measured::PAPER };
-pub const TEXT: Reference = Reference { size: 16.0, line: 1.5, width: 832.0, marks: measured::TEXT };
+pub const PAPER: Reference = Reference {
+    size: 20.0,
+    line: 1.5,
+    width: 960.0,
+    marks: measured::PAPER,
+};
+pub const TEXT: Reference = Reference {
+    size: 16.0,
+    line: 1.5,
+    width: 832.0,
+    marks: measured::TEXT,
+};
 
 /// How far apart two positions may be, in pixels, and still match
 pub const TOLERANCE: f32 = 0.5;
@@ -79,17 +89,31 @@ pub const TOLERANCE: f32 = 0.5;
 pub fn compare(reference: &Reference, measured: &[Measured], tolerance: f32) -> Vec<String> {
     let mut out = Vec::new();
     let order = |a: &(f32, f32), b: &(f32, f32)| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1));
-    for kind in [Kind::Text, Kind::Marker, Kind::Bar, Kind::TableRule, Kind::Formula] {
+    for kind in [
+        Kind::Text,
+        Kind::Marker,
+        Kind::Bar,
+        Kind::TableRule,
+        Kind::Formula,
+    ] {
         let mut want: Vec<&Mark> = reference.marks.iter().filter(|m| m.kind == kind).collect();
         want.sort_by(|a, b| order(&(a.y, a.x), &(b.y, b.x)));
         let mut got: Vec<&Measured> = measured.iter().filter(|m| m.kind == kind).collect();
         got.sort_by(|a, b| order(&(a.y, a.x), &(b.y, b.x)));
         if want.len() != got.len() {
-            out.push(format!("{kind:?}: {} in the reference, {} set", want.len(), got.len()));
+            out.push(format!(
+                "{kind:?}: {} in the reference, {} set",
+                want.len(),
+                got.len()
+            ));
         }
         for (w, g) in want.iter().zip(&got) {
-            let far = [(w.x, g.x), (w.y, g.y), (w.w, g.w), (w.h, g.h)].iter().any(|(a, b)| (a - b).abs() > tolerance);
-            let same_text = matches!(kind, Kind::Text | Kind::Marker).then(|| g.text.starts_with(w.text) || w.text.starts_with(g.text.as_str())).unwrap_or(true);
+            let far = [(w.x, g.x), (w.y, g.y), (w.w, g.w), (w.h, g.h)]
+                .iter()
+                .any(|(a, b)| (a - b).abs() > tolerance);
+            let same_text = matches!(kind, Kind::Text | Kind::Marker)
+                .then(|| g.text.starts_with(w.text) || w.text.starts_with(g.text.as_str()))
+                .unwrap_or(true);
             if far || !same_text {
                 out.push(format!(
                     "{kind:?} {:?}: reference x {:.2} y {:.2} w {:.2} h {:.2}, set {:?} x {:.2} y {:.2} w {:.2} h {:.2}",
@@ -110,7 +134,18 @@ mod tests {
     #[test]
     fn the_reference_matches_itself_and_catches_a_shift() {
         for r in [PAPER, TEXT] {
-            let same: Vec<Measured> = r.marks.iter().map(|m| Measured { kind: m.kind, x: m.x, y: m.y, w: m.w, h: m.h, text: m.text.to_string() }).collect();
+            let same: Vec<Measured> = r
+                .marks
+                .iter()
+                .map(|m| Measured {
+                    kind: m.kind,
+                    x: m.x,
+                    y: m.y,
+                    w: m.w,
+                    h: m.h,
+                    text: m.text.to_string(),
+                })
+                .collect();
             assert!(compare(&r, &same, TOLERANCE).is_empty());
             let mut moved = same.clone();
             moved[3].y += 1.0;
@@ -125,8 +160,15 @@ mod tests {
         // block's lines at the code size
         let p = crate::paper();
         let first = PAPER.marks.iter().find(|m| m.kind == Kind::Text).unwrap();
-        assert_eq!((first.text, first.h), ("Heading one", p.heading_size(1, 20.0)));
-        let code = PAPER.marks.iter().find(|m| m.text.starts_with("fn main")).unwrap();
+        assert_eq!(
+            (first.text, first.h),
+            ("Heading one", p.heading_size(1, 20.0))
+        );
+        let code = PAPER
+            .marks
+            .iter()
+            .find(|m| m.text.starts_with("fn main"))
+            .unwrap();
         assert!((code.h - p.code_block_size(20.0)).abs() < 0.01);
         assert!((code.x - p.plate_pad * 20.0).abs() < 0.01);
     }

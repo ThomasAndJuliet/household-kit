@@ -41,17 +41,31 @@ pub fn contrast(text_y: f64, bg_y: f64) -> f64 {
     if text_y.is_nan() || bg_y.is_nan() || text_y.min(bg_y) < 0.0 || text_y.max(bg_y) > 1.1 {
         return 0.0;
     }
-    let clamp = |y: f64| if y > k::BLK_THRS { y } else { y + (k::BLK_THRS - y).powf(k::BLK_CLMP) };
+    let clamp = |y: f64| {
+        if y > k::BLK_THRS {
+            y
+        } else {
+            y + (k::BLK_THRS - y).powf(k::BLK_CLMP)
+        }
+    };
     let (text_y, bg_y) = (clamp(text_y), clamp(bg_y));
     if (bg_y - text_y).abs() < k::DELTA_Y_MIN {
         return 0.0;
     }
     let lc = if bg_y > text_y {
         let sapc = (bg_y.powf(k::NORM_BG) - text_y.powf(k::NORM_TXT)) * k::SCALE_BOW;
-        if sapc < k::LO_CLIP { 0.0 } else { sapc - k::LO_BOW_OFFSET }
+        if sapc < k::LO_CLIP {
+            0.0
+        } else {
+            sapc - k::LO_BOW_OFFSET
+        }
     } else {
         let sapc = (bg_y.powf(k::REV_BG) - text_y.powf(k::REV_TXT)) * k::SCALE_WOB;
-        if sapc > -k::LO_CLIP { 0.0 } else { sapc + k::LO_WOB_OFFSET }
+        if sapc > -k::LO_CLIP {
+            0.0
+        } else {
+            sapc + k::LO_WOB_OFFSET
+        }
     };
     lc * 100.0
 }
@@ -64,7 +78,13 @@ pub fn apca(text: Srgb, background: Srgb) -> f64 {
 
 /// Lc of eight-bit `text` on `background`, exactly as apca-w3 computes it
 pub fn apca_rgb8(text: [u8; 3], background: [u8; 3]) -> f64 {
-    let y = |[r, g, b]: [u8; 3]| screen_y(f64::from(r) / 255.0, f64::from(g) / 255.0, f64::from(b) / 255.0);
+    let y = |[r, g, b]: [u8; 3]| {
+        screen_y(
+            f64::from(r) / 255.0,
+            f64::from(g) / 255.0,
+            f64::from(b) / 255.0,
+        )
+    };
     contrast(y(text), y(background))
 }
 
@@ -72,9 +92,20 @@ pub fn apca_rgb8(text: [u8; 3], background: [u8; 3]) -> f64 {
 /// channel rounded to eight bits (apca-w3's `alphaBlend`)
 pub fn apca_over(text: Srgba, background: Srgb) -> f64 {
     let a = f64::from(text.a.clamp(0.0, 1.0));
-    let blend = |t: f32, b: f32| ((f64::from(b) * 255.0 * (1.0 - a) + f64::from(t) * 255.0 * a).round().min(255.0)) as u8;
+    let blend = |t: f32, b: f32| {
+        ((f64::from(b) * 255.0 * (1.0 - a) + f64::from(t) * 255.0 * a)
+            .round()
+            .min(255.0)) as u8
+    };
     let bg = background.to_rgb8();
-    apca_rgb8([blend(text.r, background.r), blend(text.g, background.g), blend(text.b, background.b)], bg)
+    apca_rgb8(
+        [
+            blend(text.r, background.r),
+            blend(text.g, background.g),
+            blend(text.b, background.b),
+        ],
+        bg,
+    )
 }
 
 #[cfg(test)]
@@ -100,10 +131,16 @@ mod tests {
             (0x444444, 0x112233, -7.526878460278154),
         ] {
             let got = apca_rgb8(rgb8(text), rgb8(bg));
-            assert!((got - want).abs() < 1e-9, "#{text:06x} on #{bg:06x}: {got}, not {want}");
+            assert!(
+                (got - want).abs() < 1e-9,
+                "#{text:06x} on #{bg:06x}: {got}, not {want}"
+            );
             // Through f32 channels, as near as they keep
             let near = apca(Srgb::hex(text), Srgb::hex(bg));
-            assert!((near - want).abs() < 1e-4, "#{text:06x} on #{bg:06x}: {near}");
+            assert!(
+                (near - want).abs() < 1e-4,
+                "#{text:06x} on #{bg:06x}: {near}"
+            );
         }
         // #0006 on #fff: black at 0x66/255 alpha, blended to #999999
         let got = apca_over(Srgba::new(0.0, 0.0, 0.0, 0x66 as f32 / 255.0), Srgb::WHITE);

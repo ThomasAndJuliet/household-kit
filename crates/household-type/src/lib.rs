@@ -238,12 +238,42 @@ pub struct Inks {
 }
 
 const HEADINGS: [Heading; 6] = [
-    Heading { scale: 1.55, line: 1.2, weight: 700, justify: false },
-    Heading { scale: 1.32, line: 1.3, weight: 700, justify: false },
-    Heading { scale: 1.16, line: 1.35, weight: 700, justify: false },
-    Heading { scale: 1.05, line: 1.4, weight: 700, justify: false },
-    Heading { scale: 1.0, line: 1.4, weight: 700, justify: false },
-    Heading { scale: 1.0, line: 1.4, weight: 700, justify: false },
+    Heading {
+        scale: 1.55,
+        line: 1.2,
+        weight: 700,
+        justify: false,
+    },
+    Heading {
+        scale: 1.32,
+        line: 1.3,
+        weight: 700,
+        justify: false,
+    },
+    Heading {
+        scale: 1.16,
+        line: 1.35,
+        weight: 700,
+        justify: false,
+    },
+    Heading {
+        scale: 1.05,
+        line: 1.4,
+        weight: 700,
+        justify: false,
+    },
+    Heading {
+        scale: 1.0,
+        line: 1.4,
+        weight: 700,
+        justify: false,
+    },
+    Heading {
+        scale: 1.0,
+        line: 1.4,
+        weight: 700,
+        justify: false,
+    },
 ];
 
 const COMMON: Style = Style {
@@ -253,13 +283,48 @@ const COMMON: Style = Style {
     line: 1.5,
     justify: false,
     measure: 52.0,
-    weights: Weights { regular: 400, bold: 700, thickened: 600 },
+    weights: Weights {
+        regular: 400,
+        bold: 700,
+        thickened: 600,
+    },
     headings: HEADINGS,
-    spacing: Spacing { block: 0.7, tight: 0.25, heading_extra: 0.5 },
-    code: Code { scale: 1.0, block: 0.88, inline: 0.92, line_follows_text: true },
-    maths: Maths { scale: 1.1, display_centred: true, rise: 0.8, drop: 0.25, numbered: false },
-    list: List { indent: 1.5, marker_gap: 0.45, bullets: ["•", "◦"], number_suffix: ".", tasks: ["☐", "☑"], marker_ink: Ink::Muted, justify: false },
-    quote: Quote { indent: 1.1, bar_at: 0.0, bar_width: 3.0, bar_radius: 1.5, bar_ink: Ink::Rule, ink: Ink::Text, justify: false },
+    spacing: Spacing {
+        block: 0.7,
+        tight: 0.25,
+        heading_extra: 0.5,
+    },
+    code: Code {
+        scale: 1.0,
+        block: 0.88,
+        inline: 0.92,
+        line_follows_text: true,
+    },
+    maths: Maths {
+        scale: 1.1,
+        display_centred: true,
+        rise: 0.8,
+        drop: 0.25,
+        numbered: false,
+    },
+    list: List {
+        indent: 1.5,
+        marker_gap: 0.45,
+        bullets: ["•", "◦"],
+        number_suffix: ".",
+        tasks: ["☐", "☑"],
+        marker_ink: Ink::Muted,
+        justify: false,
+    },
+    quote: Quote {
+        indent: 1.1,
+        bar_at: 0.0,
+        bar_width: 3.0,
+        bar_radius: 1.5,
+        bar_ink: Ink::Rule,
+        ink: Ink::Text,
+        justify: false,
+    },
     plate_pad: 0.5,
     table: Table {
         cell_pad: 0.4,
@@ -273,10 +338,26 @@ const COMMON: Style = Style {
         centred: true,
         spare: 1.0,
     },
-    rule: HorizontalRule { at: 0.4, height: 0.8, thickness: 1.0 },
-    figures: Figures { image_width: 520.0, image_height: 24.0, chart_width: 42.0, chart_label: 0.8, diagram_height: 40.0 },
+    rule: HorizontalRule {
+        at: 0.4,
+        height: 0.8,
+        thickness: 1.0,
+    },
+    figures: Figures {
+        image_width: 520.0,
+        image_height: 24.0,
+        chart_width: 42.0,
+        chart_label: 0.8,
+        diagram_height: 40.0,
+    },
     links_bold: true,
-    inks: Inks { body: Ink::Text, headings: Ink::Strong, bold: Ink::Strong, table_head: Ink::Strong, code: Ink::Text },
+    inks: Inks {
+        body: Ink::Text,
+        headings: Ink::Strong,
+        bold: Ink::Strong,
+        table_head: Ink::Strong,
+        code: Ink::Text,
+    },
 };
 
 /// The Paper view: Libertinus Serif at 20 px, 1.5 apart, justified, 48 ems
@@ -287,9 +368,18 @@ pub const fn paper() -> Style {
         size: 20.0,
         justify: true,
         measure: 48.0,
-        code: Code { scale: 0.86, ..COMMON.code },
-        list: List { justify: true, ..COMMON.list },
-        quote: Quote { justify: true, ..COMMON.quote },
+        code: Code {
+            scale: 0.86,
+            ..COMMON.code
+        },
+        list: List {
+            justify: true,
+            ..COMMON.list
+        },
+        quote: Quote {
+            justify: true,
+            ..COMMON.quote
+        },
         ..COMMON
     }
 }
@@ -329,8 +419,16 @@ impl Style {
             (Some(before), Some(depth)) => !(next.first && depth <= before),
             _ => false,
         };
-        let gap = if tight { self.spacing.tight } else { self.spacing.block };
-        if next.heading { gap + self.spacing.heading_extra } else { gap }
+        let gap = if tight {
+            self.spacing.tight
+        } else {
+            self.spacing.block
+        };
+        if next.heading {
+            gap + self.spacing.heading_extra
+        } else {
+            gap
+        }
     }
 
     /// A code block's size with the text at `size`
@@ -363,8 +461,14 @@ mod tests {
     #[test]
     fn the_views_are_the_terminals() {
         let (p, t) = (paper(), text());
-        assert_eq!((p.body, p.size, p.line, p.justify, p.measure), ("Libertinus Serif", 20.0, 1.5, true, 48.0));
-        assert_eq!((t.body, t.size, t.line, t.justify, t.measure), ("", 16.0, 1.5, false, 52.0));
+        assert_eq!(
+            (p.body, p.size, p.line, p.justify, p.measure),
+            ("Libertinus Serif", 20.0, 1.5, true, 48.0)
+        );
+        assert_eq!(
+            (t.body, t.size, t.line, t.justify, t.measure),
+            ("", 16.0, 1.5, false, 52.0)
+        );
         assert!((p.code_block_size(20.0) - 15.136).abs() < 1e-4);
         assert!((t.code_block_size(16.0) - 14.08).abs() < 1e-4);
         assert!((p.inline_code_size(20.0) - 15.824).abs() < 1e-4);
@@ -376,14 +480,30 @@ mod tests {
     fn gaps() {
         let s = paper();
         let para = Block::default();
-        let item = |d| Block { heading: false, item: Some(d), first: false };
-        let first = |d| Block { heading: false, item: Some(d), first: true };
-        let heading = Block { heading: true, item: None, first: false };
+        let item = |d| Block {
+            heading: false,
+            item: Some(d),
+            first: false,
+        };
+        let first = |d| Block {
+            heading: false,
+            item: Some(d),
+            first: true,
+        };
+        let heading = Block {
+            heading: true,
+            item: None,
+            first: false,
+        };
         assert_eq!(s.gap(para, item(1)), 0.7);
         assert_eq!(s.gap(item(1), item(1)), 0.25);
         assert_eq!(s.gap(item(1), first(2)), 0.25, "a nested list's first item");
         assert_eq!(s.gap(item(2), item(1)), 0.25, "and back out");
-        assert_eq!(s.gap(item(2), first(1)), 0.7, "a new list after a nested one");
+        assert_eq!(
+            s.gap(item(2), first(1)),
+            0.7,
+            "a new list after a nested one"
+        );
         assert_eq!(s.gap(item(1), first(1)), 0.7, "a new list after another");
         assert_eq!(s.gap(para, heading), 1.2);
         assert_eq!(s.gap(heading, para), 0.7);
