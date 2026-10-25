@@ -14,6 +14,8 @@ Shared crates for the household's libcosmic apps (Terminal, Cerea, Lollypop, Dis
 
 The apps pin different libcosmic versions, and a crate that named a libcosmic type would tie every app to one version. Every crate here is plain Rust. Its types are its own: `Srgb`/`Srgba` (convertible to and from `[f32; 3]`/`[f32; 4]`), a `Colour` role, and an `Events<T>` stream. `household-wait` uses tokio, which libcosmic's executor already runs. Keep it that way: a change that needs a widget or a theme type belongs in the app's glue.
 
+The household's UI test harness draws the apps' own widgets, so it needs libcosmic. It is not here: it is its own repository, [ThomasAndJuliet/household-test](https://github.com/ThomasAndJuliet/household-test), which depends on libcosmic as an app does.
+
 ## Adding a crate to an app
 
 ```toml
