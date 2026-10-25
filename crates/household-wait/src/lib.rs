@@ -209,7 +209,9 @@ pub struct Progress {
 
 impl Progress {
     pub fn fraction(&self) -> Option<f32> {
-        self.total.filter(|&t| t > 0).map(|t| (self.done as f32 / t as f32).clamp(0.0, 1.0))
+        self.total
+            .filter(|&t| t > 0)
+            .map(|t| (self.done as f32 / t as f32).clamp(0.0, 1.0))
     }
 }
 
@@ -223,7 +225,10 @@ pub struct Problem {
 
 impl Problem {
     pub fn new(what: impl Into<String>, detail: impl std::fmt::Display) -> Self {
-        Self { what: what.into(), detail: detail.to_string() }
+        Self {
+            what: what.into(),
+            detail: detail.to_string(),
+        }
     }
 }
 
@@ -277,7 +282,14 @@ pub struct Ctx {
 impl Ctx {
     fn new() -> (Self, watch::Receiver<Option<Progress>>) {
         let (tx, rx) = watch::channel(None);
-        (Self { cancel: CancellationToken::new(), progress: Arc::new(tx), children: Default::default() }, rx)
+        (
+            Self {
+                cancel: CancellationToken::new(),
+                progress: Arc::new(tx),
+                children: Default::default(),
+            },
+            rx,
+        )
     }
 
     /// Whether the wait was cancelled, replaced or overran: blocking work
@@ -294,7 +306,11 @@ impl Ctx {
     /// Report progress. Cheap: reports closer than 100 ms collapse into the
     /// latest
     pub fn progress(&self, done: u64, total: Option<u64>, detail: impl Into<String>) {
-        self.progress.send_replace(Some(Progress { done, total, detail: detail.into() }));
+        self.progress.send_replace(Some(Progress {
+            done,
+            total,
+            detail: detail.into(),
+        }));
     }
 
     /// Hand a child process to the wait, so it is killed if the wait is
@@ -303,7 +319,10 @@ impl Ctx {
     pub fn own(&self, child: Child) -> OwnedChild {
         let child = Arc::new(Mutex::new(child));
         self.children.lock().unwrap().push(child.clone());
-        OwnedChild { child, cancel: self.cancel.clone() }
+        OwnedChild {
+            child,
+            cancel: self.cancel.clone(),
+        }
     }
 
     fn kill_children(&self) {
@@ -334,7 +353,10 @@ impl OwnedChild {
                 return Ok(status);
             }
             if self.cancel.is_cancelled() {
-                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "the wait was stopped"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "the wait was stopped",
+                ));
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -433,8 +455,16 @@ impl WaitView<'_> {
             return Some(STILL_WAITING.into());
         }
         let caption = match self.progress? {
-            Progress { done, total: Some(total), detail } if detail.is_empty() => format!("{done} of {total}"),
-            Progress { done, total: Some(total), detail } => format!("{done} of {total}: {detail}"),
+            Progress {
+                done,
+                total: Some(total),
+                detail,
+            } if detail.is_empty() => format!("{done} of {total}"),
+            Progress {
+                done,
+                total: Some(total),
+                detail,
+            } => format!("{done} of {total}: {detail}"),
             Progress { detail, .. } => detail.clone(),
         };
         (!caption.is_empty()).then_some(caption)
@@ -465,7 +495,13 @@ impl Default for Waits {
 
 impl Waits {
     pub fn with_clock(clock: Clock) -> Self {
-        Self { next: 0, live: HashMap::new(), keys: HashMap::new(), clock, records: None }
+        Self {
+            next: 0,
+            live: HashMap::new(),
+            keys: HashMap::new(),
+            clock,
+            records: None,
+        }
     }
 
     /// Keep a [`Record`] of every wait, for tests and timing runs
@@ -476,7 +512,10 @@ impl Waits {
 
     /// The records so far, emptied
     pub fn take_records(&mut self) -> Vec<Record> {
-        self.records.as_mut().map(std::mem::take).unwrap_or_default()
+        self.records
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     /// Start async `work` under `spec`. Run the events as a task from
@@ -501,14 +540,20 @@ impl Waits {
     /// own; its result is dropped
     ///
     /// [`start`]: Waits::start
-    pub fn start_blocking<T>(&mut self, spec: Spec, work: impl FnOnce(Ctx) -> Result<T, Problem> + Send + 'static) -> (WaitId, Events<T>)
+    pub fn start_blocking<T>(
+        &mut self,
+        spec: Spec,
+        work: impl FnOnce(Ctx) -> Result<T, Problem> + Send + 'static,
+    ) -> (WaitId, Events<T>)
     where
         T: Send + 'static,
     {
         self.start(spec, move |ctx| async move {
             tokio::task::spawn_blocking(move || work(ctx))
                 .await
-                .unwrap_or_else(|error| Err(Problem::new("Something went wrong. Try again.", error)))
+                .unwrap_or_else(|error| {
+                    Err(Problem::new("Something went wrong. Try again.", error))
+                })
         })
     }
 
@@ -524,8 +569,19 @@ impl Waits {
             self.end(old, End::Replaced);
         }
         let (ctx, rx) = Ctx::new();
-        let shown = if spec.kind == Kind::Person { Tier::Person } else { Tier::Instant };
-        let live = Live { spec, started: self.clock.now(), shown, progress: None, stalled: false, cancel: ctx.cancel.clone() };
+        let shown = if spec.kind == Kind::Person {
+            Tier::Person
+        } else {
+            Tier::Instant
+        };
+        let live = Live {
+            spec,
+            started: self.clock.now(),
+            shown,
+            progress: None,
+            stalled: false,
+            cancel: ctx.cancel.clone(),
+        };
         self.live.insert(id, live);
         (id, ctx, rx)
     }
@@ -552,7 +608,11 @@ impl Waits {
                 return Some(Outcome::Failed(problem));
             }
             Event::TimedOut(_) => {
-                let detail = format!("{} did not finish within {:?}", live.spec.label, live.spec.deadline.unwrap_or_default());
+                let detail = format!(
+                    "{} did not finish within {:?}",
+                    live.spec.label,
+                    live.spec.deadline.unwrap_or_default()
+                );
                 let problem = Problem::new(live.spec.too_long.clone(), detail);
                 self.end(id, End::TimedOut);
                 return Some(Outcome::TimedOut(problem));
@@ -575,7 +635,9 @@ impl Waits {
     }
 
     fn end(&mut self, id: WaitId, end: End) {
-        let Some(live) = self.live.remove(&id) else { return };
+        let Some(live) = self.live.remove(&id) else {
+            return;
+        };
         if matches!(end, End::Cancelled | End::Replaced) {
             live.cancel.cancel();
         }
@@ -586,7 +648,13 @@ impl Waits {
         }
         if let Some(records) = &mut self.records {
             let took = self.clock.now().saturating_duration_since(live.started);
-            records.push(Record { label: live.spec.label, kind: live.spec.kind, shown: live.shown, took, end });
+            records.push(Record {
+                label: live.spec.label,
+                kind: live.spec.kind,
+                shown: live.shown,
+                took,
+                end,
+            });
         }
     }
 
@@ -614,7 +682,12 @@ impl Waits {
     /// Live waits showing something, oldest first, for a shared activity
     /// area
     pub fn showing(&self) -> Vec<WaitView<'_>> {
-        let mut ids: Vec<WaitId> = self.live.iter().filter(|(_, l)| l.shown != Tier::Instant).map(|(id, _)| *id).collect();
+        let mut ids: Vec<WaitId> = self
+            .live
+            .iter()
+            .filter(|(_, l)| l.shown != Tier::Instant)
+            .map(|(id, _)| *id)
+            .collect();
         ids.sort();
         ids.into_iter().filter_map(|id| self.get(id)).collect()
     }
@@ -643,7 +716,11 @@ fn drive<T: Send + 'static>(
         let start = TokioInstant::now();
         let end_at = deadline.map(|d| start + d);
         let mut work = std::pin::pin!(work);
-        let mut shown = if kind == Kind::Person { Tier::Person } else { Tier::Instant };
+        let mut shown = if kind == Kind::Person {
+            Tier::Person
+        } else {
+            Tier::Instant
+        };
         let mut last_progress = start;
         let mut stalled = false;
         let mut progress_open = true;
@@ -700,7 +777,11 @@ fn drive<T: Send + 'static>(
     // drops the work; the stream ends when the runner has ended and its
     // events are read
     let received = stream::poll_fn(move |cx| events.poll_recv(cx));
-    stream::select(received, stream::once(runner).filter_map(|()| async { None })).boxed()
+    stream::select(
+        received,
+        stream::once(runner).filter_map(|()| async { None }),
+    )
+    .boxed()
 }
 
 /// Results tagged by generation, for work not started through [`Waits`]
@@ -782,7 +863,10 @@ pub struct Queue<K: Hash + Eq + Clone, J> {
 
 impl<K: Hash + Eq + Clone, J> Queue<K, J> {
     pub fn new(collapse: bool) -> Self {
-        Self { keys: HashMap::new(), collapse }
+        Self {
+            keys: HashMap::new(),
+            collapse,
+        }
     }
 
     /// Returns the job if it can start now; otherwise it waits its turn
@@ -856,7 +940,12 @@ impl Timings {
 
     /// The labels whose longest run went over `budget`, longest first
     pub fn over(&self, budget: Duration) -> Vec<(&'static str, Duration)> {
-        let mut over: Vec<_> = self.by_label.iter().filter(|(_, (_, max))| *max > budget).map(|(l, (_, max))| (*l, *max)).collect();
+        let mut over: Vec<_> = self
+            .by_label
+            .iter()
+            .filter(|(_, (_, max))| *max > budget)
+            .map(|(l, (_, max))| (*l, *max))
+            .collect();
         over.sort_by_key(|&(_, max)| std::cmp::Reverse(max));
         over
     }
@@ -870,7 +959,10 @@ mod tests {
         events.collect().await
     }
 
-    fn sleeper(after: Duration, value: u32) -> impl FnOnce(Ctx) -> Pin<Box<dyn Future<Output = Result<u32, Problem>> + Send>> {
+    fn sleeper(
+        after: Duration,
+        value: u32,
+    ) -> impl FnOnce(Ctx) -> Pin<Box<dyn Future<Output = Result<u32, Problem>> + Send>> {
         move |_| {
             Box::pin(async move {
                 tokio::time::sleep(after).await;
@@ -880,7 +972,16 @@ mod tests {
     }
 
     fn tiers(events: &[Event<u32>]) -> Vec<Tier> {
-        events.iter().filter_map(|e| if let Event::Promote(_, s) = e { Some(*s) } else { None }).collect()
+        events
+            .iter()
+            .filter_map(|e| {
+                if let Event::Promote(_, s) = e {
+                    Some(*s)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn outcome(waits: &mut Waits, events: Vec<Event<u32>>) -> Option<Outcome<u32>> {
@@ -890,7 +991,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn quick_work_shows_nothing() {
         let mut waits = Waits::default();
-        let (_, events) = waits.start(Spec::new(Kind::Local, "Saving"), sleeper(Duration::from_millis(60), 1));
+        let (_, events) = waits.start(
+            Spec::new(Kind::Local, "Saving"),
+            sleeper(Duration::from_millis(60), 1),
+        );
         let events = run(events).await;
         assert!(tiers(&events).is_empty());
         assert!(matches!(events.last(), Some(Event::Done(_, 1))));
@@ -899,7 +1003,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn promotes_at_100_ms_and_1_s() {
         let mut waits = Waits::with_clock(Clock::fake()).recording();
-        let (id, events) = waits.start(Spec::new(Kind::Remote, "Loading"), sleeper(Duration::from_millis(1500), 7));
+        let (id, events) = waits.start(
+            Spec::new(Kind::Remote, "Loading"),
+            sleeper(Duration::from_millis(1500), 7),
+        );
         let started = TokioInstant::now();
         let mut events = events;
         let mut seen = Vec::new();
@@ -912,46 +1019,82 @@ mod tests {
                 assert_eq!(waits.apply(event), Some(Outcome::Done(7)));
             }
         }
-        assert_eq!(seen, [(Tier::Spinner, SPINNER_AFTER), (Tier::Bar, BAR_AFTER)]);
+        assert_eq!(
+            seen,
+            [(Tier::Spinner, SPINNER_AFTER), (Tier::Bar, BAR_AFTER)]
+        );
         let records = waits.take_records();
         assert_eq!(records[0].shown, Tier::Bar);
-        assert!(records[0].overran(), "remote work that showed a bar is an overrun");
+        assert!(
+            records[0].overran(),
+            "remote work that showed a bar is an overrun"
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn the_agreed_deadlines() {
         assert_eq!(Kind::Local.default_deadline(), Some(Duration::from_secs(2)));
-        assert_eq!(Kind::Remote.default_deadline(), Some(Duration::from_secs(10)));
-        assert_eq!((Kind::Long.default_deadline(), Kind::Person.default_deadline()), (None, None));
+        assert_eq!(
+            Kind::Remote.default_deadline(),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            (
+                Kind::Long.default_deadline(),
+                Kind::Person.default_deadline()
+            ),
+            (None, None)
+        );
         for (kind, deadline) in [(Kind::Local, 2), (Kind::Remote, 10)] {
             let mut waits = Waits::default();
-            let (_, events) = waits.start(Spec::new(kind, "Reading"), sleeper(Duration::from_secs(60), 3));
+            let (_, events) = waits.start(
+                Spec::new(kind, "Reading"),
+                sleeper(Duration::from_secs(60), 3),
+            );
             let started = TokioInstant::now();
             let events = run(events).await;
             assert_eq!(started.elapsed(), Duration::from_secs(deadline), "{kind:?}");
-            let Some(Outcome::TimedOut(problem)) = outcome(&mut waits, events) else { panic!("{kind:?} did not time out") };
-            assert_eq!(problem.what, "This took too long and was stopped. Try again.");
-            assert_eq!(problem.detail, format!("Reading did not finish within {deadline}s"));
+            let Some(Outcome::TimedOut(problem)) = outcome(&mut waits, events) else {
+                panic!("{kind:?} did not time out")
+            };
+            assert_eq!(
+                problem.what,
+                "This took too long and was stopped. Try again."
+            );
+            assert_eq!(
+                problem.detail,
+                format!("Reading did not finish within {deadline}s")
+            );
         }
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_deadline_of_its_own_and_a_sentence_of_its_own() {
         let mut waits = Waits::default();
-        let spec = Spec::new(Kind::Remote, "Loading messages").deadline(Duration::from_secs(3)).too_long("Could not load the messages. Try again.");
+        let spec = Spec::new(Kind::Remote, "Loading messages")
+            .deadline(Duration::from_secs(3))
+            .too_long("Could not load the messages. Try again.");
         let (_, events) = waits.start(spec, sleeper(Duration::from_secs(60), 3));
         let started = TokioInstant::now();
         let events = run(events).await;
         assert_eq!(started.elapsed(), Duration::from_secs(3));
-        let Some(Outcome::TimedOut(problem)) = outcome(&mut waits, events) else { panic!() };
+        let Some(Outcome::TimedOut(problem)) = outcome(&mut waits, events) else {
+            panic!()
+        };
         assert_eq!(problem.what, "Could not load the messages. Try again.");
     }
 
     #[tokio::test(start_paused = true)]
     async fn person_waits_never_promote_or_time_out() {
         let mut waits = Waits::default();
-        let (id, events) = waits.start(Spec::new(Kind::Person, "Scan the code"), sleeper(Duration::from_secs(3600), 2));
-        assert_eq!(waits.get(id).map(|w| (w.shown, w.cancellable)), Some((Tier::Person, true)));
+        let (id, events) = waits.start(
+            Spec::new(Kind::Person, "Scan the code"),
+            sleeper(Duration::from_secs(3600), 2),
+        );
+        assert_eq!(
+            waits.get(id).map(|w| (w.shown, w.cancellable)),
+            Some((Tier::Person, true))
+        );
         let events = run(events).await;
         assert!(tiers(&events).is_empty());
         assert!(matches!(events.last(), Some(Event::Done(_, 2))));
@@ -980,9 +1123,15 @@ mod tests {
                 Event::Stalled(_) => stalled_at = Some(started.elapsed()),
                 Event::Done(..) => {
                     let view = waits.get(id).unwrap();
-                    assert_eq!((view.shown, view.stalled, view.cancellable), (Tier::Bar, true, true));
+                    assert_eq!(
+                        (view.shown, view.stalled, view.cancellable),
+                        (Tier::Bar, true, true)
+                    );
                     assert_eq!(view.fraction(), Some(1.0));
-                    assert_eq!(view.caption().as_deref(), Some("Still waiting. Nothing has changed for 15 seconds."));
+                    assert_eq!(
+                        view.caption().as_deref(),
+                        Some("Still waiting. Nothing has changed for 15 seconds.")
+                    );
                 }
                 _ => {}
             }
@@ -1030,8 +1179,14 @@ mod tests {
     async fn the_latest_wait_for_a_key_wins() {
         let mut waits = Waits::default().recording();
         let k = key("search", &"channel 1");
-        let (first, old) = waits.start(Spec::new(Kind::Remote, "Searching").key(k), sleeper(Duration::from_millis(50), 1));
-        let (second, new) = waits.start(Spec::new(Kind::Remote, "Searching").key(k), sleeper(Duration::from_millis(50), 2));
+        let (first, old) = waits.start(
+            Spec::new(Kind::Remote, "Searching").key(k),
+            sleeper(Duration::from_millis(50), 1),
+        );
+        let (second, new) = waits.start(
+            Spec::new(Kind::Remote, "Searching").key(k),
+            sleeper(Duration::from_millis(50), 2),
+        );
         assert!(!waits.is_live(first) && waits.is_live(second));
         assert_eq!(waits.for_key(&k).map(|w| w.id), Some(second));
         // The replaced wait was cancelled: its stream ends without a result
@@ -1046,11 +1201,20 @@ mod tests {
     async fn join_keeps_the_running_wait() {
         let mut waits = Waits::default();
         let k = key("refresh", &0);
-        let (first, running) = waits.start(Spec::new(Kind::Remote, "Checking").key(k).join(), sleeper(Duration::from_secs(1), 1));
-        let (again, none) = waits.start(Spec::new(Kind::Remote, "Checking").key(k).join(), sleeper(Duration::from_secs(1), 2));
+        let (first, running) = waits.start(
+            Spec::new(Kind::Remote, "Checking").key(k).join(),
+            sleeper(Duration::from_secs(1), 1),
+        );
+        let (again, none) = waits.start(
+            Spec::new(Kind::Remote, "Checking").key(k).join(),
+            sleeper(Duration::from_secs(1), 2),
+        );
         assert_eq!(first, again);
         assert!(run(none).await.is_empty());
-        assert_eq!(outcome(&mut waits, run(running).await), Some(Outcome::Done(1)));
+        assert_eq!(
+            outcome(&mut waits, run(running).await),
+            Some(Outcome::Done(1))
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1072,8 +1236,16 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(2)).await;
         waits.cancel(id);
         let events = running.await.unwrap();
-        assert!(events.iter().all(|e| !matches!(e, Event::Done(..) | Event::Failed(..) | Event::TimedOut(..))));
-        assert_eq!(seen_rx.recv().await, Some(()), "work handed the token sees the cancel");
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, Event::Done(..) | Event::Failed(..) | Event::TimedOut(..)))
+        );
+        assert_eq!(
+            seen_rx.recv().await,
+            Some(()),
+            "work handed the token sees the cancel"
+        );
         assert!(waits.get(id).is_none());
         assert_eq!(waits.take_records()[0].end, End::Cancelled);
     }
@@ -1081,11 +1253,25 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn failures_and_the_showing_list() {
         let mut waits = Waits::default();
-        let (failing, events) = waits.start(Spec::new(Kind::Local, "Saving"), |_| async { Err::<u32, _>(Problem::new("Could not save. Try again.", "disk full")) });
-        assert_eq!(outcome(&mut waits, run(events).await), Some(Outcome::Failed(Problem::new("Could not save. Try again.", "disk full"))));
+        let (failing, events) = waits.start(Spec::new(Kind::Local, "Saving"), |_| async {
+            Err::<u32, _>(Problem::new("Could not save. Try again.", "disk full"))
+        });
+        assert_eq!(
+            outcome(&mut waits, run(events).await),
+            Some(Outcome::Failed(Problem::new(
+                "Could not save. Try again.",
+                "disk full"
+            )))
+        );
         assert!(!waits.is_live(failing));
-        let (a, _ea) = waits.start(Spec::new(Kind::Person, "Approve"), sleeper(Duration::from_secs(9), 0));
-        let (_b, _eb) = waits.start(Spec::new(Kind::Local, "Quiet"), sleeper(Duration::from_secs(1), 0));
+        let (a, _ea) = waits.start(
+            Spec::new(Kind::Person, "Approve"),
+            sleeper(Duration::from_secs(9), 0),
+        );
+        let (_b, _eb) = waits.start(
+            Spec::new(Kind::Local, "Quiet"),
+            sleeper(Duration::from_secs(1), 0),
+        );
         let showing: Vec<WaitId> = waits.showing().iter().map(|w| w.id).collect();
         assert_eq!(showing, [a], "only what shows something, oldest first");
     }
@@ -1096,17 +1282,31 @@ mod tests {
         let (pid_tx, pid_rx) = std::sync::mpsc::channel();
         let spec = Spec::new(Kind::Long, "Stopping the invitation");
         let (id, events) = waits.start_blocking(spec, move |ctx| {
-            let child = ctx.own(std::process::Command::new("sleep").arg("30").spawn().map_err(|e| Problem::new("Could not start", e))?);
+            let child = ctx.own(
+                std::process::Command::new("sleep")
+                    .arg("30")
+                    .spawn()
+                    .map_err(|e| Problem::new("Could not start", e))?,
+            );
             pid_tx.send(child.with(|c| c.id())).unwrap();
             child.wait().map_err(|e| Problem::new("Stopped", e))?;
             Ok(0u32)
         });
         let running = tokio::spawn(run(events));
-        let pid = tokio::task::spawn_blocking(move || pid_rx.recv().unwrap()).await.unwrap();
+        let pid = tokio::task::spawn_blocking(move || pid_rx.recv().unwrap())
+            .await
+            .unwrap();
         let started = Instant::now();
         waits.cancel(id);
-        let events = tokio::time::timeout(Duration::from_secs(5), running).await.expect("stream ended").unwrap();
-        assert!(events.iter().all(|e| !matches!(e, Event::Done(..) | Event::Failed(..))));
+        let events = tokio::time::timeout(Duration::from_secs(5), running)
+            .await
+            .expect("stream ended")
+            .unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, Event::Done(..) | Event::Failed(..)))
+        );
         // The process is gone (killed and reaped), well before its 30 s
         let gone = || !std::path::Path::new(&format!("/proc/{pid}")).exists();
         while !gone() && started.elapsed() < Duration::from_secs(5) {
@@ -1118,29 +1318,67 @@ mod tests {
 
     #[test]
     fn captions() {
-        let progress = |done, total, detail: &str| Progress { done, total, detail: detail.into() };
+        let progress = |done, total, detail: &str| Progress {
+            done,
+            total,
+            detail: detail.into(),
+        };
         fn view(shown: Tier, progress: Option<&Progress>, stalled: bool) -> WaitView<'_> {
-            WaitView { id: WaitId(1), label: "Scanning", shown, progress, stalled, cancellable: true }
+            WaitView {
+                id: WaitId(1),
+                label: "Scanning",
+                shown,
+                progress,
+                stalled,
+                cancellable: true,
+            }
         }
         let p = progress(12, Some(300), "Album");
-        assert_eq!(view(Tier::Bar, Some(&p), false).caption().as_deref(), Some("12 of 300: Album"));
+        assert_eq!(
+            view(Tier::Bar, Some(&p), false).caption().as_deref(),
+            Some("12 of 300: Album")
+        );
         let p = progress(12, Some(300), "");
-        assert_eq!(view(Tier::Bar, Some(&p), false).caption().as_deref(), Some("12 of 300"));
+        assert_eq!(
+            view(Tier::Bar, Some(&p), false).caption().as_deref(),
+            Some("12 of 300")
+        );
         assert_eq!(view(Tier::Bar, Some(&p), false).fraction(), Some(0.04));
         assert_eq!(view(Tier::Bar, None, false).caption(), None);
-        assert_eq!(view(Tier::Bar, None, true).caption().as_deref(), Some(STILL_WAITING));
-        assert_eq!(view(Tier::Spinner, Some(&p), true).caption(), None, "no bar, no caption");
-        assert_eq!(STILL_WAITING, format!("Still waiting. Nothing has changed for {} seconds.", STALL_AFTER.as_secs()));
+        assert_eq!(
+            view(Tier::Bar, None, true).caption().as_deref(),
+            Some(STILL_WAITING)
+        );
+        assert_eq!(
+            view(Tier::Spinner, Some(&p), true).caption(),
+            None,
+            "no bar, no caption"
+        );
+        assert_eq!(
+            STILL_WAITING,
+            format!(
+                "Still waiting. Nothing has changed for {} seconds.",
+                STALL_AFTER.as_secs()
+            )
+        );
     }
 
     #[test]
     fn saves_to_one_path_run_in_order_and_collapse() {
         let mut saves = Queue::new(true);
         assert_eq!(saves.push("a.md", 1), Some(1));
-        assert_eq!(saves.push("b.md", 1), Some(1), "another path is not held up");
+        assert_eq!(
+            saves.push("b.md", 1),
+            Some(1),
+            "another path is not held up"
+        );
         assert_eq!(saves.push("a.md", 2), None);
         assert_eq!(saves.push("a.md", 3), None);
-        assert_eq!(saves.finished(&"a.md"), Some(3), "only the latest waiting save runs");
+        assert_eq!(
+            saves.finished(&"a.md"),
+            Some(3),
+            "only the latest waiting save runs"
+        );
         assert_eq!(saves.finished(&"a.md"), None);
         assert_eq!(saves.finished(&"b.md"), None);
         assert!(saves.is_idle());
@@ -1149,7 +1387,14 @@ mod tests {
         ordered.push("k", 1);
         ordered.push("k", 2);
         ordered.push("k", 3);
-        assert_eq!((ordered.finished(&"k"), ordered.finished(&"k"), ordered.finished(&"k")), (Some(2), Some(3), None));
+        assert_eq!(
+            (
+                ordered.finished(&"k"),
+                ordered.finished(&"k"),
+                ordered.finished(&"k")
+            ),
+            (Some(2), Some(3), None)
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1168,11 +1413,16 @@ mod tests {
         assert!(!debounce.is_latest(a) && debounce.is_latest(b));
 
         let mut batch = Coalesce::default();
-        let timer = batch.push(1, Duration::from_millis(250)).expect("the first starts the timer");
+        let timer = batch
+            .push(1, Duration::from_millis(250))
+            .expect("the first starts the timer");
         assert!(batch.push(2, Duration::from_millis(250)).is_none());
         timer.await;
         assert_eq!(batch.take(), [1, 2]);
-        assert!(batch.push(3, Duration::from_millis(250)).is_some(), "a new batch");
+        assert!(
+            batch.push(3, Duration::from_millis(250)).is_some(),
+            "a new batch"
+        );
     }
 
     #[test]

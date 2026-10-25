@@ -36,7 +36,12 @@ pub fn over(top: Srgba, bottom: Srgba) -> Srgba {
         return Srgba::new(0.0, 0.0, 0.0, 0.0);
     }
     let mix = |t: f32, b: f32| (t * top.a + b * bottom.a * (1.0 - top.a)) / a;
-    Srgba::new(mix(top.r, bottom.r), mix(top.g, bottom.g), mix(top.b, bottom.b), a)
+    Srgba::new(
+        mix(top.r, bottom.r),
+        mix(top.g, bottom.g),
+        mix(top.b, bottom.b),
+        a,
+    )
 }
 
 /// `color` at a lightness for text: its hue and chroma, as dark as label
@@ -82,7 +87,11 @@ pub const MUTED_CHROMA_GAIN: f32 = 1.2;
 /// #5cd7b0 → #55b394, #bdbdbd → #9e9e9e
 pub fn muted_accent(accent: Srgb, dark: bool) -> Srgb {
     let mut lch = accent.to_oklch();
-    lch.l = if dark { MUTED_LIGHTNESS.1 } else { MUTED_LIGHTNESS.0 };
+    lch.l = if dark {
+        MUTED_LIGHTNESS.1
+    } else {
+        MUTED_LIGHTNESS.0
+    };
     lch.chroma = (lch.chroma * MUTED_CHROMA_GAIN).min(MUTED_CHROMA);
     lch.to_srgb()
 }
@@ -90,12 +99,22 @@ pub fn muted_accent(accent: Srgb, dark: bool) -> Srgb {
 /// Text and icons on the muted accent: white or black, whichever has the
 /// higher WCAG 2 ratio on it (at least 4.5:1 for every accent, tested)
 pub fn on_muted(muted: Srgb) -> Srgb {
-    if contrast_ratio(muted, Srgb::WHITE) >= contrast_ratio(muted, Srgb::BLACK) { Srgb::WHITE } else { Srgb::BLACK }
+    if contrast_ratio(muted, Srgb::WHITE) >= contrast_ratio(muted, Srgb::BLACK) {
+        Srgb::WHITE
+    } else {
+        Srgb::BLACK
+    }
 }
 
 /// WCAG 2's relative luminance of an sRGB colour
 pub fn luminance(color: Srgb) -> f32 {
-    let linear = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+    let linear = |c: f32| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
     0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
 }
 
@@ -134,7 +153,10 @@ pub struct Washes {
 pub fn held_component(component: Component, washes: Washes, light: bool) -> Option<Component> {
     let base = component.base;
     let capped = surface(base.rgb()).with_alpha(base.a);
-    let mut held = Component { base: capped, ..component };
+    let mut held = Component {
+        base: capped,
+        ..component
+    };
     // On a dark theme a hover is lighter than its surface, as it should be;
     // so it is on a light one where the base was not capped and the hover
     // is darker already
@@ -175,11 +197,24 @@ mod tests {
         ] {
             let got = muted_accent(rgb(accent), dark);
             let want = rgb(muted);
-            let off = [(got.r - want.r).abs(), (got.g - want.g).abs(), (got.b - want.b).abs()].into_iter().fold(0.0, f32::max) * 255.0;
-            assert!(off <= 14.5, "{accent} → {got:?}, not {muted} (off by {off})");
+            let off = [
+                (got.r - want.r).abs(),
+                (got.g - want.g).abs(),
+                (got.b - want.b).abs(),
+            ]
+            .into_iter()
+            .fold(0.0, f32::max)
+                * 255.0;
+            assert!(
+                off <= 14.5,
+                "{accent} → {got:?}, not {muted} (off by {off})"
+            );
             let distance = got.to_oklab().distance(want.to_oklab());
             assert!(distance < 0.025, "{accent}: OKLab distance {distance}");
-            assert!(contrast_ratio(got, on_muted(got)) >= 4.5, "{accent}: text on {got:?}");
+            assert!(
+                contrast_ratio(got, on_muted(got)) >= 4.5,
+                "{accent}: text on {got:?}"
+            );
         }
         // Every hue, light and dark, from dark and bright accents alike
         for hue in (0..360).step_by(15) {
@@ -187,7 +222,10 @@ mod tests {
                 for dark in [false, true] {
                     let accent = Oklch::new(l, 0.15, hue as f32).to_srgb();
                     let got = muted_accent(accent, dark);
-                    assert!(contrast_ratio(got, on_muted(got)) >= 4.5, "hue {hue} l {l} dark {dark}: {got:?}");
+                    assert!(
+                        contrast_ratio(got, on_muted(got)) >= 4.5,
+                        "hue {hue} l {l} dark {dark}: {got:?}"
+                    );
                 }
             }
         }
@@ -202,7 +240,11 @@ mod tests {
         assert!((before.hue - after.hue).abs() < 2.0);
         assert!((before.chroma - after.chroma).abs() < 0.003);
         // The cap only lowers
-        for color in [Srgb::new(0.9, 0.9, 0.9), Srgb::new(0.2, 0.3, 0.6), Srgb::BLACK] {
+        for color in [
+            Srgb::new(0.9, 0.9, 0.9),
+            Srgb::new(0.2, 0.3, 0.6),
+            Srgb::BLACK,
+        ] {
             assert_eq!(surface(color), color);
         }
         // White comes down to the light tone of rule 25d
@@ -241,36 +283,69 @@ mod tests {
     /// The washes libcosmic's light theme gives its icon buttons (dark
     /// translucent neutrals; its pressed wash alone is lighter than hover)
     fn light_washes() -> Washes {
-        Washes { hover: Some(Srgba::new(0.0, 0.0, 0.0, 0.1)), pressed: Some(Srgba::new(0.0, 0.0, 0.0, 0.08)) }
+        Washes {
+            hover: Some(Srgba::new(0.0, 0.0, 0.0, 0.1)),
+            pressed: Some(Srgba::new(0.0, 0.0, 0.0, 0.08)),
+        }
     }
 
     #[test]
     fn a_held_surface_darkens_when_hovered_pressed_or_selected() {
         let white = Srgba::new(1.0, 1.0, 1.0, 1.0);
         // libcosmic's light component: near-white base, white hover
-        let component = Component { base: Srgba::new(0.98, 0.98, 0.98, 1.0), hover: white, selected: white, pressed: white };
+        let component = Component {
+            base: Srgba::new(0.98, 0.98, 0.98, 1.0),
+            hover: white,
+            selected: white,
+            pressed: white,
+        };
         let held = held_component(component, light_washes(), true).expect("changed");
         let base = held.base.rgb().lightness();
         assert!((base - SURFACE_LIGHTNESS).abs() < 0.002);
-        for (state, color) in [("hover", held.hover), ("selected", held.selected), ("pressed", held.pressed)] {
-            assert!(color.rgb().lightness() < base - 0.02, "{state} {color:?} is not darker than {:?}", held.base);
+        for (state, color) in [
+            ("hover", held.hover),
+            ("selected", held.selected),
+            ("pressed", held.pressed),
+        ] {
+            assert!(
+                color.rgb().lightness() < base - 0.02,
+                "{state} {color:?} is not darker than {:?}",
+                held.base
+            );
         }
-        assert!(held.pressed.rgb().lightness() <= held.hover.rgb().lightness(), "pressed is at least as dark as hover");
+        assert!(
+            held.pressed.rgb().lightness() <= held.hover.rgb().lightness(),
+            "pressed is at least as dark as hover"
+        );
     }
 
     #[test]
     fn an_uncapped_surface_with_a_white_hover_is_still_fixed_and_a_good_one_left() {
         let grey = Srgba::new(0.85, 0.85, 0.85, 1.0);
         let white = Srgba::new(1.0, 1.0, 1.0, 1.0);
-        let bad = Component { base: grey, hover: white, selected: white, pressed: white };
+        let bad = Component {
+            base: grey,
+            hover: white,
+            selected: white,
+            pressed: white,
+        };
         let fixed = held_component(bad, light_washes(), true).expect("a white hover is redone");
         assert_eq!(fixed.base, grey);
         assert!(fixed.hover.rgb().lightness() < grey.rgb().lightness());
         let darker = Srgba::new(0.8, 0.8, 0.8, 1.0);
-        let good = Component { base: grey, hover: darker, selected: darker, pressed: Srgba::new(0.75, 0.75, 0.75, 1.0) };
+        let good = Component {
+            base: grey,
+            hover: darker,
+            selected: darker,
+            pressed: Srgba::new(0.75, 0.75, 0.75, 1.0),
+        };
         assert_eq!(held_component(good, light_washes(), true), None);
         // Nothing is held on a dark theme
-        let dark = Component { base: Srgba::new(0.15, 0.15, 0.15, 1.0), hover: Srgba::new(0.2, 0.2, 0.2, 1.0), ..good };
+        let dark = Component {
+            base: Srgba::new(0.15, 0.15, 0.15, 1.0),
+            hover: Srgba::new(0.2, 0.2, 0.2, 1.0),
+            ..good
+        };
         assert_eq!(held_component(dark, light_washes(), false), None);
     }
 }

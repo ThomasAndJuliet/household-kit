@@ -88,8 +88,14 @@ impl Value {
         let v = item.as_value()?;
         match kind {
             Kind::Bool => v.as_bool().map(Value::Bool),
-            Kind::Int => v.as_integer().or_else(|| v.as_float().filter(|x| x.fract() == 0.0).map(|x| x as i64)).map(Value::Int),
-            Kind::Float => v.as_float().or_else(|| v.as_integer().map(|n| n as f64)).map(Value::Float),
+            Kind::Int => v
+                .as_integer()
+                .or_else(|| v.as_float().filter(|x| x.fract() == 0.0).map(|x| x as i64))
+                .map(Value::Int),
+            Kind::Float => v
+                .as_float()
+                .or_else(|| v.as_integer().map(|n| n as f64))
+                .map(Value::Float),
             Kind::Text => v.as_str().map(|s| Value::Text(s.to_string())),
         }
     }
@@ -157,23 +163,91 @@ impl Key {
 /// motion. Accent colour and the system fonts stay with COSMIC. An app shows
 /// rows only for the keys it has a setting for.
 pub const KEYS: &[Key] = &[
-    Key { name: "theme", default: Fixed::Text("system"), about: "Light or dark: system, light or dark" },
-    Key { name: "interface-size", default: Fixed::Int(14), about: "Interface text: labels, buttons, menus, settings, in pixels" },
-    Key { name: "interface-line-spacing", default: Fixed::Float(1.2), about: "Interface text's line spacing" },
-    Key { name: "prose-size", default: Fixed::Int(16), about: "Prose an app sets itself (the Text view, Cerea, messages), in pixels" },
-    Key { name: "prose-line-spacing", default: Fixed::Float(1.5), about: "Prose's line spacing" },
-    Key { name: "paper-size", default: Fixed::Int(20), about: "The Paper view's prose, in pixels" },
-    Key { name: "paper-line-spacing", default: Fixed::Float(1.5), about: "The Paper view's line spacing" },
-    Key { name: "caption-size", default: Fixed::Int(12), about: "Captions and subtext, in pixels" },
-    Key { name: "command-size", default: Fixed::Int(14), about: "Commands and code the agent runs, monospace, in pixels" },
-    Key { name: "command-line-spacing", default: Fixed::Float(1.2), about: "Commands' line spacing" },
-    Key { name: "code-font", default: Fixed::Text("Noto Sans Mono"), about: "The monospace font for code and terminals" },
-    Key { name: "density", default: Fixed::Text("standard"), about: "Buttons and spacing: compact, standard or spacious" },
-    Key { name: "spelling-language", default: Fixed::Text("en-GB"), about: "The spelling to expect, as a language tag" },
-    Key { name: "date-format", default: Fixed::Text("system"), about: "Dates: system, iso or day-month-year" },
-    Key { name: "time-format", default: Fixed::Text("system"), about: "Times: system, 24-hour or 12-hour" },
-    Key { name: "tooltip-delay", default: Fixed::Int(500), about: "How long the pointer rests before a tooltip shows, in milliseconds" },
-    Key { name: "reduce-motion", default: Fixed::Bool(false), about: "Fewer animations" },
+    Key {
+        name: "theme",
+        default: Fixed::Text("system"),
+        about: "Light or dark: system, light or dark",
+    },
+    Key {
+        name: "interface-size",
+        default: Fixed::Int(14),
+        about: "Interface text: labels, buttons, menus, settings, in pixels",
+    },
+    Key {
+        name: "interface-line-spacing",
+        default: Fixed::Float(1.2),
+        about: "Interface text's line spacing",
+    },
+    Key {
+        name: "prose-size",
+        default: Fixed::Int(16),
+        about: "Prose an app sets itself (the Text view, Cerea, messages), in pixels",
+    },
+    Key {
+        name: "prose-line-spacing",
+        default: Fixed::Float(1.5),
+        about: "Prose's line spacing",
+    },
+    Key {
+        name: "paper-size",
+        default: Fixed::Int(20),
+        about: "The Paper view's prose, in pixels",
+    },
+    Key {
+        name: "paper-line-spacing",
+        default: Fixed::Float(1.5),
+        about: "The Paper view's line spacing",
+    },
+    Key {
+        name: "caption-size",
+        default: Fixed::Int(12),
+        about: "Captions and subtext, in pixels",
+    },
+    Key {
+        name: "command-size",
+        default: Fixed::Int(14),
+        about: "Commands and code the agent runs, monospace, in pixels",
+    },
+    Key {
+        name: "command-line-spacing",
+        default: Fixed::Float(1.2),
+        about: "Commands' line spacing",
+    },
+    Key {
+        name: "code-font",
+        default: Fixed::Text("Noto Sans Mono"),
+        about: "The monospace font for code and terminals",
+    },
+    Key {
+        name: "density",
+        default: Fixed::Text("standard"),
+        about: "Buttons and spacing: compact, standard or spacious",
+    },
+    Key {
+        name: "spelling-language",
+        default: Fixed::Text("en-GB"),
+        about: "The spelling to expect, as a language tag",
+    },
+    Key {
+        name: "date-format",
+        default: Fixed::Text("system"),
+        about: "Dates: system, iso or day-month-year",
+    },
+    Key {
+        name: "time-format",
+        default: Fixed::Text("system"),
+        about: "Times: system, 24-hour or 12-hour",
+    },
+    Key {
+        name: "tooltip-delay",
+        default: Fixed::Int(500),
+        about: "How long the pointer rests before a tooltip shows, in milliseconds",
+    },
+    Key {
+        name: "reduce-motion",
+        default: Fixed::Bool(false),
+        about: "Fewer animations",
+    },
 ];
 
 /// A shared key by name
@@ -190,12 +264,30 @@ pub struct HouseholdApp {
 
 /// The household apps that can read the shared file, in Juliet's order
 pub const APPS: &[HouseholdApp] = &[
-    HouseholdApp { id: "terminal", name: "Terminal" },
-    HouseholdApp { id: "cerea", name: "Cerea" },
-    HouseholdApp { id: "lollypop", name: "Lollypop" },
-    HouseholdApp { id: "discord", name: "Discord" },
-    HouseholdApp { id: "screenpush", name: "ScreenPush" },
-    HouseholdApp { id: "ai-usage", name: "AI usage" },
+    HouseholdApp {
+        id: "terminal",
+        name: "Terminal",
+    },
+    HouseholdApp {
+        id: "cerea",
+        name: "Cerea",
+    },
+    HouseholdApp {
+        id: "lollypop",
+        name: "Lollypop",
+    },
+    HouseholdApp {
+        id: "discord",
+        name: "Discord",
+    },
+    HouseholdApp {
+        id: "screenpush",
+        name: "ScreenPush",
+    },
+    HouseholdApp {
+        id: "ai-usage",
+        name: "AI usage",
+    },
 ];
 
 /// Which of the two files
@@ -252,7 +344,11 @@ pub enum ProblemKind {
     /// Not TOML from this line
     Syntax { line: Option<usize> },
     /// A shared key holding the wrong kind of value
-    WrongKind { key: &'static str, line: Option<usize>, wanted: Kind },
+    WrongKind {
+        key: &'static str,
+        line: Option<usize>,
+        wanted: Kind,
+    },
     /// The file is there but cannot be read
     Unreadable,
     /// The chosen folder is not there (an unplugged disk, a renamed folder)
@@ -262,7 +358,10 @@ pub enum ProblemKind {
 impl Problem {
     /// The problem in words (rule 20: what happened and what to do)
     pub fn sentence(&self, app_name: &str) -> String {
-        self.sentence_in(app_name, std::env::var_os("HOME").map(PathBuf::from).as_deref())
+        self.sentence_in(
+            app_name,
+            std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+        )
     }
 
     /// [`Problem::sentence`] with `home` as the home folder, for `~/…`
@@ -273,19 +372,29 @@ impl Problem {
             None => "the settings location".to_string(),
         };
         let keeps = match self.which {
-            Some(Which::Shared) => "The apps keep the settings they had until it is fixed.".to_string(),
+            Some(Which::Shared) => {
+                "The apps keep the settings they had until it is fixed.".to_string()
+            }
             _ => format!("{app_name} keeps the settings it had until it is fixed."),
         };
         let what = match &self.kind {
-            ProblemKind::Syntax { line: Some(line) } => format!("line {line} is not written as a setting"),
+            ProblemKind::Syntax { line: Some(line) } => {
+                format!("line {line} is not written as a setting")
+            }
             ProblemKind::Syntax { line: None } => "it is not written as settings".to_string(),
             ProblemKind::WrongKind { key, line, wanted } => match line {
-                Some(line) => format!("line {line} gives {key} something other than {}", wanted.words()),
+                Some(line) => format!(
+                    "line {line} gives {key} something other than {}",
+                    wanted.words()
+                ),
                 None => format!("{key} should be {}", wanted.words()),
             },
             ProblemKind::Unreadable => "it could not be opened".to_string(),
             ProblemKind::FolderMissing => {
-                return format!("Could not find {}: is its disk connected? {keeps}", display_path_in(self.path.parent().unwrap_or(&self.path), home));
+                return format!(
+                    "Could not find {}: is its disk connected? {keeps}",
+                    display_path_in(self.path.parent().unwrap_or(&self.path), home)
+                );
             }
         };
         format!("Could not read {file}: {what}. {keeps}")
@@ -305,10 +414,19 @@ pub enum WriteError {
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WriteError::Busy => write!(f, "another app is saving its settings: try again in a moment"),
-            WriteError::Unreadable(p) => write!(f, "the file cannot be read ({}): fix it first", p.detail),
-            WriteError::Io(e) if e.kind() == io::ErrorKind::PermissionDenied => write!(f, "the folder cannot be written to"),
-            WriteError::Io(e) if e.kind() == io::ErrorKind::NotFound => write!(f, "the folder is not there"),
+            WriteError::Busy => write!(
+                f,
+                "another app is saving its settings: try again in a moment"
+            ),
+            WriteError::Unreadable(p) => {
+                write!(f, "the file cannot be read ({}): fix it first", p.detail)
+            }
+            WriteError::Io(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                write!(f, "the folder cannot be written to")
+            }
+            WriteError::Io(e) if e.kind() == io::ErrorKind::NotFound => {
+                write!(f, "the folder is not there")
+            }
             WriteError::Io(e) => write!(f, "{e}"),
         }
     }
@@ -327,7 +445,10 @@ impl From<io::Error> for WriteError {
 /// `HOST_XDG_CONFIG_HOME` or else `~/.config`, which the manifest grants
 /// (`--filesystem=xdg-config/household:create`)
 pub fn default_dir() -> PathBuf {
-    default_dir_from(|name| std::env::var_os(name), Path::new("/.flatpak-info").exists())
+    default_dir_from(
+        |name| std::env::var_os(name),
+        Path::new("/.flatpak-info").exists(),
+    )
 }
 
 /// [`default_dir`] from the variables `env` gives
@@ -349,7 +470,10 @@ pub fn display_path(path: &Path) -> String {
 
 /// [`display_path`] with `home` as the home folder
 pub fn display_path_in(path: &Path, home: Option<&Path>) -> String {
-    if let Some(rest) = home.filter(|h| !h.as_os_str().is_empty()).and_then(|h| path.strip_prefix(h).ok()) {
+    if let Some(rest) = home
+        .filter(|h| !h.as_os_str().is_empty())
+        .and_then(|h| path.strip_prefix(h).ok())
+    {
         if rest.as_os_str().is_empty() {
             return "~".into();
         }
@@ -398,7 +522,11 @@ impl Store {
     /// The settings for app `app` (see [`APPS`]), from the folder
     /// [`default_dir`] or wherever its pointer says
     pub fn open(app: &'static str) -> Store {
-        Store::open_in(default_dir(), std::env::var_os("HOME").map(PathBuf::from), app)
+        Store::open_in(
+            default_dir(),
+            std::env::var_os("HOME").map(PathBuf::from),
+            app,
+        )
     }
 
     /// [`Store::open`] with the default folder `default_dir` (tests give a
@@ -444,13 +572,23 @@ impl Store {
             Ok(text) => text,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return (shared, own, None),
             Err(e) => {
-                let problem = Problem { which: None, path, kind: ProblemKind::Unreadable, detail: e.to_string() };
+                let problem = Problem {
+                    which: None,
+                    path,
+                    kind: ProblemKind::Unreadable,
+                    detail: e.to_string(),
+                };
                 return (shared, own, Some(problem));
             }
         };
         match text.parse::<DocumentMut>() {
             Ok(doc) => {
-                let place = |name: &str| doc.get(name).and_then(Item::as_str).filter(|s| !s.is_empty()).map(|s| expand(s, self.home.as_deref()));
+                let place = |name: &str| {
+                    doc.get(name)
+                        .and_then(Item::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| expand(s, self.home.as_deref()))
+                };
                 if let Some(dir) = place(POINTER_SHARED) {
                     shared = dir;
                 }
@@ -461,7 +599,16 @@ impl Store {
             }
             Err(e) => {
                 let line = e.span().map(|s| line_of(&text, s.start));
-                (shared, own, Some(Problem { which: None, path, kind: ProblemKind::Syntax { line }, detail: e.to_string() }))
+                (
+                    shared,
+                    own,
+                    Some(Problem {
+                        which: None,
+                        path,
+                        kind: ProblemKind::Syntax { line },
+                        detail: e.to_string(),
+                    }),
+                )
             }
         }
     }
@@ -513,7 +660,14 @@ impl Store {
     /// What is wrong with the files, if anything: the pointer, then the
     /// shared file, then this app's
     pub fn problems(&self) -> Vec<&Problem> {
-        [&self.pointer_problem, &self.shared.problem, &self.own.problem].into_iter().flatten().collect()
+        [
+            &self.pointer_problem,
+            &self.shared.problem,
+            &self.own.problem,
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
     /// The problem with one file
@@ -537,7 +691,9 @@ impl Store {
     /// The household apps that use the shared folder: those whose file is
     /// in its default place or where the pointer says
     pub fn users(&self) -> Vec<&'static str> {
-        let pointer = fs::read_to_string(self.pointer_path()).ok().and_then(|t| t.parse::<DocumentMut>().ok());
+        let pointer = fs::read_to_string(self.pointer_path())
+            .ok()
+            .and_then(|t| t.parse::<DocumentMut>().ok());
         APPS.iter()
             .filter(|a| {
                 if a.id == self.app {
@@ -545,7 +701,11 @@ impl Store {
                 }
                 let dir = pointer
                     .as_ref()
-                    .and_then(|d| d.get(a.id).and_then(Item::as_str).map(|s| expand(s, self.home.as_deref())))
+                    .and_then(|d| {
+                        d.get(a.id)
+                            .and_then(Item::as_str)
+                            .map(|s| expand(s, self.home.as_deref()))
+                    })
                     .unwrap_or_else(|| self.default_dir.clone());
                 dir.join(format!("{}.toml", a.id)).exists()
             })
@@ -619,7 +779,13 @@ impl Store {
 
     /// A row's chain: none while the app does not use the shared file
     pub fn chain(&self, name: &str) -> Option<Chain> {
-        self.use_shared().then(|| if self.own.values.contains_key(name) { Chain::Own } else { Chain::Linked })
+        self.use_shared().then(|| {
+            if self.own.values.contains_key(name) {
+                Chain::Own
+            } else {
+                Chain::Linked
+            }
+        })
     }
 
     /// Whether any shared key is set for this app only, out of `names`
@@ -631,7 +797,11 @@ impl Store {
     /// Set a shared key where its row says: the shared file while it is
     /// linked, else this app's file
     pub fn set(&mut self, name: &str, value: Value) -> Result<(), WriteError> {
-        let which = if self.chain(name) == Some(Chain::Linked) { Which::Shared } else { Which::App };
+        let which = if self.chain(name) == Some(Chain::Linked) {
+            Which::Shared
+        } else {
+            Which::App
+        };
         self.set_in(which, name, value)
     }
 
@@ -679,10 +849,23 @@ impl Store {
         let copies: Vec<(String, Value)> = if on {
             Vec::new()
         } else {
-            names.iter().filter(|n| self.source(n) == Source::Shared).map(|n| (n.to_string(), self.get(n))).collect()
+            names
+                .iter()
+                .filter(|n| self.source(n) == Source::Shared)
+                .map(|n| (n.to_string(), self.get(n)))
+                .collect()
         };
         let same: Vec<String> = if on {
-            names.iter().filter(|n| self.own.values.get(**n).is_some_and(|v| *v == self.shared_value(n))).map(|n| n.to_string()).collect()
+            names
+                .iter()
+                .filter(|n| {
+                    self.own
+                        .values
+                        .get(**n)
+                        .is_some_and(|v| *v == self.shared_value(n))
+                })
+                .map(|n| n.to_string())
+                .collect()
         } else {
             Vec::new()
         };
@@ -712,11 +895,17 @@ impl Store {
         // The first app to come fills the shared file with its own values:
         // they are shared, not this app's own (Juliet, 15 Oct)
         if !self.shared.exists && self.shared.problem.is_none() && self.use_shared() {
-            let values: BTreeMap<&'static str, Value> = current.iter().filter_map(|(n, v)| key(n).map(|k| (k.name, v.clone()))).collect();
+            let values: BTreeMap<&'static str, Value> = current
+                .iter()
+                .filter_map(|(n, v)| key(n).map(|k| (k.name, v.clone())))
+                .collect();
             self.create_shared(&values)?;
         }
-        let differ: Vec<(String, Value)> =
-            current.iter().filter(|(n, v)| key(n).is_some() && *v != self.shared_value(n)).map(|(n, v)| (n.to_string(), v.clone())).collect();
+        let differ: Vec<(String, Value)> = current
+            .iter()
+            .filter(|(n, v)| key(n).is_some() && *v != self.shared_value(n))
+            .map(|(n, v)| (n.to_string(), v.clone()))
+            .collect();
         let app = self.app;
         self.edit(Which::App, |doc| {
             if doc.is_empty() && doc.decor().prefix().is_none() {
@@ -777,7 +966,12 @@ impl Store {
     /// a file already at `to` is backed up too unless it is used. Moving
     /// the shared file moves it for every app, through the pointer. Returns
     /// the backups made
-    pub fn move_file(&mut self, which: Which, to: &Path, how: Move) -> Result<Vec<PathBuf>, WriteError> {
+    pub fn move_file(
+        &mut self,
+        which: Which,
+        to: &Path,
+        how: Move,
+    ) -> Result<Vec<PathBuf>, WriteError> {
         let from = self.path(which);
         let name = self.file_name(which);
         let target = to.join(&name);
@@ -785,7 +979,9 @@ impl Store {
             return Ok(Vec::new());
         }
         if self.problem(which).is_some() && how == Move::Carry {
-            return Err(WriteError::Unreadable(self.problem(which).cloned().expect("checked")));
+            return Err(WriteError::Unreadable(
+                self.problem(which).cloned().expect("checked"),
+            ));
         }
         fs::create_dir_all(to)?;
         let mut backups = Vec::new();
@@ -795,7 +991,11 @@ impl Store {
             let mut dirs = [self.dir(which).to_path_buf(), to.to_path_buf()];
             dirs.sort();
             let _first = lock(&dirs[0])?;
-            let _second = if dirs[0] != dirs[1] { Some(lock(&dirs[1])?) } else { None };
+            let _second = if dirs[0] != dirs[1] {
+                Some(lock(&dirs[1])?)
+            } else {
+                None
+            };
             match how {
                 Move::Carry => {
                     let text = match fs::read_to_string(&from) {
@@ -861,7 +1061,11 @@ impl Store {
     /// Read-modify-write one file under its folder's lock, from what is on
     /// disk now (another app may have written since), then take up what
     /// was written
-    fn edit(&mut self, which: Which, change: impl FnOnce(&mut DocumentMut)) -> Result<(), WriteError> {
+    fn edit(
+        &mut self,
+        which: Which,
+        change: impl FnOnce(&mut DocumentMut),
+    ) -> Result<(), WriteError> {
         let path = self.path(which);
         let dir = self.dir(which).to_path_buf();
         fs::create_dir_all(&dir)?;
@@ -888,18 +1092,33 @@ impl Store {
     /// has moved
     pub fn watch(&self, changed: impl Fn() + Send + 'static) -> notify::Result<Watch> {
         use notify::{RecursiveMode, Watcher};
-        let names: Vec<OsString> =
-            [POINTER_FILE.to_string(), SHARED_FILE.to_string(), self.file_name(Which::App)].into_iter().map(OsString::from).collect();
-        let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            let Ok(event) = event else { return };
-            if event.kind.is_access() {
-                return;
-            }
-            if event.paths.iter().any(|p| p.file_name().is_some_and(|n| names.iter().any(|w| w == n))) {
-                changed();
-            }
-        })?;
-        let mut dirs = vec![self.default_dir.clone(), self.shared_dir.clone(), self.app_dir.clone()];
+        let names: Vec<OsString> = [
+            POINTER_FILE.to_string(),
+            SHARED_FILE.to_string(),
+            self.file_name(Which::App),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else { return };
+                if event.kind.is_access() {
+                    return;
+                }
+                if event
+                    .paths
+                    .iter()
+                    .any(|p| p.file_name().is_some_and(|n| names.iter().any(|w| w == n)))
+                {
+                    changed();
+                }
+            })?;
+        let mut dirs = vec![
+            self.default_dir.clone(),
+            self.shared_dir.clone(),
+            self.app_dir.clone(),
+        ];
         dirs.sort();
         dirs.dedup();
         for dir in &dirs {
@@ -907,7 +1126,10 @@ impl Store {
             // still watched
             let _ = watcher.watch(dir, RecursiveMode::NonRecursive);
         }
-        Ok(Watch { _watcher: watcher, dirs })
+        Ok(Watch {
+            _watcher: watcher,
+            dirs,
+        })
     }
 }
 
@@ -938,7 +1160,10 @@ pub fn listing(values: &BTreeMap<&'static str, Value>) -> String {
     );
     for key in KEYS {
         let default = key.default.value();
-        let value = values.get(key.name).cloned().unwrap_or_else(|| default.clone());
+        let value = values
+            .get(key.name)
+            .cloned()
+            .unwrap_or_else(|| default.clone());
         let mut doc = DocumentMut::new();
         doc.insert(key.name, value.to_item());
         let line = doc.to_string();
@@ -971,12 +1196,17 @@ fn line_of(text: &str, at: usize) -> usize {
 
 /// The line a top-level key is written on
 fn line_of_key(text: &str, name: &str) -> Option<usize> {
-    text.lines().position(|l| {
-        let l = l.trim_start();
-        let l = l.strip_prefix('"').and_then(|r| r.strip_prefix(name)).and_then(|r| r.strip_prefix('"')).or_else(|| l.strip_prefix(name));
-        l.is_some_and(|r| r.trim_start().starts_with('='))
-    })
-    .map(|i| i + 1)
+    text.lines()
+        .position(|l| {
+            let l = l.trim_start();
+            let l = l
+                .strip_prefix('"')
+                .and_then(|r| r.strip_prefix(name))
+                .and_then(|r| r.strip_prefix('"'))
+                .or_else(|| l.strip_prefix(name));
+            l.is_some_and(|r| r.trim_start().starts_with('='))
+        })
+        .map(|i| i + 1)
 }
 
 /// A file's document, empty if there is none yet
@@ -984,10 +1214,20 @@ fn read_doc(path: &Path) -> Result<DocumentMut, Box<Problem>> {
     match fs::read_to_string(path) {
         Ok(text) => text.parse::<DocumentMut>().map_err(|e| {
             let line = e.span().map(|s| line_of(&text, s.start));
-            Box::new(Problem { which: None, path: path.to_path_buf(), kind: ProblemKind::Syntax { line }, detail: e.to_string() })
+            Box::new(Problem {
+                which: None,
+                path: path.to_path_buf(),
+                kind: ProblemKind::Syntax { line },
+                detail: e.to_string(),
+            })
         }),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(DocumentMut::new()),
-        Err(e) => Err(Box::new(Problem { which: None, path: path.to_path_buf(), kind: ProblemKind::Unreadable, detail: e.to_string() })),
+        Err(e) => Err(Box::new(Problem {
+            which: None,
+            path: path.to_path_buf(),
+            kind: ProblemKind::Unreadable,
+            detail: e.to_string(),
+        })),
     }
 }
 
@@ -999,7 +1239,12 @@ fn read_into(state: &mut FileState, path: &Path, which: Which, app_file: bool) {
             let folder_gone = path.parent().is_some_and(|d| !d.exists());
             state.exists = false;
             if folder_gone {
-                state.problem = Some(Problem { which: Some(which), path: path.to_path_buf(), kind: ProblemKind::FolderMissing, detail: e.to_string() });
+                state.problem = Some(Problem {
+                    which: Some(which),
+                    path: path.to_path_buf(),
+                    kind: ProblemKind::FolderMissing,
+                    detail: e.to_string(),
+                });
             } else {
                 // No file yet: every key is the one below
                 state.values.clear();
@@ -1009,7 +1254,12 @@ fn read_into(state: &mut FileState, path: &Path, which: Which, app_file: bool) {
         }
         Err(e) => {
             state.exists = true;
-            state.problem = Some(Problem { which: Some(which), path: path.to_path_buf(), kind: ProblemKind::Unreadable, detail: e.to_string() });
+            state.problem = Some(Problem {
+                which: Some(which),
+                path: path.to_path_buf(),
+                kind: ProblemKind::Unreadable,
+                detail: e.to_string(),
+            });
         }
     }
 }
@@ -1022,13 +1272,20 @@ fn take_text(state: &mut FileState, path: &Path, app_file: bool, which: Which, t
         Ok(doc) => doc,
         Err(e) => {
             let line = e.span().map(|s| line_of(text, s.start));
-            state.problem = Some(Problem { which: Some(which), path: path.to_path_buf(), kind: ProblemKind::Syntax { line }, detail: e.to_string() });
+            state.problem = Some(Problem {
+                which: Some(which),
+                path: path.to_path_buf(),
+                kind: ProblemKind::Syntax { line },
+                detail: e.to_string(),
+            });
             return;
         }
     };
     let mut values = BTreeMap::new();
     for key in KEYS {
-        let Some(item) = doc.get(key.name) else { continue };
+        let Some(item) = doc.get(key.name) else {
+            continue;
+        };
         match Value::from_item(item, key.kind()) {
             Some(v) => {
                 values.insert(key.name, v);
@@ -1038,7 +1295,11 @@ fn take_text(state: &mut FileState, path: &Path, app_file: bool, which: Which, t
                 state.problem = Some(Problem {
                     which: Some(which),
                     path: path.to_path_buf(),
-                    kind: ProblemKind::WrongKind { key: key.name, line, wanted: key.kind() },
+                    kind: ProblemKind::WrongKind {
+                        key: key.name,
+                        line,
+                        wanted: key.kind(),
+                    },
                     detail: format!("{} = {}", key.name, item.to_string().trim()),
                 });
                 return;
@@ -1048,18 +1309,28 @@ fn take_text(state: &mut FileState, path: &Path, app_file: bool, which: Which, t
     // Keys the household does not share (yet) are left in the file and
     // ignored, for newer apps that know them
     state.values = values;
-    state.use_shared = if app_file { doc.get(USE_SHARED).and_then(Item::as_bool) } else { None };
+    state.use_shared = if app_file {
+        doc.get(USE_SHARED).and_then(Item::as_bool)
+    } else {
+        None
+    };
     state.problem = None;
 }
 
 /// The folder's lock, held until dropped; waits at most [`LOCK_DEADLINE`]
 fn lock(dir: &Path) -> Result<File, WriteError> {
-    let file = OpenOptions::new().create(true).truncate(false).write(true).open(dir.join(LOCK_FILE))?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK_FILE))?;
     let start = Instant::now();
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(file),
-            Err(fs::TryLockError::WouldBlock) if start.elapsed() < LOCK_DEADLINE => std::thread::sleep(Duration::from_millis(20)),
+            Err(fs::TryLockError::WouldBlock) if start.elapsed() < LOCK_DEADLINE => {
+                std::thread::sleep(Duration::from_millis(20))
+            }
             Err(fs::TryLockError::WouldBlock) => return Err(WriteError::Busy),
             Err(fs::TryLockError::Error(e)) => return Err(e.into()),
         }
@@ -1072,8 +1343,15 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     use std::sync::atomic::{AtomicU32, Ordering};
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let dir = path.parent().unwrap_or(Path::new("."));
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let temp = dir.join(format!(".{name}.tmp-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp = dir.join(format!(
+        ".{name}.tmp-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     let result = (|| {
         let mut file = File::create(&temp)?;
         file.write_all(text.as_bytes())?;
@@ -1093,7 +1371,10 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
 /// `path` renamed beside itself as `<name>.bak` (or `.bak-2`, `.bak-3` …
 /// when there is one already); returns the backup's path
 fn back_up(path: &Path) -> io::Result<PathBuf> {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let dir = path.parent().unwrap_or(Path::new("."));
     let mut backup = dir.join(format!("{name}.bak"));
     let mut n = 2;
@@ -1113,8 +1394,12 @@ mod tests {
 
     #[test]
     fn error_line_numbers_accept_byte_offsets_inside_multibyte_characters() {
-        for at in [0, 1, 2] { assert_eq!(line_of("α\nβ", at), 1); }
-        for at in [3, 4, 5, usize::MAX] { assert_eq!(line_of("α\nβ", at), 2); }
+        for at in [0, 1, 2] {
+            assert_eq!(line_of("α\nβ", at), 1);
+        }
+        for at in [3, 4, 5, usize::MAX] {
+            assert_eq!(line_of("α\nβ", at), 2);
+        }
     }
 
     /// A home of the test's own, never the real one
@@ -1123,7 +1408,11 @@ mod tests {
     impl Home {
         fn new(name: &str) -> Home {
             static N: AtomicUsize = AtomicUsize::new(0);
-            let dir = std::env::temp_dir().join(format!("household-settings-{name}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+            let dir = std::env::temp_dir().join(format!(
+                "household-settings-{name}-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            ));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(dir.join(".config")).unwrap();
             Home(dir)
@@ -1146,46 +1435,107 @@ mod tests {
 
     #[test]
     fn the_folder_is_xdg_config_home_s_or_the_host_s_in_a_flatpak() {
-        let env = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| OsString::from(v));
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| OsString::from(v))
+            }
+        };
         let plain = env(&[("HOME", "/home/j"), ("XDG_CONFIG_HOME", "/home/j/.cfg")]);
-        assert_eq!(default_dir_from(plain, false), PathBuf::from("/home/j/.cfg/household"));
+        assert_eq!(
+            default_dir_from(plain, false),
+            PathBuf::from("/home/j/.cfg/household")
+        );
         let relative = env(&[("HOME", "/home/j"), ("XDG_CONFIG_HOME", "cfg")]);
-        assert_eq!(default_dir_from(relative, false), PathBuf::from("/home/j/.config/household"));
+        assert_eq!(
+            default_dir_from(relative, false),
+            PathBuf::from("/home/j/.config/household")
+        );
         // In a Flatpak, XDG_CONFIG_HOME is the sandbox's own
-        let sandbox = env(&[("HOME", "/home/j"), ("XDG_CONFIG_HOME", "/home/j/.var/app/dev.twright.Cerea/config")]);
-        assert_eq!(default_dir_from(sandbox, true), PathBuf::from("/home/j/.config/household"));
-        let host = env(&[("HOME", "/home/j"), ("XDG_CONFIG_HOME", "/home/j/.var/app/x/config"), ("HOST_XDG_CONFIG_HOME", "/home/j/.cfg")]);
-        assert_eq!(default_dir_from(host, true), PathBuf::from("/home/j/.cfg/household"));
-        assert_eq!(display_path_in(Path::new("/home/j/.config/household"), Some(Path::new("/home/j"))), "~/.config/household");
-        assert_eq!(display_path_in(Path::new("/mnt/x"), Some(Path::new("/home/j"))), "/mnt/x");
+        let sandbox = env(&[
+            ("HOME", "/home/j"),
+            (
+                "XDG_CONFIG_HOME",
+                "/home/j/.var/app/dev.twright.Cerea/config",
+            ),
+        ]);
+        assert_eq!(
+            default_dir_from(sandbox, true),
+            PathBuf::from("/home/j/.config/household")
+        );
+        let host = env(&[
+            ("HOME", "/home/j"),
+            ("XDG_CONFIG_HOME", "/home/j/.var/app/x/config"),
+            ("HOST_XDG_CONFIG_HOME", "/home/j/.cfg"),
+        ]);
+        assert_eq!(
+            default_dir_from(host, true),
+            PathBuf::from("/home/j/.cfg/household")
+        );
+        assert_eq!(
+            display_path_in(
+                Path::new("/home/j/.config/household"),
+                Some(Path::new("/home/j"))
+            ),
+            "~/.config/household"
+        );
+        assert_eq!(
+            display_path_in(Path::new("/mnt/x"), Some(Path::new("/home/j"))),
+            "/mnt/x"
+        );
     }
 
     #[test]
     fn a_key_is_this_app_s_then_shared_then_the_default() {
         let home = Home::new("lookup");
         let mut s = home.store("terminal");
-        assert_eq!((s.int("prose-size"), s.source("prose-size")), (16, Source::Default));
+        assert_eq!(
+            (s.int("prose-size"), s.source("prose-size")),
+            (16, Source::Default)
+        );
         assert_eq!(s.chain("prose-size"), Some(Chain::Linked));
         s.set("prose-size", Value::Int(17)).unwrap();
-        assert_eq!((s.int("prose-size"), s.source("prose-size")), (17, Source::Shared));
+        assert_eq!(
+            (s.int("prose-size"), s.source("prose-size")),
+            (17, Source::Shared)
+        );
         // Cerea sees the shared value
         let cerea = home.store("cerea");
         assert_eq!(cerea.int("prose-size"), 17);
         // This app only: kept in terminal.toml, Cerea unchanged
         s.make_own("prose-size").unwrap();
-        assert_eq!((s.source("prose-size"), s.chain("prose-size")), (Source::App, Some(Chain::Own)));
+        assert_eq!(
+            (s.source("prose-size"), s.chain("prose-size")),
+            (Source::App, Some(Chain::Own))
+        );
         s.set("prose-size", Value::Int(18)).unwrap();
         assert_eq!(s.int("prose-size"), 18);
         assert_eq!(home.store("cerea").int("prose-size"), 17);
         // Use shared: back to 17
         s.remove_own("prose-size").unwrap();
-        assert_eq!((s.int("prose-size"), s.source("prose-size")), (17, Source::Shared));
+        assert_eq!(
+            (s.int("prose-size"), s.source("prose-size")),
+            (17, Source::Shared)
+        );
         // Typed accessors
         s.set("paper-line-spacing", Value::Float(1.6)).unwrap();
         s.set("theme", Value::Text("dark".into())).unwrap();
         s.set("reduce-motion", Value::Bool(true)).unwrap();
-        assert_eq!((s.float("paper-line-spacing"), s.text("theme"), s.bool("reduce-motion")), (1.6, "dark".to_string(), true));
-        assert!(fs::read_to_string(home.default_dir().join("shared.toml")).unwrap().contains("paper-line-spacing = 1.6"));
+        assert_eq!(
+            (
+                s.float("paper-line-spacing"),
+                s.text("theme"),
+                s.bool("reduce-motion")
+            ),
+            (1.6, "dark".to_string(), true)
+        );
+        assert!(
+            fs::read_to_string(home.default_dir().join("shared.toml"))
+                .unwrap()
+                .contains("paper-line-spacing = 1.6")
+        );
     }
 
     #[test]
@@ -1203,7 +1553,10 @@ mod tests {
         assert!(after.contains("something-new = \"kept\""));
         assert!(after.contains("paper-size = 22"));
         // No temporary files left; the lock file is the only other
-        let mut names: Vec<_> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        let mut names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
         names.sort();
         assert_eq!(names, [".lock", "shared.toml"]);
     }
@@ -1224,13 +1577,26 @@ mod tests {
             "Could not read the shared file: line 3 is not written as a setting. The apps keep the settings they had until it is fixed."
         );
         // A write would lose the file's text, so it is refused
-        assert!(matches!(s.set("paper-size", Value::Int(22)), Err(WriteError::Unreadable(_))));
-        assert_eq!(fs::read_to_string(&path).unwrap(), "# one\nprose-size = 18\nthis is not toml\n");
+        assert!(matches!(
+            s.set("paper-size", Value::Int(22)),
+            Err(WriteError::Unreadable(_))
+        ));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# one\nprose-size = 18\nthis is not toml\n"
+        );
         // The wrong kind of value, named
         fs::write(&path, "prose-size = 18\npaper-size = \"big\"\n").unwrap();
         s.reload();
         let p = s.problem(Which::Shared).unwrap();
-        assert_eq!(p.kind, ProblemKind::WrongKind { key: "paper-size", line: Some(2), wanted: Kind::Int });
+        assert_eq!(
+            p.kind,
+            ProblemKind::WrongKind {
+                key: "paper-size",
+                line: Some(2),
+                wanted: Kind::Int
+            }
+        );
         assert!(p.sentence("Terminal").starts_with("Could not read the shared file: line 2 gives paper-size something other than a whole number."));
         // Fixed: read again, the problem gone
         fs::write(&path, "prose-size = 15\n").unwrap();
@@ -1240,7 +1606,10 @@ mod tests {
         // An integer where a number is wanted, and a whole float for an integer
         fs::write(&path, "paper-line-spacing = 2\nprose-size = 15.0\n").unwrap();
         s.reload();
-        assert_eq!((s.float("paper-line-spacing"), s.int("prose-size")), (2.0, 15));
+        assert_eq!(
+            (s.float("paper-line-spacing"), s.int("prose-size")),
+            (2.0, 15)
+        );
     }
 
     #[test]
@@ -1256,7 +1625,12 @@ mod tests {
         assert_eq!(s.int("prose-size"), 19, "kept while the disk is away");
         let p = s.problem(Which::Shared).unwrap();
         assert_eq!(p.kind, ProblemKind::FolderMissing);
-        assert!(s.sentence(p, "Terminal").starts_with("Could not find ~/disk: is its disk connected?"), "{}", s.sentence(p, "Terminal"));
+        assert!(
+            s.sentence(p, "Terminal")
+                .starts_with("Could not find ~/disk: is its disk connected?"),
+            "{}",
+            s.sentence(p, "Terminal")
+        );
     }
 
     #[test]
@@ -1274,19 +1648,31 @@ mod tests {
         assert!(!s.is_default(Which::Shared) && s.is_default(Which::App));
         assert_eq!(s.int("prose-size"), 17);
         let pointer = fs::read_to_string(home.default_dir().join(POINTER_FILE)).unwrap();
-        assert!(pointer.contains("shared = \"~/machine-setup/household-apps\""), "{pointer}");
+        assert!(
+            pointer.contains("shared = \"~/machine-setup/household-apps\""),
+            "{pointer}"
+        );
         assert!(pointer.starts_with("# Where the household apps keep"));
         // Cerea follows on its next read
         cerea.reload();
-        assert_eq!((cerea.path(Which::Shared), cerea.int("prose-size")), (place.join(SHARED_FILE), 17));
+        assert_eq!(
+            (cerea.path(Which::Shared), cerea.int("prose-size")),
+            (place.join(SHARED_FILE), 17)
+        );
         // Back to the default place: the moved file's backup there is kept,
         // the new one backed up where it was
-        let backups = s.move_file(Which::Shared, &home.default_dir(), Move::Carry).unwrap();
+        let backups = s
+            .move_file(Which::Shared, &home.default_dir(), Move::Carry)
+            .unwrap();
         assert_eq!(backups, [place.join("shared.toml.bak")]);
         assert!(s.is_default(Which::Shared));
         assert_eq!(s.int("prose-size"), 17);
         assert!(home.default_dir().join("shared.toml.bak").exists());
-        assert!(!fs::read_to_string(home.default_dir().join(POINTER_FILE)).unwrap().contains("shared ="));
+        assert!(
+            !fs::read_to_string(home.default_dir().join(POINTER_FILE))
+                .unwrap()
+                .contains("shared =")
+        );
     }
 
     #[test]
@@ -1295,15 +1681,20 @@ mod tests {
         let mut s = home.store("terminal");
         s.set("prose-size", Value::Int(17)).unwrap();
         let empty = home.0.join("empty");
-        s.move_file(Which::Shared, &empty, Move::StartEmpty).unwrap();
-        assert_eq!((s.int("prose-size"), s.source("prose-size")), (16, Source::Default));
+        s.move_file(Which::Shared, &empty, Move::StartEmpty)
+            .unwrap();
+        assert_eq!(
+            (s.int("prose-size"), s.source("prose-size")),
+            (16, Source::Default)
+        );
         assert!(home.default_dir().join("shared.toml.bak").exists());
         // A place with a file of its own: used as it is
         let other = home.0.join("other");
         fs::create_dir_all(&other).unwrap();
         fs::write(other.join(SHARED_FILE), "prose-size = 20\n").unwrap();
         assert!(s.has_file_at(Which::Shared, &other));
-        s.move_file(Which::Shared, &other, Move::UseExisting).unwrap();
+        s.move_file(Which::Shared, &other, Move::UseExisting)
+            .unwrap();
         assert_eq!(s.int("prose-size"), 20);
         assert!(empty.join("shared.toml.bak").exists());
         // Or replaced by the current one, which keeps it as a backup
@@ -1312,7 +1703,10 @@ mod tests {
         fs::write(third.join(SHARED_FILE), "prose-size = 12\n").unwrap();
         s.move_file(Which::Shared, &third, Move::Carry).unwrap();
         assert_eq!(s.int("prose-size"), 20);
-        assert_eq!(fs::read_to_string(third.join("shared.toml.bak")).unwrap(), "prose-size = 12\n");
+        assert_eq!(
+            fs::read_to_string(third.join("shared.toml.bak")).unwrap(),
+            "prose-size = 12\n"
+        );
         // A second backup in one place does not overwrite the first
         fs::write(other.join(SHARED_FILE), "x = 1\n").unwrap();
         s.move_file(Which::Shared, &other, Move::Carry).unwrap();
@@ -1328,12 +1722,18 @@ mod tests {
         let place = home.0.join("mine");
         s.move_file(Which::App, &place, Move::Carry).unwrap();
         assert_eq!(s.path(Which::App), place.join("terminal.toml"));
-        assert_eq!((s.text("theme"), s.source("theme")), ("dark".to_string(), Source::App));
+        assert_eq!(
+            (s.text("theme"), s.source("theme")),
+            ("dark".to_string(), Source::App)
+        );
         assert!(s.is_default(Which::Shared));
         let pointer = fs::read_to_string(home.default_dir().join(POINTER_FILE)).unwrap();
         assert!(pointer.contains("terminal = \"~/mine\""));
         // Cerea's file is not moved
-        assert_eq!(home.store("cerea").path(Which::App), home.default_dir().join("cerea.toml"));
+        assert_eq!(
+            home.store("cerea").path(Which::App),
+            home.default_dir().join("cerea.toml")
+        );
         assert_eq!(home.store("terminal").text("theme"), "dark");
         assert_eq!(s.users(), ["Terminal"]);
         home.store("cerea").migrate(&[]).unwrap();
@@ -1353,9 +1753,19 @@ mod tests {
         s.set_use_shared(false, &rows).unwrap();
         assert!(!s.use_shared());
         assert_eq!(s.chain("prose-size"), None);
-        assert_eq!((s.int("prose-size"), s.int("paper-size"), s.text("theme"), s.int("interface-size")), (17, 22, "dark".into(), 14));
+        assert_eq!(
+            (
+                s.int("prose-size"),
+                s.int("paper-size"),
+                s.text("theme"),
+                s.int("interface-size")
+            ),
+            (17, 22, "dark".into(), 14)
+        );
         // The shared file changing no longer reaches this app
-        home.store("cerea").set("prose-size", Value::Int(13)).unwrap();
+        home.store("cerea")
+            .set("prose-size", Value::Int(13))
+            .unwrap();
         s.reload();
         assert_eq!(s.int("prose-size"), 17);
         // A change while off goes to this app's file
@@ -1372,7 +1782,10 @@ mod tests {
         assert!(s.any_own(&rows));
         s.reset_to_shared(&rows).unwrap();
         assert!(!s.any_own(&rows));
-        assert_eq!((s.int("prose-size"), s.text("theme")), (13, "system".into()));
+        assert_eq!(
+            (s.int("prose-size"), s.text("theme")),
+            (13, "system".into())
+        );
         let _ = before;
     }
 
@@ -1402,25 +1815,64 @@ mod tests {
         // The first app: its values fill the shared file, and are shared
         assert!(s.migrate(&current).unwrap());
         let shared = fs::read_to_string(s.path(Which::Shared)).unwrap();
-        assert!(shared.starts_with("# The household's shared settings"), "{shared}");
-        assert!(shared.contains("\ntheme = \"dark\"") && shared.contains("\npaper-size = 22"), "{shared}");
-        assert!(shared.contains("\n# prose-size = 16") && shared.contains("\n# code-font = \"Noto Sans Mono\""), "defaults commented: {shared}");
+        assert!(
+            shared.starts_with("# The household's shared settings"),
+            "{shared}"
+        );
+        assert!(
+            shared.contains("\ntheme = \"dark\"") && shared.contains("\npaper-size = 22"),
+            "{shared}"
+        );
+        assert!(
+            shared.contains("\n# prose-size = 16")
+                && shared.contains("\n# code-font = \"Noto Sans Mono\""),
+            "defaults commented: {shared}"
+        );
         for key in KEYS {
-            assert!(shared.contains(&format!("{} = ", key.name)), "every key listed: {}", key.name);
+            assert!(
+                shared.contains(&format!("{} = ", key.name)),
+                "every key listed: {}",
+                key.name
+            );
         }
         let own = fs::read_to_string(s.path(Which::App)).unwrap();
-        assert!(own.starts_with("# terminal's own settings") && !own.contains(" = "), "nothing for this app only: {own}");
-        assert_eq!((s.text("theme"), s.source("theme"), s.chain("theme")), ("dark".into(), Source::Shared, Some(Chain::Linked)));
+        assert!(
+            own.starts_with("# terminal's own settings") && !own.contains(" = "),
+            "nothing for this app only: {own}"
+        );
+        assert_eq!(
+            (s.text("theme"), s.source("theme"), s.chain("theme")),
+            ("dark".into(), Source::Shared, Some(Chain::Linked))
+        );
         assert_eq!((s.int("paper-size"), s.int("prose-size")), (22, 16));
         // Once: a second run changes nothing
-        assert!(!s.migrate(&[("theme", Value::Text("light".into()))]).unwrap());
+        assert!(
+            !s.migrate(&[("theme", Value::Text("light".into()))])
+                .unwrap()
+        );
         assert_eq!(s.text("theme"), "dark");
         // A later app: overrides only where it differs from the shared file
         let mut cerea = home.store("cerea");
-        assert!(cerea.migrate(&[("theme", Value::Text("light".into())), ("paper-size", Value::Int(22)), ("prose-size", Value::Int(16))]).unwrap());
-        assert_eq!((cerea.text("theme"), cerea.source("theme")), ("light".into(), Source::App), "light kept: nothing visibly changes");
+        assert!(
+            cerea
+                .migrate(&[
+                    ("theme", Value::Text("light".into())),
+                    ("paper-size", Value::Int(22)),
+                    ("prose-size", Value::Int(16))
+                ])
+                .unwrap()
+        );
+        assert_eq!(
+            (cerea.text("theme"), cerea.source("theme")),
+            ("light".into(), Source::App),
+            "light kept: nothing visibly changes"
+        );
         assert_eq!(cerea.source("paper-size"), Source::Shared);
-        assert_eq!(fs::read_to_string(s.path(Which::Shared)).unwrap(), shared, "the shared file is not changed by a later app");
+        assert_eq!(
+            fs::read_to_string(s.path(Which::Shared)).unwrap(),
+            shared,
+            "the shared file is not changed by a later app"
+        );
     }
 
     #[test]
@@ -1439,8 +1891,18 @@ mod tests {
             .collect();
         let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
         // Each sees its own size; one of them through the shared file
-        assert!(results.iter().all(|(size, seen, _)| size == seen), "{results:?}");
-        assert_eq!(results.iter().filter(|(_, _, src)| *src == Source::Shared).count(), 1, "{results:?}");
+        assert!(
+            results.iter().all(|(size, seen, _)| size == seen),
+            "{results:?}"
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|(_, _, src)| *src == Source::Shared)
+                .count(),
+            1,
+            "{results:?}"
+        );
     }
 
     #[test]
@@ -1449,28 +1911,43 @@ mod tests {
         let mut s = home.store("terminal");
         // Moved to an empty place: no shared file there yet
         s.set("prose-size", Value::Int(18)).unwrap();
-        s.move_file(Which::Shared, &home.0.join("new"), Move::StartEmpty).unwrap();
+        s.move_file(Which::Shared, &home.0.join("new"), Move::StartEmpty)
+            .unwrap();
         fs::remove_file(s.path(Which::Shared)).unwrap();
         s.reload();
         assert!(!s.exists(Which::Shared));
         let path = s.create_shared_file().unwrap();
         assert_eq!(path, home.0.join("new").join(SHARED_FILE));
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("# prose-size = 16") && text.contains("# Light or dark"), "{text}");
+        assert!(
+            text.contains("# prose-size = 16") && text.contains("# Light or dark"),
+            "{text}"
+        );
         assert!(s.exists(Which::Shared) && s.problems().is_empty());
         // Taking a # away is read as a setting; a second Open keeps the file
         fs::write(&path, text.replace("# prose-size = 16", "prose-size = 15")).unwrap();
         s.reload();
         assert_eq!(s.int("prose-size"), 15);
         s.create_shared_file().unwrap();
-        assert!(fs::read_to_string(&path).unwrap().contains("\nprose-size = 15"));
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("\nprose-size = 15")
+        );
     }
 
     #[test]
     fn concurrent_writers_lose_nothing() {
         let home = Home::new("concurrent");
         let dir = home.default_dir();
-        let names = ["prose-size", "paper-size", "interface-size", "caption-size", "command-size", "tooltip-delay"];
+        let names = [
+            "prose-size",
+            "paper-size",
+            "interface-size",
+            "caption-size",
+            "command-size",
+            "tooltip-delay",
+        ];
         let threads: Vec<_> = names
             .iter()
             .enumerate()
@@ -1502,7 +1979,10 @@ mod tests {
         fs::create_dir_all(home.default_dir()).unwrap();
         let held = lock(&home.default_dir()).unwrap();
         let start = Instant::now();
-        assert!(matches!(s.set("prose-size", Value::Int(17)), Err(WriteError::Busy)));
+        assert!(matches!(
+            s.set("prose-size", Value::Int(17)),
+            Err(WriteError::Busy)
+        ));
         assert!(start.elapsed() >= LOCK_DEADLINE);
         drop(held);
         s.set("prose-size", Value::Int(17)).unwrap();
@@ -1536,18 +2016,26 @@ mod tests {
         let home = Home::new("watch");
         let s = home.store("terminal");
         let (tx, rx) = mpsc::channel();
-        let watch = s.watch(move || {
-            let _ = tx.send(());
-        })
-        .unwrap();
-        assert_eq!(watch.dirs(), [home.default_dir()], "one watch while all is in one folder");
+        let watch = s
+            .watch(move || {
+                let _ = tx.send(());
+            })
+            .unwrap();
+        assert_eq!(
+            watch.dirs(),
+            [home.default_dir()],
+            "one watch while all is in one folder"
+        );
         let mut cerea = home.store("cerea");
         cerea.set("prose-size", Value::Int(19)).unwrap();
         assert!(heard(&rx, DEADLINE), "heard the shared file change");
         settle(&rx);
         // Cerea's own file is not this app's business: nothing more comes
         cerea.make_own("theme").unwrap();
-        assert!(!heard(&rx, Duration::from_secs(1)), "Cerea's file is not watched");
+        assert!(
+            !heard(&rx, Duration::from_secs(1)),
+            "Cerea's file is not watched"
+        );
         let mut s = s;
         s.reload();
         assert_eq!(s.int("prose-size"), 19);
@@ -1556,10 +2044,15 @@ mod tests {
         assert!(heard(&rx, DEADLINE), "heard this app's file change");
         settle(&rx);
         // The shared file moved by another app: the pointer changes
-        cerea.move_file(Which::Shared, &home.0.join("elsewhere"), Move::Carry).unwrap();
+        cerea
+            .move_file(Which::Shared, &home.0.join("elsewhere"), Move::Carry)
+            .unwrap();
         assert!(heard(&rx, DEADLINE), "heard the pointer change");
         s.reload();
-        assert_eq!(s.path(Which::Shared), home.0.join("elsewhere").join(SHARED_FILE));
+        assert_eq!(
+            s.path(Which::Shared),
+            home.0.join("elsewhere").join(SHARED_FILE)
+        );
         // Watched again, the new folder too; a write there is heard
         drop(watch);
         let (tx, rx) = mpsc::channel();
@@ -1570,7 +2063,10 @@ mod tests {
             .unwrap();
         assert_eq!(watch.dirs().len(), 2);
         cerea.set("paper-size", Value::Int(22)).unwrap();
-        assert!(heard(&rx, DEADLINE), "heard the shared file in its new place");
+        assert!(
+            heard(&rx, DEADLINE),
+            "heard the shared file in its new place"
+        );
     }
 
     #[test]

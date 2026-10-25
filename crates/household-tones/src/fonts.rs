@@ -31,13 +31,27 @@ use crate::color::Srgb;
 /// The table: one row per Lc, from 0 to 125 by 5, and in each the least
 /// font size in px for weights 100 to 900
 const FONT_MATRIX: [[f64; 10]; 25] = [
-    [0.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0],
-    [10.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0],
-    [15.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0],
-    [20.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0],
-    [25.0, 777.0, 777.0, 777.0, 120.0, 120.0, 108.0, 96.0, 96.0, 96.0],
-    [30.0, 777.0, 777.0, 120.0, 108.0, 108.0, 96.0, 72.0, 72.0, 72.0],
-    [35.0, 777.0, 120.0, 108.0, 96.0, 72.0, 60.0, 48.0, 48.0, 48.0],
+    [
+        0.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0,
+    ],
+    [
+        10.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0,
+    ],
+    [
+        15.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0,
+    ],
+    [
+        20.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0, 777.0,
+    ],
+    [
+        25.0, 777.0, 777.0, 777.0, 120.0, 120.0, 108.0, 96.0, 96.0, 96.0,
+    ],
+    [
+        30.0, 777.0, 777.0, 120.0, 108.0, 108.0, 96.0, 72.0, 72.0, 72.0,
+    ],
+    [
+        35.0, 777.0, 120.0, 108.0, 96.0, 72.0, 60.0, 48.0, 48.0, 48.0,
+    ],
     [40.0, 120.0, 108.0, 96.0, 60.0, 48.0, 42.0, 32.0, 32.0, 32.0],
     [45.0, 108.0, 96.0, 72.0, 42.0, 32.0, 28.0, 24.0, 24.0, 24.0],
     [50.0, 96.0, 72.0, 60.0, 32.0, 28.0, 24.0, 21.0, 21.0, 21.0],
@@ -46,15 +60,23 @@ const FONT_MATRIX: [[f64; 10]; 25] = [
     [65.0, 68.0, 46.0, 32.0, 21.75, 19.0, 17.0, 15.0, 16.0, 18.0],
     [70.0, 64.0, 44.0, 28.0, 19.5, 18.0, 16.0, 14.5, 16.0, 18.0],
     [75.0, 60.0, 42.0, 24.0, 18.0, 16.0, 15.0, 14.0, 16.0, 18.0],
-    [80.0, 56.0, 38.25, 23.0, 17.25, 15.81, 14.81, 14.0, 16.0, 18.0],
-    [85.0, 52.0, 34.5, 22.0, 16.5, 15.625, 14.625, 14.0, 16.0, 18.0],
+    [
+        80.0, 56.0, 38.25, 23.0, 17.25, 15.81, 14.81, 14.0, 16.0, 18.0,
+    ],
+    [
+        85.0, 52.0, 34.5, 22.0, 16.5, 15.625, 14.625, 14.0, 16.0, 18.0,
+    ],
     [90.0, 48.0, 32.0, 21.0, 16.0, 15.5, 14.5, 14.0, 16.0, 18.0],
     [95.0, 45.0, 28.0, 19.5, 15.5, 15.0, 14.0, 13.5, 16.0, 18.0],
     [100.0, 42.0, 26.5, 18.5, 15.0, 14.5, 13.5, 13.0, 16.0, 18.0],
     [105.0, 39.0, 25.0, 18.0, 14.5, 14.0, 13.0, 12.0, 16.0, 18.0],
     [110.0, 36.0, 24.0, 18.0, 14.0, 13.0, 12.0, 11.0, 16.0, 18.0],
-    [115.0, 34.5, 22.5, 17.25, 12.5, 11.875, 11.25, 10.625, 14.5, 16.5],
-    [120.0, 33.0, 21.0, 16.5, 11.0, 10.75, 10.5, 10.25, 13.0, 15.0],
+    [
+        115.0, 34.5, 22.5, 17.25, 12.5, 11.875, 11.25, 10.625, 14.5, 16.5,
+    ],
+    [
+        120.0, 33.0, 21.0, 16.5, 11.0, 10.75, 10.5, 10.25, 13.0, 15.0,
+    ],
     [125.0, 32.0, 20.0, 16.0, 10.0, 10.0, 10.0, 10.0, 12.0, 14.0],
 ];
 
@@ -94,12 +116,24 @@ pub const WEIGHTS: [u16; 9] = [100, 200, 300, 400, 500, 600, 700, 800, 900];
 /// `byFontSize`: one row per font size in px, and in each the least Lc for
 /// weights 100 to 900 (999 prohibited, 777 non-text and spot text only)
 const BY_FONT_SIZE: [[f64; 10]; 16] = [
-    [10.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0],
-    [12.0, 999.0, 999.0, 999.0, 777.0, 777.0, 777.0, 777.0, 999.0, 999.0],
-    [14.0, 999.0, 999.0, 777.0, 100.0, 100.0, 90.0, 75.0, 999.0, 999.0],
-    [15.0, 999.0, 999.0, 777.0, 100.0, 90.0, 75.0, 70.0, 999.0, 999.0],
-    [16.0, 999.0, 999.0, 777.0, 90.0, 75.0, 70.0, 60.0, 60.0, 999.0],
-    [18.0, 999.0, 777.0, 100.0, 75.0, 70.0, 60.0, 55.0, 55.0, 55.0],
+    [
+        10.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0, 999.0,
+    ],
+    [
+        12.0, 999.0, 999.0, 999.0, 777.0, 777.0, 777.0, 777.0, 999.0, 999.0,
+    ],
+    [
+        14.0, 999.0, 999.0, 777.0, 100.0, 100.0, 90.0, 75.0, 999.0, 999.0,
+    ],
+    [
+        15.0, 999.0, 999.0, 777.0, 100.0, 90.0, 75.0, 70.0, 999.0, 999.0,
+    ],
+    [
+        16.0, 999.0, 999.0, 777.0, 90.0, 75.0, 70.0, 60.0, 60.0, 999.0,
+    ],
+    [
+        18.0, 999.0, 777.0, 100.0, 75.0, 70.0, 60.0, 55.0, 55.0, 55.0,
+    ],
     [21.0, 999.0, 777.0, 90.0, 70.0, 60.0, 55.0, 50.0, 50.0, 50.0],
     [24.0, 999.0, 777.0, 75.0, 60.0, 55.0, 50.0, 45.0, 45.0, 45.0],
     [28.0, 999.0, 100.0, 70.0, 55.0, 50.0, 45.0, 43.0, 43.0, 43.0],
@@ -129,7 +163,9 @@ pub enum Level {
 /// first row with a level, the row below decides (a 777 or 999); above
 /// 96 px, the 96 px row
 pub fn level(size_px: f32, weight: u16) -> Level {
-    let Some(w) = column(weight) else { return Level::Prohibited };
+    let Some(w) = column(weight) else {
+        return Level::Prohibited;
+    };
     let size = f64::from(size_px);
     let cell = |row: &[f64; 10]| row[w + 1];
     let at = |v: f64| {
@@ -141,7 +177,9 @@ pub fn level(size_px: f32, weight: u16) -> Level {
             Level::Lc(v as f32)
         }
     };
-    let Some(i) = BY_FONT_SIZE.iter().rposition(|row| row[0] <= size) else { return Level::Prohibited };
+    let Some(i) = BY_FONT_SIZE.iter().rposition(|row| row[0] <= size) else {
+        return Level::Prohibited;
+    };
     let (row, next) = (&BY_FONT_SIZE[i], BY_FONT_SIZE.get(i + 1));
     match next {
         Some(next) if cell(row) < 400.0 && cell(next) < 400.0 => {
@@ -190,7 +228,11 @@ pub fn font_lookup(lc: f64) -> [MinFont; 9] {
         let delta = FONT_DELTA[row][w + 1];
         if font > 400.0 || lc < 29.5 {
             // A 777 or 999 cell, or below the text level: non-text only
-            if font == 999.0 { MinFont::Prohibited } else { MinFont::NonTextOnly }
+            if font == 999.0 {
+                MinFont::Prohibited
+            } else {
+                MinFont::NonTextOnly
+            }
         } else if font > 24.0 {
             MinFont::Px((font - delta * adj + 0.5).floor() as f32)
         } else {
@@ -265,7 +307,9 @@ pub fn passes(fg: Srgb, bg: Srgb, size_px: f32, weight: u16) -> bool {
 
 /// [`passes`], for text of another use
 pub fn passes_for(fg: Srgb, bg: Srgb, size_px: f32, weight: u16, text_use: TextUse) -> bool {
-    let Some(min) = required_lc_for(size_px, weight, text_use) else { return false };
+    let Some(min) = required_lc_for(size_px, weight, text_use) else {
+        return false;
+    };
     let lc = apca(fg, bg).abs() as f32;
     lc >= min && max_lc(size_px, weight).is_none_or(|max| lc <= max)
 }
@@ -282,14 +326,38 @@ mod tests {
     /// source in an independent transliteration
     #[test]
     fn font_lookup_is_the_librarys() {
-        assert_eq!(font_lookup(60.0), px([72.0, 48.0, 42.0, 24.0, 21.0, 18.0, 16.0, 16.0, 18.0]));
-        assert_eq!(font_lookup(-68.541), px([65.0, 45.0, 29.0, 20.25, 18.5, 16.5, 15.0, 16.0, 18.0]));
-        assert_eq!(font_lookup(75.0), px([60.0, 42.0, 24.0, 18.0, 16.0, 15.0, 14.0, 16.0, 18.0]));
-        assert_eq!(font_lookup(77.7), px([58.0, 40.0, 23.5, 18.0, 16.0, 15.0, 14.0, 16.0, 18.0]));
-        assert_eq!(font_lookup(90.0), px([48.0, 32.0, 21.0, 16.0, 15.5, 14.5, 14.0, 16.0, 18.0]));
-        assert_eq!(font_lookup(103.2), px([40.0, 26.0, 18.5, 15.0, 14.5, 13.5, 12.5, 16.0, 18.0]));
-        assert_eq!(font_lookup(125.0), px([32.0, 20.0, 16.0, 10.0, 10.0, 10.0, 10.0, 12.0, 14.0]));
-        assert_eq!(font_lookup(47.3), px([102.0, 85.0, 66.0, 37.0, 30.0, 26.0, 23.0, 23.0, 23.0]));
+        assert_eq!(
+            font_lookup(60.0),
+            px([72.0, 48.0, 42.0, 24.0, 21.0, 18.0, 16.0, 16.0, 18.0])
+        );
+        assert_eq!(
+            font_lookup(-68.541),
+            px([65.0, 45.0, 29.0, 20.25, 18.5, 16.5, 15.0, 16.0, 18.0])
+        );
+        assert_eq!(
+            font_lookup(75.0),
+            px([60.0, 42.0, 24.0, 18.0, 16.0, 15.0, 14.0, 16.0, 18.0])
+        );
+        assert_eq!(
+            font_lookup(77.7),
+            px([58.0, 40.0, 23.5, 18.0, 16.0, 15.0, 14.0, 16.0, 18.0])
+        );
+        assert_eq!(
+            font_lookup(90.0),
+            px([48.0, 32.0, 21.0, 16.0, 15.5, 14.5, 14.0, 16.0, 18.0])
+        );
+        assert_eq!(
+            font_lookup(103.2),
+            px([40.0, 26.0, 18.5, 15.0, 14.5, 13.5, 12.5, 16.0, 18.0])
+        );
+        assert_eq!(
+            font_lookup(125.0),
+            px([32.0, 20.0, 16.0, 10.0, 10.0, 10.0, 10.0, 12.0, 14.0])
+        );
+        assert_eq!(
+            font_lookup(47.3),
+            px([102.0, 85.0, 66.0, 37.0, 30.0, 26.0, 23.0, 23.0, 23.0])
+        );
         let at_30 = font_lookup(30.0);
         assert_eq!(&at_30[..2], &[MinFont::NonTextOnly; 2]);
         assert_eq!(at_30[3], MinFont::Px(108.0));
@@ -317,7 +385,13 @@ mod tests {
             (9.0, 400, None),
         ] {
             let got = required_lc(size, weight);
-            assert!(match (got, want) { (Some(g), Some(w)) => (g - w).abs() < 1e-4, (g, w) => g == w }, "{size} px at {weight}: {got:?}, not {want:?}");
+            assert!(
+                match (got, want) {
+                    (Some(g), Some(w)) => (g - w).abs() < 1e-4,
+                    (g, w) => g == w,
+                },
+                "{size} px at {weight}: {got:?}, not {want:?}"
+            );
         }
         assert_eq!(level(12.0, 400), Level::SpotOnly);
         assert_eq!(level(12.0, 800), Level::Prohibited);
@@ -340,13 +414,21 @@ mod tests {
         for weight in WEIGHTS {
             for tenths in 80..1200 {
                 let size = tenths as f32 / 10.0;
-                assert!(ask(size + 0.1, weight) <= ask(size, weight) + 1e-4, "{size} px at {weight}");
+                assert!(
+                    ask(size + 0.1, weight) <= ask(size, weight) + 1e-4,
+                    "{size} px at {weight}"
+                );
             }
         }
         for tenths in 80..1200 {
             let size = tenths as f32 / 10.0;
             for pair in WEIGHTS[..7].windows(2) {
-                assert!(ask(size, pair[1]) <= ask(size, pair[0]) + 1e-4, "{size} px, {} then {}", pair[0], pair[1]);
+                assert!(
+                    ask(size, pair[1]) <= ask(size, pair[0]) + 1e-4,
+                    "{size} px, {} then {}",
+                    pair[0],
+                    pair[1]
+                );
             }
         }
     }
@@ -363,7 +445,10 @@ mod tests {
         assert_eq!(required_lc_for(12.0, 400, TextUse::Spot), Some(TEXT_MIN_LC));
         assert_eq!(required_lc_for(12.0, 400, TextUse::SubFluent), None);
         assert_eq!(required_lc_for(10.0, 400, TextUse::Spot), None);
-        assert_eq!((max_lc(32.0, 400), max_lc(24.0, 400), max_lc(32.0, 200)), (Some(90.0), None, None));
+        assert_eq!(
+            (max_lc(32.0, 400), max_lc(24.0, 400), max_lc(32.0, 200)),
+            (Some(90.0), None, None)
+        );
     }
 
     #[test]
