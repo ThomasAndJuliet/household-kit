@@ -113,7 +113,7 @@ The size and line spacing are the shared settings (`paper-size`, `paper-line-spa
 ~/.local/bin/neo-cargo ~/Code/household-kit household-kit -- clippy --workspace --all-targets
 ```
 
-CI is to be set up by Tom. There are no workflows yet.
+CI (`.github/workflows/ci.yml`) runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` and `cargo test --workspace --locked` on neo's runner (GitHub-hosted when the `CI_RUNNER` variable is `hosted`). It needs no secrets.
 
 ## Licence
 
