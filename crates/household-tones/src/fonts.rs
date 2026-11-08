@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Font lookup table ported from apca-w3, copyright (c) 2019-2023 Andrew Somers and/or Myndex. All rights reserved upstream;
+// outside its W3C agreement apca-w3 is licensed under the AGPL v3, subject to the limitations in its
+// LICENSE.md (https://github.com/Myndex/apca-w3/blob/master/LICENSE.md). This file alone is under the
+// AGPL (crates/household-tones/LICENSE-AGPL-3.0); the rest of this crate is GPL-3.0-only.
+
 //! APCA's font lookup tables: the least Lc text of a size and weight needs.
 //!
 //! Source: apca-w3 0.1.9 (Myndex, github.com/Myndex/apca-w3), APCA Public
