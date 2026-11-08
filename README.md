@@ -20,8 +20,8 @@ The household's UI test harness draws the apps' own widgets, so it needs libcosm
 
 ```toml
 [dependencies]
-household-settings = { git = "ssh://git@github.com/ThomasAndJuliet/household-kit.git" }
-household-tones = { git = "ssh://git@github.com/ThomasAndJuliet/household-kit.git" }
+household-settings = { git = "https://github.com/ThomasAndJuliet/household-kit.git" }
+household-tones = { git = "https://github.com/ThomasAndJuliet/household-kit.git" }
 ```
 
 The commit is pinned by the app's `Cargo.lock`. To pick up a change, push here first, then run `cargo update -p household-tones` (or the crate concerned) in the app and commit the lock.
