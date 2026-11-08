@@ -1,18 +1,17 @@
 name: CI
-# The kit's own checks: formatting, Clippy and every crate's tests
-# (household-ui TESTING.md §4; testing plan, Phase 0). The runner and its
-# fallback are neo-infrastructure's (services/ci-runners): neo's Ubuntu
-# runner by default, GitHub-hosted when the CI_RUNNER variable is "hosted".
+# The kit's own checks: formatting, Clippy and every crate's tests.
 # household-kit is a library, so there is no Flatpak build here. No crate
 # here depends on libcosmic or on another private repository, so the job
 # needs no secrets.
 #
-# Not here yet: testing the apps' kit-related tests against the kit commit
-# being pushed (see the testing plan's Phase 0). It needs read keys for
-# each app and its private dependencies, and a full app build per push;
-# the Phase 1 step 2 report says what it would take.
+# This repository is public. Code from a fork's pull request must never run
+# on the household's self-hosted runner, so those runs use a GitHub-hosted
+# runner with the read-only token below. The self-hosted runner is used only
+# for pushes, manual runs and pull requests from this repository, which only
+# people with write access can open. Never trigger on pull_request_target.
 on:
   push:
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,14 +23,17 @@ env:
 jobs:
   check:
     name: Format, Clippy and tests
-    runs-on: ${{ vars.CI_RUNNER == 'hosted' && 'ubuntu-24.04' || 'neo-ubuntu' }}
+    # A fork's pull request has no secrets or variables, and must not reach
+    # the self-hosted runner. Everything else uses the self-hosted runner
+    # unless the CI_RUNNER variable is "hosted".
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || (vars.CI_RUNNER == 'hosted' && 'ubuntu-24.04' || 'neo-ubuntu') }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The version neo's build toolbox has, so that formatting and Clippy
-      # say the same in CI as in the builds agents run there
+      # The household's pinned toolchain, so that formatting and Clippy say
+      # the same in CI as in local builds
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
         with:
           toolchain: 1.99.0

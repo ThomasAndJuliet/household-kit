@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Ported from apca-w3, copyright (c) 2019-2023 Andrew Somers and/or Myndex. All rights reserved upstream;
+// outside its W3C agreement apca-w3 is licensed under the AGPL v3, subject to the limitations in its
+// LICENSE.md (https://github.com/Myndex/apca-w3/blob/master/LICENSE.md). This file alone is under the
+// AGPL (crates/household-tones/LICENSE-AGPL-3.0); the rest of this crate is GPL-3.0-only.
+
 //! APCA-W3 0.0.98G-4g lightness contrast (household rule 25c), ported from
 //! Andrew Somers' apca-w3 (`APCAcontrast`, `sRGBtoY`, `alphaBlend`), with
 //! its constants, and checked against apca-w3's own test values.
@@ -154,7 +160,7 @@ mod tests {
         assert_eq!(contrast(-0.1, 0.5), 0.0);
     }
 
-    /// The pairs ~/.cache/ui-audit/apca/sheet.py printed, its port of the
+    /// The pairs the household's audit sheet printed from its own port of the
     /// same formula
     #[test]
     fn the_audit_sheets_pairs() {

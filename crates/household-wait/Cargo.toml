@@ -3,6 +3,7 @@ name = "household-wait"
 description = "Waiting without freezing (household rules 40-43): tiers, deadlines, stalls, cancellation and keyed waits, as event streams an app turns into its own messages and widgets"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
