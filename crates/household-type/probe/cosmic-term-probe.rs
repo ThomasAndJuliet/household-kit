@@ -8,7 +8,7 @@
 // To measure again: copy src/sample.md to cosmic-term's
 // src/thread/paper_sample.md, append this module to src/thread/rich.rs, and
 // run `cargo test --bin cosmic-term paper_probe_dump`. It writes
-// ~/probe-out/measured.rs; copy that to src/reference/measured.rs here.
+// the output folder's measured.rs; copy that to src/reference/measured.rs here.
 //
 // It lays the sample out as the thread's rich text widget does: each block
 // with `build_block` at the column's width, placed `gap_before` below the

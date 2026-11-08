@@ -83,8 +83,8 @@ pub fn key(kind: &'static str, subject: &impl Hash) -> Key {
 /// whatever its kind
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// On this machine or the LAN (a file, a share on neo, a settings
-    /// write): stopped after [`LOCAL_DEADLINE`], 2 s
+    /// On this machine or the LAN (a file, a share on a home server, a
+    /// settings write): stopped after [`LOCAL_DEADLINE`], 2 s
     Local,
     /// Over ssh or the internet (another machine's helper, a web request):
     /// stopped after [`REMOTE_DEADLINE`], 10 s

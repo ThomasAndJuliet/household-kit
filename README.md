@@ -1,6 +1,6 @@
 # household-kit
 
-Shared crates for the household's libcosmic apps (Terminal, Cerea, Lollypop, Discord, ScreenPush, the AI-usage applet). Before this, each app kept a copy of household-ui's reference code. Each concern is now one crate in this workspace, used as a private git dependency, as cosmic-term already uses `household-mount`.
+Shared crates for the household's libcosmic apps (Terminal, Cerea, Lollypop, Discord, ScreenPush, the AI-usage applet). Before this, each app kept a copy of household-ui's reference code. Each concern is now one crate in this workspace, used as a git dependency.
 
 | Crate | What it is for |
 |---|---|
@@ -24,7 +24,7 @@ household-settings = { git = "ssh://git@github.com/ThomasAndJuliet/household-kit
 household-tones = { git = "ssh://git@github.com/ThomasAndJuliet/household-kit.git" }
 ```
 
-The commit is pinned by the app's `Cargo.lock`. To pick up a change, push here first, then run `cargo update -p household-tones` (or the crate concerned) in the app and commit the lock. An app's CI needs read access to this private repo, as it has for household-mount.
+The commit is pinned by the app's `Cargo.lock`. To pick up a change, push here first, then run `cargo update -p household-tones` (or the crate concerned) in the app and commit the lock.
 
 ## The glue each app writes
 
@@ -111,15 +111,16 @@ The size and line spacing are the shared settings (`paper-size`, `paper-line-spa
 ## Checks
 
 ```sh
-~/.local/bin/neo-cargo ~/Code/household-kit household-kit -- test --workspace
-~/.local/bin/neo-cargo ~/Code/household-kit household-kit -- clippy --workspace --all-targets
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 ```
 
-CI (`.github/workflows/ci.yml`) runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` and `cargo test --workspace --locked` on neo's runner (GitHub-hosted when the `CI_RUNNER` variable is `hosted`). It needs no secrets.
+CI (`.github/workflows/ci.yml`) runs the same three commands. It needs no secrets. Pushes and pull requests from this repository run on the household's own runner; pull requests from forks run on GitHub-hosted runners with a read-only token.
 
 ## Licence
 
-Not chosen yet. There is no LICENSE file and no `license` field. The household-ui reference files the code comes from are GPL-3.0-only, and the AI-usage applet is MPL-2.0.
+No licence has been chosen yet, so no one has permission to use, copy or change this code. The household-ui reference files the code comes from are GPL-3.0-only, and the AI-usage applet is MPL-2.0. A licence file must be added before this repository is made public.
 
 ## Open questions
 
@@ -130,7 +131,7 @@ Not chosen yet. There is no LICENSE file and no `license` field. The household-u
   - Paper's 20 px body text asks Lc 86.7 (71.7 + 15), and dark gives 75.3 on light.
   - A heading above 24 px may not exceed Lc 90, and darkest on light gives 91.0.
   - The body rule (+15 below Lc 75) jumps: a cell of Lc 70 asks 85, one of 75 asks 75. That is in apca-w3's README and ARC's Gold level as written.
-  - The table's reference font is Barlow (x-height 0.506); Noto Sans's is 0.536 and Libertinus's 0.429. See `~/.cache/ui-audit/apca/required-lc.md`.
+  - The table's reference font is Barlow (x-height 0.506); Noto Sans's is 0.536 and Libertinus's 0.429.
   - Rule 25c's flat levels (75/60/45/30) are gone, as Juliet asked, so these pairs need a decision before the apps' CI uses `passes`.
 - **Rule 25d's own claim.** It says reading text reaches Lc 75 in either arrangement. Dark (#525252) on lightish (#d7d7d7), arrangement B's page, gives Lc 63.8. In dark mode, #d0d0d0 on #272727 gives Lc −74.8.
 - **The code palette.** On lightish the light colours give Lc 56–60. On dark plates Keyword, Function, Number and Tag give Lc 44–56.

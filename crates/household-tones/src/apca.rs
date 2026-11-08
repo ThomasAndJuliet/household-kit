@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(contrast(-0.1, 0.5), 0.0);
     }
 
-    /// The pairs ~/.cache/ui-audit/apca/sheet.py printed, its port of the
+    /// The pairs the household's audit sheet printed from its own port of the
     /// same formula
     #[test]
     fn the_audit_sheets_pairs() {
