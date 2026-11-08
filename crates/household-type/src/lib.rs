@@ -301,7 +301,7 @@ const COMMON: Style = Style {
         line_follows_text: true,
     },
     maths: Maths {
-        scale: 1.1,
+        scale: 1.05,
         display_centred: true,
         rise: 0.8,
         drop: 0.25,
@@ -450,13 +450,26 @@ pub mod choices {
     pub const LINE_SPACINGS: [u16; 5] = [120, 130, 140, 150, 160];
     /// The Paper view's measure, in ems
     pub const PAPER_MEASURES: [u16; 6] = [28, 32, 36, 40, 48, 60];
-    /// Formulas against the text, in hundredths
-    pub const MATH_SCALES: [u16; 6] = [90, 100, 110, 121, 130, 150];
+    /// Formulas against the text, in hundredths: steps of 5 from 80 to 150, finely enough to
+    /// match a formula's letters to the text's (Tom and Juliet, 8 Nov 2026). Paper's default,
+    /// 105, is the lightest step at which inline maths doesn't stand out from Libertinus
+    pub const MATH_SCALES: [u16; 15] = [
+        80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150,
+    ];
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Paper's default maths size is one of the choices its setting offers, or the setting could
+    /// not show it
+    #[test]
+    fn papers_maths_size_is_among_the_choices() {
+        let percent = (paper().maths.scale * 100.0).round() as u16;
+        assert_eq!(percent, 105);
+        assert!(choices::MATH_SCALES.contains(&percent));
+    }
 
     #[test]
     fn the_views_are_the_terminals() {
