@@ -18,6 +18,7 @@
 //! libcosmic theme itself.
 
 pub mod apca;
+pub mod borders;
 pub mod color;
 pub mod fill;
 pub mod fonts;
@@ -25,6 +26,7 @@ pub mod roles;
 pub mod tones;
 
 pub use apca::{apca, apca_over, apca_rgb8};
+pub use borders::*;
 pub use color::{Oklab, Oklch, Srgb, Srgba};
 pub use fill::*;
 pub use fonts::{Level, TextUse, level, max_lc, passes, passes_for, required_lc, required_lc_for};
