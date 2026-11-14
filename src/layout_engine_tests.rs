@@ -257,3 +257,19 @@ fn structured_root_preserves_selected_composite_elastic_allocation() {
         assert_eq!(family_slot.bounds(), direct_slot.bounds());
     }
 }
+
+#[test]
+fn requested_dimension_roundoff_uses_the_native_fit_tolerance() {
+    let third = 1.0_f32 / 3.0;
+    let capacities = [WidthCapacity {
+        preferred: third,
+        minimum: third,
+        weight: 0.0,
+    }; 3];
+    assert!(f64::from(third) * 3.0 > 1.0);
+    assert_eq!(allocate_width(1.0, &capacities), Ok(vec![third; 3]));
+    assert!(matches!(
+        allocate_width(1.0 - 2.0 * FIT_EPSILON, &capacities),
+        Err(AllocationError::NoFit { .. })
+    ));
+}

@@ -31,6 +31,11 @@ pub mod menu;
 pub mod menu_parts;
 pub mod menu_surface;
 pub mod navigation_style;
+pub mod panel_divider;
+pub mod panel_header;
+pub mod panel_layout;
+pub mod panel_resize;
+pub mod panel_state;
 pub mod popup;
 mod scroll;
 pub mod scroll_intent;
@@ -58,6 +63,8 @@ pub use tooltip::{TIP_WIDTH, link_tooltip, tip_bubble, tip_padding, tooltip_unle
 mod menu_fixture_tests;
 #[cfg(test)]
 mod menu_parts_tests;
+#[cfg(test)]
+mod panel_fixture_tests;
 #[cfg(test)]
 mod short_text_box_tests;
 #[cfg(test)]

@@ -143,7 +143,10 @@ pub fn allocate_width(
             })
         })
         .sum();
-    if required > f64::from(available) {
+    // Native geometry uses f32. Summing neighbouring requested dimensions in
+    // f64 can exceed their f32 total by a few ULPs after a divider drag. Use
+    // the same fit tolerance as query/commit, not a stricter hidden threshold.
+    if required > f64::from(available) + f64::from(FIT_EPSILON) {
         return Err(AllocationError::NoFit {
             required: required as f32,
             available,
@@ -220,6 +223,15 @@ pub struct GeometryPlan {
     native_size: Option<Size>,
     bindings: Vec<(PreparedId, Level)>,
     source_reports: Vec<SourceReport>,
+}
+
+impl GeometryPlan {
+    /// Useful minimum height after measuring this form at its offered width.
+    /// Divider constraints must use this width-dependent result for wrapped
+    /// children rather than an unconstrained preferred height.
+    pub fn minimum_height(&self) -> f32 {
+        self.minimum_height
+    }
 }
 
 // Geometric equality is useful when checking decorators and pure re-queries.
@@ -307,6 +319,7 @@ struct Composition<'a, Message> {
     children: Vec<Child<'a, Message>>,
     arrangement: Arrangement,
     spacing: f32,
+    top_aligned: bool,
 }
 
 type Forms<'a, Message> = Rc<Vec<(Level, Child<'a, Message>)>>;
@@ -327,6 +340,9 @@ pub struct Child<'a, Message> {
     weight: f32,
     grow: f32,
     grow_height: f32,
+    reserve_width: bool,
+    fixed_width: Option<f32>,
+    fixed_height: Option<f32>,
     preparation: PreparedId,
     presentation: Option<Presentation>,
     information: Option<SourceInformation<'a>>,
@@ -347,6 +363,9 @@ impl<Message> Clone for Child<'_, Message> {
             weight: self.weight,
             grow: self.grow,
             grow_height: self.grow_height,
+            reserve_width: self.reserve_width,
+            fixed_width: self.fixed_width,
+            fixed_height: self.fixed_height,
             preparation: self.preparation.clone(),
             presentation: self.presentation,
             information: self.information.clone(),
@@ -522,6 +541,35 @@ impl<'a, Message: 'a> Child<'a, Message> {
         if self.is_hidden(level) {
             return Ok(self.bind_geometry(level, GeometryPlan::hidden()));
         }
+        let constrained = if self.fixed_width.is_some() || self.fixed_height.is_some() {
+            Some(self.query(level, renderer))
+        } else {
+            None
+        };
+        let width = if self.fixed_width.is_some() {
+            let requested = constrained.expect("fixed measurement").minimum.width;
+            if width + FIT_EPSILON < requested {
+                return Err(AllocationError::NoFit {
+                    required: requested,
+                    available: width,
+                });
+            }
+            requested
+        } else {
+            width
+        };
+        let height = if self.fixed_height.is_some() {
+            let requested = constrained.expect("fixed measurement").minimum.height;
+            if height + FIT_EPSILON < requested {
+                return Err(AllocationError::NoFit {
+                    required: requested,
+                    available: height,
+                });
+            }
+            requested
+        } else {
+            height
+        };
         let mut plan = if let Some(form) = self.selected_form(level) {
             let mut selected = form.clone();
             if self.grow_height > 0.0 {
@@ -575,8 +623,16 @@ impl<'a, Message: 'a> Child<'a, Message> {
             }
             plan
         };
-        if self.grow_height > 0.0 && height.is_finite() {
+        if self.fixed_width.is_some() || self.reserve_width {
+            plan.size.width = width;
+        }
+        if (self.grow_height > 0.0 || self.fixed_height.is_some()) && height.is_finite() {
             plan.size.height = plan.size.height.max(height);
+        }
+        if self.fixed_height.is_some() {
+            plan.minimum_height = plan
+                .minimum_height
+                .max(constrained.expect("fixed measurement").minimum.height);
         }
         if plan.size.width > width + FIT_EPSILON {
             return Err(AllocationError::NoFit {
@@ -713,7 +769,11 @@ impl<'a, Message: 'a> Child<'a, Message> {
                     .collect::<Vec<Element<'a, Message>>>(),
             )
             .spacing(composition.spacing)
-            .align_y(cosmic::iced::Alignment::Center)
+            .align_y(if composition.top_aligned {
+                cosmic::iced::Alignment::Start
+            } else {
+                cosmic::iced::Alignment::Center
+            })
             .into()
         };
         let content = match composition.arrangement {
@@ -744,7 +804,11 @@ impl<'a, Message: 'a> Child<'a, Message> {
             .spacing(composition.spacing)
             .into(),
         };
-        if self.grow_height > 0.0 {
+        if self.grow_height > 0.0
+            || self.fixed_height.is_some()
+            || self.fixed_width.is_some()
+            || self.reserve_width
+        {
             widget::container(content)
                 .width(plan.size.width)
                 .height(plan.size.height)
@@ -752,6 +816,65 @@ impl<'a, Message: 'a> Child<'a, Message> {
         } else {
             content
         }
+    }
+
+    /// Reserve the full width allocated by the parent, keeping the inner
+    /// component's natural geometry and reports intact. Useful for wrapping
+    /// navigation followed by trailing controls: a short final row must not
+    /// move those controls into space already allocated to navigation.
+    pub fn fill_width(self) -> Self {
+        let weight = self.weight;
+        let grow_height = self.grow_height;
+        let mut result = column_child(vec![self], 0.0);
+        result.weight = weight;
+        result.grow_height = grow_height;
+        result.reserve_width = true;
+        result.grow = 1.0;
+        result
+    }
+
+    /// Reserve exact dimensions for this prepared component. A dimension below
+    /// its measured useful minimum is raised to that minimum; insufficient
+    /// available space fails the stage rather than shrinking the request.
+    /// Apply this to the expanded form, before declaring a collapsed form.
+    /// The inner child remains an ordinary nested composition and keeps its
+    /// reports and native state. Values must be finite and nonnegative.
+    pub fn fixed_dimensions(self, width: Option<f32>, height: Option<f32>) -> Self {
+        assert!(
+            [width, height]
+                .into_iter()
+                .flatten()
+                .all(|n| n.is_finite() && n >= 0.0)
+        );
+        if width.is_none() && height.is_none() {
+            return self;
+        }
+        // A wrapper keeps the inner child's measured geometry and bindings intact.
+        let weight = self.weight;
+        let grow = self.grow;
+        let grow_height = self.grow_height;
+        let mut result = column_child(vec![self], 0.0);
+        result.weight = weight;
+        result.grow = grow;
+        result.grow_height = grow_height;
+        result.fixed_width = width;
+        result.fixed_height = height;
+        let query = result.query.clone();
+        result.query = Rc::new(move |level, renderer| {
+            let mut measured = query(level, renderer);
+            if let Some(width) = width {
+                let width = width.max(measured.minimum.width);
+                measured.minimum.width = width;
+                measured.preferred.width = width;
+            }
+            if let Some(height) = height {
+                let height = height.max(measured.minimum.height);
+                measured.minimum.height = height;
+                measured.preferred.height = height;
+            }
+            measured
+        });
+        result
     }
 
     /// Decorate this component's rendered content without changing its geometry.
@@ -941,6 +1064,9 @@ pub fn child<'a, Message: 'a>(
         weight: 1.0,
         grow: 0.0,
         grow_height: 0.0,
+        reserve_width: false,
+        fixed_width: None,
+        fixed_height: None,
         preparation: PreparedId::new(),
         presentation: None,
         information: None,
@@ -978,6 +1104,9 @@ pub fn forms<'a, Message: 'a>(
         weight: 1.0,
         grow: 0.0,
         grow_height: 0.0,
+        reserve_width: false,
+        fixed_width: None,
+        fixed_height: None,
         preparation: PreparedId::new(),
         presentation: None,
         information: None,
@@ -1098,6 +1227,14 @@ pub fn row_child<'a, Message: 'a>(
     compose(children, spacing, Arrangement::Row)
 }
 
+/// Arrange a row with each immediate child aligned to its top edge.
+pub fn row_child_top<'a, Message: 'a>(
+    children: Vec<Child<'a, Message>>,
+    spacing: f32,
+) -> Child<'a, Message> {
+    compose_aligned(children, spacing, Arrangement::Row, true)
+}
+
 pub fn column_child<'a, Message: 'a>(
     children: Vec<Child<'a, Message>>,
     spacing: f32,
@@ -1117,11 +1254,21 @@ fn compose<'a, Message: 'a>(
     spacing: f32,
     arrangement: Arrangement,
 ) -> Child<'a, Message> {
+    compose_aligned(children, spacing, arrangement, false)
+}
+
+fn compose_aligned<'a, Message: 'a>(
+    children: Vec<Child<'a, Message>>,
+    spacing: f32,
+    arrangement: Arrangement,
+    top_aligned: bool,
+) -> Child<'a, Message> {
     assert!(spacing.is_finite() && spacing >= 0.0);
     let composition = Rc::new(Composition {
         children,
         arrangement,
         spacing,
+        top_aligned,
     });
     let query = composition.clone();
     Child {
@@ -1136,6 +1283,9 @@ fn compose<'a, Message: 'a>(
         weight: 1.0,
         grow: 0.0,
         grow_height: 0.0,
+        reserve_width: false,
+        fixed_width: None,
+        fixed_height: None,
         preparation: PreparedId::new(),
         presentation: None,
         information: None,
@@ -1143,7 +1293,7 @@ fn compose<'a, Message: 'a>(
     }
 }
 
-const FIT_EPSILON: f32 = 0.001;
+pub(crate) const FIT_EPSILON: f32 = 0.001;
 fn finite_size(size: Size) -> bool {
     size.width.is_finite() && size.height.is_finite() && size.width >= 0.0 && size.height >= 0.0
 }
@@ -1408,7 +1558,9 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                 });
             }
             for placed in &mut result.children[start..] {
-                placed.position.y += (row_height - placed.geometry.size.height) / 2.0;
+                if !self.top_aligned {
+                    placed.position.y += (row_height - placed.geometry.size.height) / 2.0;
+                }
             }
             result.rows.push((start..result.children.len()).collect());
             result.size.width = result.size.width.max(row_width);

@@ -469,6 +469,62 @@ This repository's own `Cargo.toml` has a `[patch]` for its tests, Clippy and CI.
 
 A Flatpak app needs the crate in its `cargo-sources.json`.
 
+## Panel interface foundations
+
+`panel_layout` composes ordinary `layout::Child` boxes: `panel` stacks arbitrary
+header and body children, `panel_forms` declares an expanded form and collapsed
+strip, and `split` arranges panes and divider children on either axis. The normal
+root `Stage` policy selects compaction; these helpers do not run another solver.
+Fixed-section navigation remains a child and retains its own wrapping policy.
+
+`sized_panel` accepts `panel_resize::Dimension` requests for width and height.
+The underlying `Child::fixed_dimensions` keeps nested geometry and accepted
+reports, reserves requested dimensions subject to useful minima, and rejects an
+expanded form that cannot fit. Apply it to the expanded form before wrapping that
+form in `layout::forms`; a collapsed strip must not inherit the expanded size.
+
+`panel_resize::Drag` is an axis-independent interaction reducer supplied with
+accepted adjacent sizes and measured minima. Automatic sizing resists the initial
+tug using Cerea's barrier formula; manual movement is clamped to a valid interval.
+Finish commits the affected requests; cancel retains the originals. `ordinary`
+reports discrete collapse when a manual request cannot fit; `reopen` calculates
+the agreed temporary fit for explicit reopening without overwriting the saved
+request. Feed those results to existing box composition, not a separate allocator.
+
+`panel_state` distinguishes persistent panel roles, content identity, logical
+ownership, presentation host, user intent and accepted pane forms. A hidden
+detached child remembers its host. Prepared reveal uses the existing navigation
+token and returns a cancellable effect; recheck it immediately before queued
+selection/scroll/native activation. Prepared promotion transfers existing content
+to an independent owner and installs fresh replacement content in the original
+role. Stale or invalid commits return prepared resources to their caller.
+
+`panel_header::header` composes arbitrary leading content with a trailing menu
+and toggle, on the shared square grey surface. `row_child_top` and
+`Child::fill_width` keep these controls at the top right when navigation wraps.
+`panel_divider::PanelDivider` draws the double-line grab area, captures pointer
+dragging through native rebuilds, and cancels on Escape, focus loss or meaningful
+external geometry changes. Feed it accepted adjacent bounds and measured minima;
+`GeometryPlan::minimum_height()` exposes the width-dependent vertical minimum.
+
+`panel_fixture_tests` builds and renders a native two-pane example using these
+components. It tests pointer dragging across rebuilds, saved sizes through
+collapse/expand, panel hide/reopen and popup menu activation. Set
+`HOUSEHOLD_PANEL_FIXTURE_OUT` when running the fixture to write raw RGBA frames
+whose filenames specify their pixel dimensions. This is a headless native fixture,
+not a standalone desktop application or proof of cross-window resource transfer.
+The [native example captures](docs/evidence/panels/README.md) include the tested
+expanded, collapsed and narrow-menu states with validation provenance.
+
+These APIs are interface foundations, not a complete workspace manager.
+Consumers still need tab movement, related-content highlighting integration,
+keyboard/accessibility support for divider resizing, and retained-state rehosting. Content
+services supply real destination/replacement resources and apply successful
+promotion transfers atomically; the generic library does not create browser or
+terminal sessions. Layout queries never run those effects. Terminal has not been
+migrated to these APIs. See household-ui's `PANELS.md` for the agreed contract and
+its stress cases; tests here cover geometry, reducer and native event boundaries.
+
 ## Adding a widget
 
 1. Move the best of the apps' copies here, one module per widget, and keep its behaviour unless a rule says otherwise. Work out what every app's call sites use first, so that each changes by a line.
