@@ -1340,7 +1340,8 @@ impl<K: Copy + Eq + Hash + 'static, Message> Column<'_, K, Message> {
     }
 
     /// Give the focus to item `index`'s child, which is built, and show it
-    /// as the keyboard's target; take it from every other child
+    /// as the keyboard's target, reporting it to the window so that its
+    /// information follows; take it from every other child
     fn focus_item(
         &mut self,
         tree: &mut Tree,
@@ -1359,6 +1360,7 @@ impl<K: Copy + Eq + Hash + 'static, Message> Column<'_, K, Message> {
             };
             self.operate_child(tree, layout, renderer, child, &mut focus);
             if let Some(Some(id)) = focus.focused {
+                crate::window::keyboard_target(&id);
                 let mut show = crate::popup::show_keyboard_target(id, true);
                 self.operate_child(tree, layout, renderer, child, &mut show);
             }

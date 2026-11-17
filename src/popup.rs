@@ -5,6 +5,7 @@
 //! Anchors come from registered live sources or explicit geometry. Source
 //! clipping, trigger switching and native focus restoration belong to the host;
 //! content and navigation targets remain independent of widget kinds.
+//! A window's root is a host bound to that window (see [`crate::window`]).
 
 use crate::layout::{
     AttachedPlan, Attachment, ChainCard, ChainFailure, NoFit, RetainedGeometry, Stage,
@@ -19,6 +20,7 @@ use cosmic::{Element, Renderer, Theme, widget};
 
 #[path = "popup_anchor.rs"]
 mod anchor;
+pub(crate) use anchor::source;
 pub use anchor::{Anchors, INFORMATION_DELAY};
 
 #[path = "popup_focus.rs"]
@@ -140,6 +142,15 @@ impl<'a, Message: 'a> Panel<'a, Message> {
         self.targets = targets;
         self
     }
+    /// The panel's key within one window chain session: a new session is a
+    /// new menu even at the same depth with the same declared key.
+    pub(crate) fn in_session(mut self, session: u64) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        (session, self.key).hash(&mut hash);
+        self.key = hash.finish();
+        self
+    }
     pub fn selection(&self) -> &Result<AttachedPlan, NoFit> {
         &self.selection
     }
@@ -154,6 +165,8 @@ pub fn host<'a, Message: 'a>(content: impl Into<Element<'a, Message>>) -> Host<'
         no_fit: None,
         anchors: Anchors::default(),
         open_sources: Vec::new(),
+        window: None,
+        protected_keys: false,
     }
 }
 
@@ -165,6 +178,8 @@ pub struct Host<'a, Message> {
     no_fit: Option<Box<dyn Fn(usize) -> Message + 'a>>,
     anchors: Anchors,
     open_sources: Vec<Id>,
+    window: Option<crate::window::Binding<'a, Message>>,
+    protected_keys: bool,
 }
 impl<'a, Message: 'a> Host<'a, Message> {
     /// Exactly one chain per host. Opening a different root replaces this Vec.
@@ -197,6 +212,19 @@ impl<'a, Message: 'a> Host<'a, Message> {
     pub fn on_no_fit(mut self, no_fit: impl Fn(usize) -> Message + 'a) -> Self {
         self.no_fit = Some(Box::new(no_fit));
         self
+    }
+    /// Make this host a window's root (see `crate::window`).
+    pub(crate) fn window(mut self, binding: crate::window::Binding<'a, Message>) -> Self {
+        self.window = Some(binding);
+        self
+    }
+    /// See `crate::window::Mount::protected_keys`.
+    pub(crate) fn protected_keys(mut self, protected: bool) -> Self {
+        self.protected_keys = protected;
+        self
+    }
+    fn enter(&self) -> Option<crate::window::Scope> {
+        self.window.as_ref().map(crate::window::Binding::enter)
     }
 }
 
@@ -241,6 +269,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
             .collect()
     }
     fn diff(&mut self, tree: &mut Tree) {
+        let _window = self.enter();
         if tree.children.is_empty() {
             tree.children.push(Tree::new(self.content.as_widget()));
         }
@@ -279,7 +308,14 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
         let active_depth = state.focused.iter().rposition(Option::is_some);
         state.keyboard_target.resize(self.panels.len(), false);
         state.entry_information.resize(self.panels.len(), false);
-        let keyboard_entry = state.keyboard_entry.take();
+        // A window's chain opened from the keyboard enters as a focused
+        // trigger's keyboard opening does
+        let keyboard_entry = state.keyboard_entry.take().or_else(|| {
+            self.window
+                .as_ref()
+                .is_some_and(|window| window.keyboard_open)
+                .then_some(0)
+        });
         for (index, panel) in self.panels.iter().enumerate() {
             let previous = state.navigation[index].current().cloned();
             state.navigation[index].reconcile(
@@ -329,7 +365,57 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
             state.reported_no_fit = None;
         }
     }
-    forward_widget!(Message, Theme, Renderer; size, draw, operate, mouse_interaction, drag_destinations);
+    forward_widget!(Message, Theme, Renderer; size, drag_destinations);
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let _window = self.enter();
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        let _window = self.enter();
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let _window = self.enter();
+        self.content.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
     fn update(
         &mut self,
         tree: &mut Tree,
@@ -341,6 +427,12 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        let _window = self.enter();
+        if self.panels.is_empty()
+            && let Some(missing) = self.window.as_ref().and_then(|w| w.missing_chain.as_ref())
+        {
+            shell.publish(missing.clone());
+        }
         if matches!(event, Event::Window(cosmic::iced::window::Event::Unfocused)) {
             self.anchors.deactivate();
             tree.state.downcast_mut::<State>().keyboard_entry = None;
@@ -371,8 +463,9 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
                 );
             }
         }
-        // Only keys need the focus
-        let keys = matches!(event, Event::Keyboard(_));
+        // Only keys need the focus. A protected input (an embedded page
+        // that gets the keys the tree leaves) takes every key.
+        let keys = matches!(event, Event::Keyboard(_)) && !self.protected_keys;
         let probe = |content: &mut Element<'a, Message>, tree: &mut Tree| {
             let mut probe = FocusProbe::default();
             if keys {
@@ -425,6 +518,9 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
             self.anchors.information_key(event, after.as_ref(), shell);
         }
         self.anchors.update_timer(event, shell);
+        if let Some(window) = &self.window {
+            window.flush(shell);
+        }
     }
     fn layout(
         &mut self,
@@ -432,6 +528,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
+        let _window = self.enter();
         let node = self
             .content
             .as_widget_mut()
@@ -510,6 +607,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        let _window = self.enter();
         let (base, panel_trees) = tree.children.split_first_mut().expect("host base tree");
         self.anchors.begin(
             self.panels
@@ -549,30 +647,39 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
             self.content
                 .as_widget_mut()
                 .overlay(base, layout, renderer, viewport, translation);
-        if self.panels.is_empty() {
+        let overlay = if self.panels.is_empty() {
             self.anchors.prune_information();
-            return base_overlay;
+            base_overlay
+        } else {
+            let base_registry = self.anchors.snapshot();
+            let chain = overlay::Element::new(Box::new(Chain {
+                panels: &mut self.panels,
+                trees: panel_trees,
+                state,
+                dismiss: self.dismiss.as_ref(),
+                close: self.close.as_deref(),
+                no_fit: self.no_fit.as_deref(),
+                activation: self
+                    .window
+                    .as_ref()
+                    .and_then(|window| window.activation.as_ref()),
+                viewport: *viewport,
+                translation,
+                anchors: self.anchors.clone(),
+                base_registry,
+            }));
+            Some(match base_overlay {
+                // Native Tooltip returns a full-window Group around its bubble.
+                // Its index (1) places that entire group after Chain (0.5), so
+                // unrelated hover explanations can paint above the menu.
+                Some(base) => overlay::Group::with_children(vec![base, chain]).overlay(),
+                None => chain,
+            })
+        };
+        match &self.window {
+            Some(window) => overlay.map(|overlay| window.scope_overlay(overlay)),
+            None => overlay,
         }
-        let base_registry = self.anchors.snapshot();
-        let chain = overlay::Element::new(Box::new(Chain {
-            panels: &mut self.panels,
-            trees: panel_trees,
-            state,
-            dismiss: self.dismiss.as_ref(),
-            close: self.close.as_deref(),
-            no_fit: self.no_fit.as_deref(),
-            viewport: *viewport,
-            translation,
-            anchors: self.anchors.clone(),
-            base_registry,
-        }));
-        Some(match base_overlay {
-            // Native Tooltip returns a full-window Group around its bubble.
-            // Its index (1) places that entire group after Chain (0.5), so
-            // unrelated hover explanations can paint above the menu.
-            Some(base) => overlay::Group::with_children(vec![base, chain]).overlay(),
-            None => chain,
-        })
     }
     #[cfg(feature = "a11y")]
     fn a11y_nodes(
@@ -600,6 +707,9 @@ struct Chain<'b, 'a, Message> {
     dismiss: Option<&'b Message>,
     close: Option<&'b (dyn Fn(usize) -> Message + 'a)>,
     no_fit: Option<&'b (dyn Fn(usize) -> Message + 'a)>,
+    /// A window root's: what to publish before an activation, and which
+    /// messages a row publishes are activations
+    activation: Option<&'b crate::window::Activation<Message>>,
     viewport: Rectangle,
     translation: Vector,
     anchors: Anchors,
@@ -1002,6 +1112,82 @@ impl<'a, Message: Clone + 'a> overlay::Overlay<Message, Theme, Renderer>
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
     ) {
+        let Some((activated, is_activation)) = self.activation else {
+            self.respond(event, layout, cursor, renderer, clipboard, shell);
+            return;
+        };
+        // A row publishes only what it means; the window learns of the
+        // activation first, so the chain closes before the action is routed
+        let mut published = Vec::new();
+        let mut local = Shell::new(&mut published);
+        self.respond(event, layout, cursor, renderer, clipboard, &mut local);
+        crate::window::forward_status(&local, shell);
+        drop(local);
+        if published.iter().any(is_activation) {
+            shell.publish(activated.clone());
+        }
+        for message in published {
+            shell.publish(message);
+        }
+    }
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let Some(index) = hit_panel(layout, cursor) else {
+            return mouse::Interaction::None;
+        };
+        let child = layout.children().nth(index).expect("hit panel layout");
+        self.panels[index]
+            .content
+            .as_widget()
+            .mouse_interaction(&self.trees[index], child, cursor, &self.viewport, renderer)
+            .max(mouse::Interaction::Idle)
+    }
+    fn overlay<'b>(
+        &'b mut self,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        // Preserve arbitrary nested child overlays, including explanations for
+        // disabled rows. Base overlays are also forwarded by Host::overlay.
+        let overlays: Vec<_> = self
+            .panels
+            .iter_mut()
+            .zip(self.trees.iter_mut())
+            .zip(layout.children())
+            .filter_map(|((panel, tree), child)| {
+                if child.bounds().width == 0.0 {
+                    return None;
+                }
+                panel.content.as_widget_mut().overlay(
+                    tree,
+                    child,
+                    renderer,
+                    &self.viewport,
+                    Vector::ZERO,
+                )
+            })
+            .collect();
+        (!overlays.is_empty()).then(|| overlay::Group::with_children(overlays).overlay())
+    }
+    fn index(&self) -> f32 {
+        0.5
+    }
+}
+
+impl<'a, Message: Clone + 'a> Chain<'_, 'a, Message> {
+    fn respond(
+        &mut self,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
         if matches!(event, Event::Window(cosmic::iced::window::Event::Unfocused)) {
             self.anchors.deactivate();
             self.state.keyboard_entry = None;
@@ -1237,52 +1423,6 @@ impl<'a, Message: Clone + 'a> overlay::Overlay<Message, Theme, Renderer>
                 shell.capture_event();
             }
         }
-    }
-    fn mouse_interaction(
-        &self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        let Some(index) = hit_panel(layout, cursor) else {
-            return mouse::Interaction::None;
-        };
-        let child = layout.children().nth(index).expect("hit panel layout");
-        self.panels[index]
-            .content
-            .as_widget()
-            .mouse_interaction(&self.trees[index], child, cursor, &self.viewport, renderer)
-            .max(mouse::Interaction::Idle)
-    }
-    fn overlay<'b>(
-        &'b mut self,
-        layout: Layout<'b>,
-        renderer: &Renderer,
-    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-        // Preserve arbitrary nested child overlays, including explanations for
-        // disabled rows. Base overlays are also forwarded by Host::overlay.
-        let overlays: Vec<_> = self
-            .panels
-            .iter_mut()
-            .zip(self.trees.iter_mut())
-            .zip(layout.children())
-            .filter_map(|((panel, tree), child)| {
-                if child.bounds().width == 0.0 {
-                    return None;
-                }
-                panel.content.as_widget_mut().overlay(
-                    tree,
-                    child,
-                    renderer,
-                    &self.viewport,
-                    Vector::ZERO,
-                )
-            })
-            .collect();
-        (!overlays.is_empty()).then(|| overlay::Group::with_children(overlays).overlay())
-    }
-    fn index(&self) -> f32 {
-        0.5
     }
 }
 

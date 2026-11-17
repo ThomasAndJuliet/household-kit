@@ -14,6 +14,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use crate::window::Owner;
+
 /// Pointer and keyboard targeting share this discovery delay.
 pub const INFORMATION_DELAY: Duration = Duration::from_millis(500);
 
@@ -104,6 +106,12 @@ impl Anchors {
         }
     }
     /// Register arbitrary content as a source for menus or informational hover.
+    ///
+    /// Explicit-registry form: temporary adapter A0, like
+    /// `hover_card::hover(anchors, ..)`. Callers: the Terminal composer
+    /// (`thread/view.rs`) and this crate's own host tests. Leaves the public
+    /// interface in step 2 of the window owner, when the composer moves to the
+    /// window root; window code uses [`crate::window::anchor`].
     pub fn anchor<'a, Message: 'a>(
         &self,
         id: impl Into<Id>,
@@ -114,6 +122,12 @@ impl Anchors {
     /// A menu-opening source. Outside presses over other visible triggers may
     /// reach their native children, allowing a single press to switch menus.
     /// Give a focusable trigger child the same native ID for focus restoration.
+    ///
+    /// Explicit-registry form: temporary adapter A0, like
+    /// `hover_card::hover(anchors, ..)`. Callers: the Terminal composer
+    /// (`thread/view.rs`) and this crate's own host tests. Leaves the public
+    /// interface in step 2 of the window owner, when the composer moves to the
+    /// window root; window code uses [`crate::window::trigger`].
     pub fn trigger<'a, Message: 'a>(
         &self,
         id: impl Into<Id>,
@@ -127,17 +141,17 @@ impl Anchors {
         content: Element<'a, Message>,
         trigger: bool,
     ) -> Element<'a, Message> {
-        Element::new(SourceWidget {
-            id,
-            content,
-            anchors: self.clone(),
-            trigger,
-            information: None,
-        })
+        source(Owner::Anchors(self.clone()), id, content, trigger, None)
     }
     /// Register a source and collect its current, verified layout-box report.
     /// The revision must identify the prepared content used by the caller.
     /// Wrap this in `trigger` too when it opens a menu.
+    ///
+    /// Explicit-registry form: temporary adapter A0, like
+    /// `hover_card::hover(anchors, ..)`. Callers: the Terminal composer
+    /// (`thread/view.rs`) and this crate's own host tests. Leaves the public
+    /// interface in step 2 of the window owner, when the composer moves to the
+    /// window root; window code uses [`crate::window::reported_anchor`].
     pub fn reported_anchor<'a, Message: 'a>(
         &self,
         id: impl Into<Id>,
@@ -145,13 +159,13 @@ impl Anchors {
         revision: u64,
         content: impl Into<Element<'a, Message>>,
     ) -> Element<'a, Message> {
-        Element::new(SourceWidget {
-            id: id.into(),
-            content: content.into(),
-            anchors: self.clone(),
-            trigger: false,
-            information: Some((source, revision)),
-        })
+        self::source(
+            Owner::Anchors(self.clone()),
+            id.into(),
+            content.into(),
+            false,
+            Some((source, revision)),
+        )
     }
     /// Information loss reported by the currently accepted source layout.
     /// Absence is not a claim that all information is visible.
@@ -474,10 +488,27 @@ impl Drop for RegistryTransaction {
     }
 }
 
+/// Register `content` as source `id` of the registry `owner` resolves to.
+pub(crate) fn source<'a, Message: 'a>(
+    owner: Owner,
+    id: Id,
+    content: Element<'a, Message>,
+    trigger: bool,
+    information: Option<(crate::layout::SourceId, u64)>,
+) -> Element<'a, Message> {
+    Element::new(SourceWidget {
+        id,
+        content,
+        owner,
+        trigger,
+        information,
+    })
+}
+
 struct SourceWidget<'a, Message> {
     id: Id,
     content: Element<'a, Message>,
-    anchors: Anchors,
+    owner: Owner,
     trigger: bool,
     information: Option<(crate::layout::SourceId, u64)>,
 }
@@ -496,8 +527,16 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Mess
             y: layout.bounds().y + translation.y,
             ..layout.bounds()
         };
-        self.anchors
-            .record(self.id.clone(), bounds, *viewport, self.trigger);
+        let Some(anchors) = self.owner.resolve() else {
+            return self.content.as_widget_mut().overlay(
+                &mut tree.children[0],
+                layout,
+                renderer,
+                viewport,
+                translation,
+            );
+        };
+        anchors.record(self.id.clone(), bounds, *viewport, self.trigger);
         if let Some((source, revision)) = self.information {
             let mut reports = crate::layout::SourceReports::default();
             self.content.as_widget_mut().operate(
@@ -512,7 +551,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Mess
             let report = matching.next();
             let unique = matching.next().is_none();
             let key = SourceKey::of(&self.id);
-            let mut registry = self.anchors.0.borrow_mut();
+            let mut registry = anchors.0.borrow_mut();
             registry.information.remove(&key);
             if unique
                 && registry.visible.contains_key(&key)

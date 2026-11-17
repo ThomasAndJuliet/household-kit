@@ -9,6 +9,7 @@ use crate::layout::{
 use crate::menu::{Menu, MenuMark, MenuStyle, Row};
 use crate::menu_parts::{self, RowContour, RowSlots, TooltipChoice};
 use crate::popup::{Anchors, FocusTarget, Panel};
+use crate::window::Owner;
 use cosmic::iced::advanced::widget::Id;
 use cosmic::iced::{Length, Rectangle, Size};
 use cosmic::{Element, widget};
@@ -51,7 +52,7 @@ fn keys<M>(menu: &Menu<M>) -> Vec<usize> {
 pub struct MenuSurface<M> {
     menu: Menu<M>,
     style: MenuStyle<M>,
-    anchors: Anchors,
+    owner: Owner,
     namespace: String,
     candidates: Vec<AnchorCandidate>,
     presentation: Presentation,
@@ -61,11 +62,25 @@ pub struct MenuSurface<M> {
 }
 
 impl<M: Clone + 'static> MenuSurface<M> {
+    /// Temporary adapter A0 (explicit anchors), kept while its one caller,
+    /// Terminal's `menu_builder.rs` `shared_panels` (the composer's menus),
+    /// still passes a per-tab registry; deleted in step 2 of the window owner,
+    /// when the composer moves to the window root. New code uses
+    /// [`crate::window::menu_surface`].
     pub fn new(menu: Menu<M>, style: MenuStyle<M>, anchors: Anchors, namespace: String) -> Self {
+        Self::owned(menu, style, Owner::Anchors(anchors), namespace)
+    }
+
+    pub(crate) fn owned(
+        menu: Menu<M>,
+        style: MenuStyle<M>,
+        owner: Owner,
+        namespace: String,
+    ) -> Self {
         Self {
             menu,
             style,
-            anchors,
+            owner,
             namespace,
             candidates: Attachment::below(Rectangle::default()).candidates,
             presentation: Presentation::default(),
@@ -124,7 +139,7 @@ impl<M: Clone + 'static> MenuSurface<M> {
         let mut content = Content {
             menu: self.menu,
             style: self.style,
-            anchors: self.anchors,
+            owner: self.owner,
             namespace: self.namespace,
             path: Vec::new(),
             open: path.clone(),
@@ -197,7 +212,7 @@ impl<M: Clone + 'static> MenuSurface<M> {
 struct Content<M> {
     menu: Menu<M>,
     style: MenuStyle<M>,
-    anchors: Anchors,
+    owner: Owner,
     namespace: String,
     path: Vec<usize>,
     open: Vec<usize>,
@@ -598,8 +613,8 @@ impl<M: Clone + 'static> Content<M> {
                     body,
                 )
                 .expect("default text presentation");
-                crate::hover_card::hover_box(
-                    self.anchors.clone(),
+                crate::hover_card::hover_box_owned(
+                    self.owner.clone(),
                     id.clone(),
                     row,
                     text,
@@ -611,11 +626,7 @@ impl<M: Clone + 'static> Content<M> {
             } else {
                 row
             };
-            let row = if folder {
-                self.anchors.trigger(id, row)
-            } else {
-                self.anchors.anchor(id, row)
-            };
+            let row = crate::popup::source(self.owner.clone(), id, row, folder, None);
             if inline && let Row::Folder(_, submenu) = &rows[at] {
                 let mut child = self.clone();
                 child.menu = submenu.clone();
@@ -1048,7 +1059,7 @@ mod presentation_tests {
         let content = Content {
             menu: Menu::new().folder("Effort", Menu::new().item(item)),
             style: MenuStyle { icon, body },
-            anchors: Anchors::default(),
+            owner: Owner::Anchors(Anchors::default()),
             namespace: "side-open".into(),
             path: vec![],
             open: vec![row_key("Effort", true, 0)],

@@ -50,6 +50,7 @@ pub mod text_box;
 mod text_button;
 pub mod text_menu;
 mod tooltip;
+pub mod window;
 
 pub use history::{Turn, Undoable};
 pub use level::{LEVEL_CAP, Level};

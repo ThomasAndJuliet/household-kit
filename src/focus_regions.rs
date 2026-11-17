@@ -10,6 +10,8 @@ use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, ov
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector, keyboard};
 use cosmic::{Element, Renderer, Theme};
 
+use crate::window::Owner;
+
 pub struct Group {
     pub axis: Axis,
     pub ids: Vec<Id>,
@@ -20,17 +22,30 @@ impl Group {
     }
 }
 
+/// Temporary adapter A0 (explicit anchors), kept while its one caller, the
+/// Terminal composer (`thread/view.rs`), still owns a per-tab registry;
+/// deleted in step 2 of the window owner, when the composer moves to the
+/// window root. New code uses [`crate::window::focus_regions`].
 pub fn regions<'a, M: Clone + 'a>(
     content: impl Into<Element<'a, M>>,
     editor: Id,
     groups: Vec<Group>,
     anchors: crate::popup::Anchors,
 ) -> Element<'a, M> {
+    regions_owned(content.into(), editor, groups, Owner::Anchors(anchors))
+}
+
+pub(crate) fn regions_owned<'a, M: Clone + 'a>(
+    content: Element<'a, M>,
+    editor: Id,
+    groups: Vec<Group>,
+    owner: Owner,
+) -> Element<'a, M> {
     Element::new(Regions {
-        content: content.into(),
+        content,
         editor,
         groups,
-        anchors,
+        owner,
     })
 }
 
@@ -38,7 +53,7 @@ struct Regions<'a, M> {
     content: Element<'a, M>,
     editor: Id,
     groups: Vec<Group>,
-    anchors: crate::popup::Anchors,
+    owner: Owner,
 }
 #[derive(Default)]
 struct State {
@@ -92,6 +107,15 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Regions<'a, M> {
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
+        let anchors = self.owner.resolve();
+        let menu_open = anchors
+            .as_ref()
+            .is_some_and(|anchors| !anchors.surfaces().is_empty());
+        let target = |id: &Id| {
+            if let Some(anchors) = &anchors {
+                anchors.keyboard_target(id);
+            }
+        };
         let mut probe = Probe::default();
         self.content
             .as_widget_mut()
@@ -134,9 +158,7 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Regions<'a, M> {
             state.owned = probe.focused.clone();
         } else if probe.any_focused {
             state.owned = None;
-        } else if self.anchors.surfaces().is_empty()
-            && let Some(previous) = state.owned.clone()
-        {
+        } else if !menu_open && let Some(previous) = state.owned.clone() {
             if !probe.present.contains(&previous) {
                 // Responsive forms may replace a whole group with one
                 // control. Repair focus only when no other native target
@@ -161,7 +183,7 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Regions<'a, M> {
                         renderer,
                         &mut show,
                     );
-                    self.anchors.keyboard_target(&id);
+                    target(&id);
                     state.owned = Some(id.clone());
                     probe.focused = Some(id);
                     focused_group = Some(index);
@@ -300,10 +322,8 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Regions<'a, M> {
                     renderer,
                     &mut show,
                 );
-                self.anchors.keyboard_target(&id);
-            } else {
-                self.anchors.keyboard_target(&id);
             }
+            target(&id);
             shell.capture_event();
             shell.request_redraw();
         }
