@@ -1892,6 +1892,25 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for FixedComponent<'a, Me
 // or popup state from the committed UI. Restore even when a factory panics.
 struct NamedStateGuard<F: FnOnce()>(Option<F>);
 
+thread_local! {
+    /// How many disposable measurements are under way on this thread
+    static SPECULATING: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Whether the layout under way is a disposable measurement, rather than
+/// the layout presented. Widgets that keep geometry across frames (a
+/// virtualised list's item heights, its reading position) read it then,
+/// but commit nothing: queries cannot edit retained state.
+pub fn is_speculative() -> bool {
+    SPECULATING.with(Cell::get) > 0
+}
+
+/// Mark a disposable measurement for as long as the guard lives
+pub(crate) fn speculate() -> impl Drop {
+    SPECULATING.with(|depth| depth.set(depth.get() + 1));
+    NamedStateGuard(Some(|| SPECULATING.with(|depth| depth.set(depth.get() - 1))))
+}
+
 pub(crate) fn isolate_named_state() -> impl Drop {
     let saved = tree::NAMED.with(|named| std::mem::take(&mut *named.borrow_mut()));
     NamedStateGuard(Some(move || {
@@ -1915,6 +1934,7 @@ fn measure_element_in<'a, Message>(
     // Only an unbounded intrinsic probe compresses Fill widths. At an
     // allocated finite width, native Fill columns must consume that offer.
     let _isolation = isolate_named_state();
+    let _speculation = speculate();
     let mut candidate = view();
     let mut tree = Tree::new(candidate.as_widget());
     tree.diff(candidate.as_widget_mut());

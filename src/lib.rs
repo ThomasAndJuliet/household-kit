@@ -12,6 +12,8 @@
 //!   Shift+click, and its selection drawn dimmed while unfocused.
 //! - [`short_text_box`]: the one-line text box, [`ShortTextBox`] and its
 //!   widget, sharing the text box's history, steps and keys.
+//! - [`scroll_list`]: a scrollable list of boxes, optionally virtualised,
+//!   keeping the reader's place.
 //!
 //! Plain colour maths stays in household-kit's `household-tones`; this
 //! crate turns it into libcosmic's types.
@@ -39,6 +41,7 @@ pub mod panel_state;
 pub mod popup;
 mod scroll;
 pub mod scroll_intent;
+pub mod scroll_list;
 pub mod short_text_box;
 mod switch;
 pub mod tabs;

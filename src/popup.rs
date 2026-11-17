@@ -663,6 +663,7 @@ impl<'a, Message: Clone + 'a> overlay::Overlay<Message, Theme, Renderer>
                     // and a reversible registry. No trial consumes named state or
                     // changes live focus, hover ownership, or accepted reports.
                     let _named = isolate_named_state();
+                    let _speculation = crate::layout::speculate();
                     let _registry = self.anchors.transaction(&self.base_registry);
                     for card in prefix {
                         let parent = &self.panels[card.index];
