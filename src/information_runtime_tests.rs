@@ -3,6 +3,7 @@
 use super::*;
 use crate::layout::{Alignment, AnchorCandidate, Level, Side, child};
 use cosmic::iced::advanced::renderer::Headless;
+use cosmic::iced::event::Status;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::{Font, Pixels, Point, window};
 use std::time::Instant;
@@ -882,4 +883,75 @@ fn native_keyboard_opening_targets_first_disabled_entry_while_mouse_opening_stay
     assert_eq!(focused(&mut ui, &renderer), Some(first));
     assert!(presentation(&mut ui, &renderer).is_empty());
     assert_eq!(anchors.hovered(), None);
+}
+
+fn statuses(
+    ui: &mut UserInterface<'_, Message, Theme, Renderer>,
+    renderer: &mut Renderer,
+    event: Event,
+) -> Vec<Status> {
+    let mut messages = Vec::new();
+    ui.update(
+        &[event],
+        mouse::Cursor::Unavailable,
+        renderer,
+        &mut cosmic::iced::advanced::clipboard::Null,
+        &mut messages,
+    )
+    .1
+}
+
+fn focus(ui: &mut UserInterface<'_, Message, Theme, Renderer>, renderer: &Renderer, id: &str) {
+    ui.operate(
+        renderer,
+        &mut operation::focusable::focus::<()>(Id::new(id.to_owned())),
+    );
+}
+
+/// A plain host over two rows: the first has information, the second none.
+fn plain(anchors: &Anchors) -> Host<'static, Message> {
+    let first = Id::new("plain-informed");
+    let informed = crate::hover_card::hover_box(
+        anchors.clone(),
+        first.clone(),
+        focus_target(first, widget::space().width(120).height(32)),
+        child(|_| widget::text("Shared explanation").into()),
+        vec![AnchorCandidate::new(Side::Right, Alignment::StartBounded)],
+    );
+    let bare = focus_target(Id::new("plain-bare"), widget::space().width(120).height(32));
+    host(widget::column![informed, bare]).anchors(anchors.clone())
+}
+
+#[test]
+fn alt_h_is_captured_only_when_it_opens_information() {
+    let mut renderer = renderer();
+    let anchors = Anchors::default();
+    let mut ui = UserInterface::build(
+        plain(&anchors),
+        Size::new(600.0, 400.0),
+        user_interface::Cache::new(),
+        &mut renderer,
+    );
+    let alt_h = || {
+        key(
+            keyboard::Key::Character("h".into()),
+            keyboard::Modifiers::ALT,
+        )
+    };
+    statuses(&mut ui, &mut renderer, redraw(Instant::now()));
+    focus(&mut ui, &renderer, "plain-informed");
+    assert_eq!(focused(&mut ui, &renderer), Some(Id::new("plain-informed")));
+    assert_eq!(
+        statuses(&mut ui, &mut renderer, alt_h()),
+        [Status::Captured]
+    );
+    assert!(anchors.information_visible(&Id::new("plain-informed")));
+    statuses(&mut ui, &mut renderer, named(keyboard::key::Named::Escape));
+    focus(&mut ui, &renderer, "plain-bare");
+    assert_eq!(focused(&mut ui, &renderer), Some(Id::new("plain-bare")));
+    assert_eq!(
+        statuses(&mut ui, &mut renderer, alt_h()),
+        [Status::Ignored],
+        "a control without information leaves Alt+H alone"
+    );
 }

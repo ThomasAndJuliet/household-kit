@@ -644,7 +644,7 @@ fn a_lists_keyboard_target_works_under_the_root_and_its_information_follows() {
 #[test]
 fn protected_keys_leave_escape_and_alt_h_to_the_protected_input() {
     let mut app = App::new();
-    app.focus("b-tool");
+    app.focus("b-editor");
     pointer_card(&mut app);
     app.scene.protected = true;
     let statuses = app.named(keyboard::key::Named::Escape);
@@ -656,6 +656,10 @@ fn protected_keys_leave_escape_and_alt_h_to_the_protected_input() {
     );
     assert_eq!(statuses, [Status::Ignored], "and Alt+H");
     app.scene.protected = false;
+    // Escape left the editor and dismissed the pointer card
+    app.named(keyboard::key::Named::Escape);
+    assert!(!app.informs("a-info"));
+    app.focus("b-editor");
     let statuses = app.key(
         keyboard::Key::Character("h".into()),
         keyboard::Modifiers::ALT,

@@ -357,6 +357,35 @@ impl Anchors {
             shell.request_redraw_at(at);
         }
     }
+    /// Opens the information of the focused control's source at once; false
+    /// when the control has none.
+    fn open_information_for(&self, id: &Id) -> bool {
+        let source = {
+            let registry = self.0.borrow();
+            registry
+                .focus_sources
+                .get(&SourceKey::of(id))
+                .cloned()
+                .or_else(|| {
+                    registry
+                        .help
+                        .contains(&SourceKey::of(id))
+                        .then(|| id.clone())
+                })
+        };
+        let Some(source) = source else {
+            return false;
+        };
+        self.target_at(&source, false, Instant::now());
+        let mut registry = self.0.borrow_mut();
+        if registry.hovered.as_ref() == Some(&source) && registry.active {
+            registry.deadline = None;
+            registry.opened = true;
+            registry.suppressed = false;
+            return true;
+        }
+        false
+    }
     pub(crate) fn information_key<Message>(
         &self,
         event: &Event,
@@ -371,34 +400,15 @@ impl Anchors {
             && !modifiers.logo()
             && matches!(key, keyboard::Key::Character(value) if value.eq_ignore_ascii_case("h"));
         if information {
-            if let Some(id) = focused {
-                let source = {
-                    let registry = self.0.borrow();
-                    registry
-                        .focus_sources
-                        .get(&SourceKey::of(id))
-                        .cloned()
-                        .or_else(|| {
-                            registry
-                                .help
-                                .contains(&SourceKey::of(id))
-                                .then(|| id.clone())
-                        })
-                };
-                if let Some(source) = source {
-                    self.target_at(&source, false, Instant::now());
-                    let mut registry = self.0.borrow_mut();
-                    if registry.hovered.as_ref() == Some(&source) && registry.active {
-                        registry.deadline = None;
-                        registry.opened = true;
-                        registry.suppressed = false;
-                    }
-                }
+            // A shortcut must not swallow a key it does not use: only an
+            // Alt+H that opened information is handled
+            let opened = focused.is_some_and(|id| self.open_information_for(id));
+            if opened {
+                shell.invalidate_layout();
+                shell.request_redraw();
+                shell.capture_event();
             }
-            shell.invalidate_layout();
-            shell.request_redraw();
-            shell.capture_event();
-            return true;
+            return opened;
         }
         if is_escape(event) && self.dismiss_information() {
             shell.invalidate_layout();
