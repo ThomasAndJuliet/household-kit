@@ -38,7 +38,9 @@ use std::rc::Rc;
 use cosmic::iced::advanced::widget::operation::Scrollable;
 use cosmic::iced::advanced::widget::{Id, Operation, Tree, tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
-use cosmic::iced::widget::scrollable::{self, AbsoluteOffset, Direction, RelativeOffset, Scrollbar, Viewport};
+use cosmic::iced::widget::scrollable::{
+    self, AbsoluteOffset, Direction, RelativeOffset, Scrollbar, Viewport,
+};
 use cosmic::iced::{Event, Length, Padding, Point, Rectangle, Size, Task, Vector};
 use cosmic::{Element, Renderer, Theme, widget};
 
@@ -48,8 +50,8 @@ mod estimate;
 mod geometry;
 
 pub use estimate::{ContentSummary, Estimate, EstimateClass, MONO_SCALE, Segment, TextMetrics};
-pub use geometry::{Counts, ItemSpec, Last, Place, mix};
 use geometry::Geometry;
+pub use geometry::{Counts, ItemSpec, Last, Place, mix};
 
 use crate::scroll::{SCROLLBAR_GAP, SCROLLBAR_WIDTH};
 
@@ -110,7 +112,11 @@ impl<K: Copy + Eq + Hash> ListState<K> {
 
     /// A list that follows its end as items arrive, as a conversation does
     pub fn following_end() -> Self {
-        Self { follow: true, position: RelativeOffset { x: 0.0, y: 1.0 }.into(), ..Self::new() }
+        Self {
+            follow: true,
+            position: RelativeOffset { x: 0.0, y: 1.0 }.into(),
+            ..Self::new()
+        }
     }
 
     /// The scrollable's id, for operations the list does not offer yet
@@ -134,7 +140,11 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         // list has kept their place already, in the same layout
         let at_end = offset.y + bounds.height >= content.height - 0.5;
         self.follow = viewport.is_pinned_to_end() || (viewport.is_user_scroll() && at_end);
-        self.position = if self.follow { RelativeOffset { x: 0.0, y: 1.0 }.into() } else { viewport.position() };
+        self.position = if self.follow {
+            RelativeOffset { x: 0.0, y: 1.0 }.into()
+        } else {
+            viewport.position()
+        };
         self.page = bounds.height;
         self.content = content.height;
         self.offset = Some(offset.y);
@@ -177,7 +187,13 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     pub fn follow_end<T: Send + 'static>(&mut self) -> Task<T> {
         self.follow = true;
         self.position = RelativeOffset { x: 0.0, y: 1.0 }.into();
-        scrollable::snap_to(self.id.clone(), RelativeOffset { x: None, y: Some(1.0) })
+        scrollable::snap_to(
+            self.id.clone(),
+            RelativeOffset {
+                x: None,
+                y: Some(1.0),
+            },
+        )
     }
 
     /// Pin a deliberate return to the end, only if the user has not
@@ -188,9 +204,19 @@ impl<K: Copy + Eq + Hash> ListState<K> {
             fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
                 operate(self);
             }
-            fn scrollable(&mut self, id: Option<&Id>, bounds: Rectangle, content: Rectangle, translation: Vector, state: &mut dyn Scrollable) {
+            fn scrollable(
+                &mut self,
+                id: Option<&Id>,
+                bounds: Rectangle,
+                content: Rectangle,
+                translation: Vector,
+                state: &mut dyn Scrollable,
+            ) {
                 if id == Some(&self.0) && translation.y + bounds.height >= content.height - 0.5 {
-                    state.snap_to(RelativeOffset { x: None, y: Some(1.0) });
+                    state.snap_to(RelativeOffset {
+                        x: None,
+                        y: Some(1.0),
+                    });
                 }
             }
         }
@@ -203,9 +229,23 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         if pages < 0.0 {
             self.follow = false;
         }
-        let page = if self.page > 0.0 { self.page * 0.9 } else { 400.0 };
-        let scroll = scrollable::scroll_by(self.id.clone(), AbsoluteOffset { x: 0.0, y: pages * page });
-        if pages > 0.0 { scroll.chain(self.pin_to_end()) } else { scroll }
+        let page = if self.page > 0.0 {
+            self.page * 0.9
+        } else {
+            400.0
+        };
+        let scroll = scrollable::scroll_by(
+            self.id.clone(),
+            AbsoluteOffset {
+                x: 0.0,
+                y: pages * page,
+            },
+        );
+        if pages > 0.0 {
+            scroll.chain(self.pin_to_end())
+        } else {
+            scroll
+        }
     }
 
     /// Bring item `key` into view, built or not, and keep it there as the
@@ -236,7 +276,13 @@ impl<K: Copy + Eq + Hash> ListState<K> {
             return Some(Task::none());
         }
         drop(geometry);
-        Some(scrollable::scroll_to(self.id.clone(), AbsoluteOffset { x: None, y: Some(y) }))
+        Some(scrollable::scroll_to(
+            self.id.clone(),
+            AbsoluteOffset {
+                x: None,
+                y: Some(y),
+            },
+        ))
     }
 
     /// Where the view's top stands, as last scrolled or at the end
@@ -298,7 +344,11 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     /// the room around them
     pub fn content_height(&self) -> f32 {
         let geometry = self.geometry.borrow();
-        if geometry.last.is_some() || self.content <= 0.0 { geometry.content_height() } else { self.content }
+        if geometry.last.is_some() || self.content <= 0.0 {
+            geometry.content_height()
+        } else {
+            self.content
+        }
     }
 
     /// The view as last laid out: its top, its content's height and its
@@ -330,7 +380,11 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     /// The keys of the items laid out at the current width, for tests
     pub fn measured_keys(&self) -> Vec<K> {
         let geometry = self.geometry.borrow();
-        (0..geometry.len()).map(|i| geometry.item(i)).filter(|item| item.shown && item.exact).map(|item| item.key).collect()
+        (0..geometry.len())
+            .map(|i| geometry.item(i))
+            .filter(|item| item.shown && item.exact)
+            .map(|item| item.key)
+            .collect()
     }
 
     /// What the list did, for tests and benchmarks
@@ -347,14 +401,20 @@ pub struct ListChild<'a, Message> {
 
 impl<'a, Message> ListChild<'a, Message> {
     pub fn new(element: impl Into<Element<'a, Message>>) -> Self {
-        Self { element: element.into(), provisional: false }
+        Self {
+            element: element.into(),
+            provisional: false,
+        }
     }
 
     /// A child standing in for content still being prepared (text a worker
     /// has not shaped yet): room is kept at the item's estimated height,
     /// not at the height of what stands in for it meanwhile
     pub fn provisional(element: impl Into<Element<'a, Message>>) -> Self {
-        Self { element: element.into(), provisional: true }
+        Self {
+            element: element.into(),
+            provisional: true,
+        }
     }
 }
 
@@ -372,7 +432,9 @@ pub enum ScrollbarLane {
 /// Declare a vertical scrollable list whose retained state is `state`.
 /// Add its leading children, then its [`ScrollList::items`], then its
 /// trailing children, in that order
-pub fn scroll_list<'a, K: Copy + Eq + Hash + 'static, Message: 'a>(state: &'a ListState<K>) -> ScrollList<'a, K, Message> {
+pub fn scroll_list<'a, K: Copy + Eq + Hash + 'static, Message: 'a>(
+    state: &'a ListState<K>,
+) -> ScrollList<'a, K, Message> {
     ScrollList {
         state,
         virtualised: false,
@@ -471,7 +533,10 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
 
     /// Place or decorate the column inside the scrollable: centred, on a
     /// page's colour, under a context menu of its free space
-    pub fn map_content(mut self, map: impl FnOnce(Element<'a, Message>) -> Element<'a, Message> + 'a) -> Self {
+    pub fn map_content(
+        mut self,
+        map: impl FnOnce(Element<'a, Message>) -> Element<'a, Message> + 'a,
+    ) -> Self {
         self.content = Some(Box::new(map));
         self
     }
@@ -484,7 +549,11 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
     /// A child above the items
     pub fn leading(mut self, element: impl Into<Element<'a, Message>>) -> Self {
         debug_assert!(!self.items_added, "leading children come before the items");
-        let gap = if self.anything_before() { self.spacing } else { 0.0 };
+        let gap = if self.anything_before() {
+            self.spacing
+        } else {
+            0.0
+        };
         let key = Key::Leading(self.children.len());
         self.push(key, Role::Leading(gap), element.into());
         self
@@ -507,8 +576,15 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
         debug_assert!(!self.items_added, "a list has one run of items");
         let leading = !self.children.is_empty();
         let revision = mix(mix(revision, len as u64), u64::from(leading));
-        self.state.geometry.borrow_mut().sync(revision, len, leading, spec, estimate);
-        let window = if self.virtualised { self.state.window() } else { 0..len };
+        self.state
+            .geometry
+            .borrow_mut()
+            .sync(revision, len, leading, spec, estimate);
+        let window = if self.virtualised {
+            self.state.window()
+        } else {
+            0..len
+        };
         let mut built = 0;
         for index in window {
             if !self.state.geometry.borrow().item(index).shown {
@@ -516,7 +592,10 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
             }
             built += 1;
             let key = self.state.geometry.borrow().item(index).key;
-            let ListChild { element, provisional } = child(index);
+            let ListChild {
+                element,
+                provisional,
+            } = child(index);
             self.push(Key::Item(key), Role::Item(index, provisional), element);
         }
         self.state.geometry.borrow_mut().counts.built += built;
@@ -526,7 +605,11 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
 
     /// A child below the items
     pub fn trailing(mut self, element: impl Into<Element<'a, Message>>) -> Self {
-        let gap = if self.anything_before() { self.spacing } else { 0.0 };
+        let gap = if self.anything_before() {
+            self.spacing
+        } else {
+            0.0
+        };
         let key = Key::Trailing(self.children.len());
         self.push(key, Role::Trailing(gap), element.into());
         self
@@ -539,7 +622,9 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
     }
 }
 
-impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> From<ScrollList<'a, K, Message>> for Element<'a, Message> {
+impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> From<ScrollList<'a, K, Message>>
+    for Element<'a, Message>
+{
     fn from(list: ScrollList<'a, K, Message>) -> Self {
         let state = list.state;
         let column = Element::new(Column {
@@ -556,9 +641,12 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> From<ScrollList<'a, K, Mess
             None => column,
         };
         let direction = match list.scrollbar {
-            ScrollbarLane::Lane => {
-                Direction::Vertical(Scrollbar::new().width(SCROLLBAR_WIDTH).scroller_width(SCROLLBAR_WIDTH).spacing(SCROLLBAR_GAP))
-            }
+            ScrollbarLane::Lane => Direction::Vertical(
+                Scrollbar::new()
+                    .width(SCROLLBAR_WIDTH)
+                    .scroller_width(SCROLLBAR_WIDTH)
+                    .spacing(SCROLLBAR_GAP),
+            ),
             ScrollbarLane::Hidden => Direction::Vertical(Scrollbar::hidden()),
         };
         let mut scroll = widget::scrollable(content)
@@ -570,7 +658,12 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> From<ScrollList<'a, K, Mess
         if let Some(on_action) = list.on_action {
             scroll = scroll.on_scroll(move |viewport| on_action(ListAction::Scrolled(viewport)));
         }
-        Element::new(Anchored { content: scroll.into(), id: state.id.clone(), geometry: state.geometry.clone(), follow: state.follow })
+        Element::new(Anchored {
+            content: scroll.into(),
+            id: state.id.clone(),
+            geometry: state.geometry.clone(),
+            follow: state.follow,
+        })
     }
 }
 
@@ -591,17 +684,24 @@ struct Column<'a, K, Message> {
     roles: Vec<Role>,
 }
 
-impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> for Column<'_, K, Message> {
+impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer>
+    for Column<'_, K, Message>
+{
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<ColumnState<K>>()
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(ColumnState { keys: self.keys.clone() })
+        tree::State::new(ColumnState {
+            keys: self.keys.clone(),
+        })
     }
 
     fn children(&self) -> Vec<Tree> {
-        self.children.iter().map(|child| Tree::new(child.as_widget())).collect()
+        self.children
+            .iter()
+            .map(|child| Tree::new(child.as_widget()))
+            .collect()
     }
 
     fn diff(&mut self, tree: &mut Tree) {
@@ -614,13 +714,20 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> fo
         // Through the tree's own diff, which makes the state afresh where
         // the widget under a key changed kind, and gives named widgets back
         // the state the runtime set aside for them
-        let mut old: HashMap<Key<K>, Tree> = state.keys.iter().copied().zip(std::mem::take(&mut tree.children)).collect();
+        let mut old: HashMap<Key<K>, Tree> = state
+            .keys
+            .iter()
+            .copied()
+            .zip(std::mem::take(&mut tree.children))
+            .collect();
         tree.children = self
             .children
             .iter_mut()
             .zip(&self.keys)
             .map(|(child, key)| {
-                let mut child_tree = old.remove(key).unwrap_or_else(|| Tree::new(child.as_widget()));
+                let mut child_tree = old
+                    .remove(key)
+                    .unwrap_or_else(|| Tree::new(child.as_widget()));
                 child_tree.diff(child.as_widget_mut());
                 child_tree
             })
@@ -632,13 +739,25 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> fo
         Size::new(Length::Fill, Length::Shrink)
     }
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
-        let limits = limits.max_width(self.max_width).width(Length::Fill).height(Length::Shrink);
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let limits = limits
+            .max_width(self.max_width)
+            .width(Length::Fill)
+            .height(Length::Shrink);
         let width = limits.max().width;
         let inner = (width - self.padding.left - self.padding.right).max(0.0);
         // As a column lays its children out, compressed as the scrollable
         // asks
-        let child_limits = layout::Limits::with_compression(Size::ZERO, Size::new(inner, f32::INFINITY), Size::new(false, limits.compression().height));
+        let child_limits = layout::Limits::with_compression(
+            Size::ZERO,
+            Size::new(inner, f32::INFINITY),
+            Size::new(false, limits.compression().height),
+        );
         // A disposable measurement reads the geometry but commits nothing
         // to it: the retained heights are those of the layout presented
         let commit = !crate::layout::is_speculative();
@@ -652,8 +771,15 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> fo
         let mut items_top = None;
         let mut after_items = false;
         let mut nodes = Vec::with_capacity(self.children.len());
-        for ((child, child_tree), role) in self.children.iter_mut().zip(&mut tree.children).zip(&self.roles) {
-            let node = child.as_widget_mut().layout(child_tree, renderer, &child_limits);
+        for ((child, child_tree), role) in self
+            .children
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(&self.roles)
+        {
+            let node = child
+                .as_widget_mut()
+                .layout(child_tree, renderer, &child_limits);
             let height = node.size().height;
             match *role {
                 Role::Leading(gap) => {
@@ -691,11 +817,27 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> fo
         layout::Node::with_children(size, nodes)
     }
 
-    fn operate(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation) {
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
         operation.container(None, layout.bounds());
         operation.traverse(&mut |operation| {
-            for ((child, state), child_layout) in self.children.iter_mut().zip(&mut tree.children).zip(layout.children()) {
-                child.as_widget_mut().operate(state, child_layout.with_virtual_offset(layout.virtual_offset()), renderer, operation);
+            for ((child, state), child_layout) in self
+                .children
+                .iter_mut()
+                .zip(&mut tree.children)
+                .zip(layout.children())
+            {
+                child.as_widget_mut().operate(
+                    state,
+                    child_layout.with_virtual_offset(layout.virtual_offset()),
+                    renderer,
+                    operation,
+                );
             }
         });
     }
@@ -711,7 +853,12 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> fo
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        for ((child, state), child_layout) in self.children.iter_mut().zip(&mut tree.children).zip(layout.children()) {
+        for ((child, state), child_layout) in self
+            .children
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(layout.children())
+        {
             child.as_widget_mut().update(
                 state,
                 event,
@@ -725,13 +872,26 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> fo
         }
     }
 
-    fn mouse_interaction(&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle, renderer: &Renderer) -> mouse::Interaction {
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
         self.children
             .iter()
             .zip(&tree.children)
             .zip(layout.children())
             .map(|((child, state), child_layout)| {
-                child.as_widget().mouse_interaction(state, child_layout.with_virtual_offset(layout.virtual_offset()), cursor, viewport, renderer)
+                child.as_widget().mouse_interaction(
+                    state,
+                    child_layout.with_virtual_offset(layout.virtual_offset()),
+                    cursor,
+                    viewport,
+                    renderer,
+                )
             })
             .max()
             .unwrap_or_default()
@@ -757,7 +917,15 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> fo
             .zip(layout.children())
             .filter(|(_, child_layout)| child_layout.bounds().intersects(viewport))
         {
-            child.as_widget().draw(state, renderer, theme, style, child_layout.with_virtual_offset(layout.virtual_offset()), cursor, viewport);
+            child.as_widget().draw(
+                state,
+                renderer,
+                theme,
+                style,
+                child_layout.with_virtual_offset(layout.virtual_offset()),
+                cursor,
+                viewport,
+            );
         }
     }
 
@@ -769,7 +937,14 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> fo
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-        overlay::from_children(&mut self.children, tree, layout, renderer, viewport, translation)
+        overlay::from_children(
+            &mut self.children,
+            tree,
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
     }
 
     fn drag_destinations(
@@ -779,8 +954,15 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer> fo
         renderer: &Renderer,
         dnd_rectangles: &mut cosmic::iced::advanced::clipboard::DndDestinationRectangles,
     ) {
-        for ((child, state), child_layout) in self.children.iter().zip(&state.children).zip(layout.children()) {
-            child.as_widget().drag_destinations(state, child_layout, renderer, dnd_rectangles);
+        for ((child, state), child_layout) in self
+            .children
+            .iter()
+            .zip(&state.children)
+            .zip(layout.children())
+        {
+            child
+                .as_widget()
+                .drag_destinations(state, child_layout, renderer, dnd_rectangles);
         }
     }
 }
@@ -796,11 +978,21 @@ struct Probe {
 impl Operation for Probe {
     fn traverse(&mut self, _operate: &mut dyn FnMut(&mut dyn Operation)) {}
 
-    fn scrollable(&mut self, id: Option<&Id>, bounds: Rectangle, content: Rectangle, translation: Vector, state: &mut dyn Scrollable) {
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        content: Rectangle,
+        translation: Vector,
+        state: &mut dyn Scrollable,
+    ) {
         if id == Some(&self.id) {
             self.found = Some((bounds, content, translation));
             if let Some(y) = self.scroll_to {
-                state.scroll_to(AbsoluteOffset { x: None, y: Some(y) });
+                state.scroll_to(AbsoluteOffset {
+                    x: None,
+                    y: Some(y),
+                });
             }
         }
     }
@@ -816,9 +1008,21 @@ struct Anchored<'a, K, Message> {
 }
 
 impl<K: Copy + Eq + Hash, Message> Anchored<'_, K, Message> {
-    fn probe(&mut self, tree: &mut Tree, renderer: &Renderer, node: &layout::Node, scroll_to: Option<f32>) -> Option<(Rectangle, Rectangle, Vector)> {
-        let mut probe = Probe { id: self.id.clone(), found: None, scroll_to };
-        self.content.as_widget_mut().operate(tree, Layout::new(node), renderer, &mut probe);
+    fn probe(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        node: &layout::Node,
+        scroll_to: Option<f32>,
+    ) -> Option<(Rectangle, Rectangle, Vector)> {
+        let mut probe = Probe {
+            id: self.id.clone(),
+            found: None,
+            scroll_to,
+        };
+        self.content
+            .as_widget_mut()
+            .operate(tree, Layout::new(node), renderer, &mut probe);
         probe.found
     }
 }
@@ -826,10 +1030,18 @@ impl<K: Copy + Eq + Hash, Message> Anchored<'_, K, Message> {
 impl<K: Copy + Eq + Hash, Message> Widget<Message, Theme, Renderer> for Anchored<'_, K, Message> {
     forward_widget!(Message, Theme, Renderer; children, diff, size, size_hint, draw, update, operate, a11y_nodes, mouse_interaction, overlay, drag_destinations);
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         // A disposable measurement neither scrolls nor moves the place
         if crate::layout::is_speculative() {
-            return self.content.as_widget_mut().layout(&mut tree.children[0], renderer, limits);
+            return self
+                .content
+                .as_widget_mut()
+                .layout(&mut tree.children[0], renderer, limits);
         }
         // Where the scrollable's top stands now, against the layout it had
         let last = self.geometry.borrow().last;
@@ -838,11 +1050,17 @@ impl<K: Copy + Eq + Hash, Message> Widget<Message, Theme, Renderer> for Anchored
                 Size::new(last.bounds.0, last.bounds.1),
                 vec![layout::Node::new(Size::new(last.content.0, last.content.1))],
             );
-            self.probe(&mut tree.children[0], renderer, &node, None).map(|(_, _, translation)| translation.y)
+            self.probe(&mut tree.children[0], renderer, &node, None)
+                .map(|(_, _, translation)| translation.y)
         });
         self.geometry.borrow_mut().begin_layout(before);
-        let node = self.content.as_widget_mut().layout(&mut tree.children[0], renderer, limits);
-        let Some((bounds, content, translation)) = self.probe(&mut tree.children[0], renderer, &node, None) else {
+        let node = self
+            .content
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits);
+        let Some((bounds, content, translation)) =
+            self.probe(&mut tree.children[0], renderer, &node, None)
+        else {
             return node;
         };
         let mut offset = translation.y;
@@ -858,7 +1076,11 @@ impl<K: Copy + Eq + Hash, Message> Widget<Message, Theme, Renderer> for Anchored
                 offset = target;
             }
         }
-        self.geometry.borrow_mut().end_layout(offset, (bounds.width, bounds.height), (content.width, content.height));
+        self.geometry.borrow_mut().end_layout(
+            offset,
+            (bounds.width, bounds.height),
+            (content.width, content.height),
+        );
         node
     }
 }

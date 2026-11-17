@@ -38,20 +38,30 @@ impl ContentSummary {
         let mut prose = 0usize;
         let mut code: Option<Vec<u32>> = None;
         for line in text.lines() {
-            let fence = line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~");
+            let fence =
+                line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~");
             match (&mut code, fence) {
                 (Some(lines), false) => lines.push(line.chars().count() as u32),
-                (Some(_), true) => segments.push(Segment::Mono { lines: code.take().unwrap_or_default(), scale: MONO_SCALE }),
+                (Some(_), true) => segments.push(Segment::Mono {
+                    lines: code.take().unwrap_or_default(),
+                    scale: MONO_SCALE,
+                }),
                 (None, true) => {
                     if prose > 0 {
-                        segments.push(Segment::Prose { chars: prose as u32, scale: 1.0 });
+                        segments.push(Segment::Prose {
+                            chars: prose as u32,
+                            scale: 1.0,
+                        });
                         prose = 0;
                     }
                     code = Some(Vec::new());
                 }
                 (None, false) if line.trim().is_empty() => {
                     if prose > 0 {
-                        segments.push(Segment::Prose { chars: prose as u32, scale: 1.0 });
+                        segments.push(Segment::Prose {
+                            chars: prose as u32,
+                            scale: 1.0,
+                        });
                         prose = 0;
                     }
                 }
@@ -59,22 +69,40 @@ impl ContentSummary {
             }
         }
         if let Some(lines) = code {
-            segments.push(Segment::Mono { lines, scale: MONO_SCALE });
+            segments.push(Segment::Mono {
+                lines,
+                scale: MONO_SCALE,
+            });
         }
         if prose > 0 || segments.is_empty() {
-            segments.push(Segment::Prose { chars: prose as u32, scale: 1.0 });
+            segments.push(Segment::Prose {
+                chars: prose as u32,
+                scale: 1.0,
+            });
         }
-        Self { segments, indent: 0.0 }
+        Self {
+            segments,
+            indent: 0.0,
+        }
     }
 
     /// One line of running text, as a row's title is
     pub fn of_text(text: &str, scale: f32) -> Self {
-        Self { segments: vec![Segment::Prose { chars: text.chars().count() as u32, scale }], indent: 0.0 }
+        Self {
+            segments: vec![Segment::Prose {
+                chars: text.chars().count() as u32,
+                scale,
+            }],
+            indent: 0.0,
+        }
     }
 
     /// Monospaced text, as a tool's output shows: its lines exactly
     pub fn mono(text: &str, scale: f32) -> Segment {
-        Segment::Mono { lines: line_lengths(text), scale }
+        Segment::Mono {
+            lines: line_lengths(text),
+            scale,
+        }
     }
 }
 
@@ -83,7 +111,9 @@ pub const MONO_SCALE: f32 = 0.88;
 
 fn line_lengths(text: &str) -> Vec<u32> {
     let text = text.strip_suffix('\n').unwrap_or(text);
-    text.split('\n').map(|line| line.chars().count() as u32).collect()
+    text.split('\n')
+        .map(|line| line.chars().count() as u32)
+        .collect()
 }
 
 /// The text measures an estimate needs, as the list's body text is set
@@ -103,7 +133,13 @@ pub struct TextMetrics {
 
 impl Default for TextMetrics {
     fn default() -> Self {
-        Self { size: 15.0, line_height: 1.5, advance: 0.5, mono_advance: 0.6, code_scale: 1.0 }
+        Self {
+            size: 15.0,
+            line_height: 1.5,
+            advance: 0.5,
+            mono_advance: 0.6,
+            code_scale: 1.0,
+        }
     }
 }
 
@@ -129,7 +165,9 @@ impl TextMetrics {
                     // and per wrap of a long one
                     let mono = size * scale * self.code_scale;
                     let pad = size * 0.5;
-                    let columns = ((width - 2.0 * pad) / (mono * self.mono_advance)).floor().max(1.0) as u32;
+                    let columns = ((width - 2.0 * pad) / (mono * self.mono_advance))
+                        .floor()
+                        .max(1.0) as u32;
                     let rows: u32 = lines.iter().map(|len| len.div_ceil(columns).max(1)).sum();
                     rows.max(1) as f32 * mono * self.line_height + 2.0 * pad
                 }
@@ -153,7 +191,10 @@ pub enum Estimate {
     /// Its content, at the list's width, and `around` body ems of room
     /// around it (a label, a header). The list learns the ratio of laid-out
     /// to estimated content per class
-    Content { summary: ContentSummary, around: f32 },
+    Content {
+        summary: ContentSummary,
+        around: f32,
+    },
     /// About `ems` body ems tall, whatever the width, as a closed card or
     /// a one-line row is. The list learns the actual height per class
     Fixed { ems: f32 },
@@ -161,7 +202,10 @@ pub enum Estimate {
 
 impl Default for Estimate {
     fn default() -> Self {
-        Self::Content { summary: ContentSummary::default(), around: 0.0 }
+        Self::Content {
+            summary: ContentSummary::default(),
+            around: 0.0,
+        }
     }
 }
 
@@ -171,10 +215,22 @@ mod tests {
 
     #[test]
     fn monospaced_lines_are_counted_exactly() {
-        let metrics = TextMetrics { size: 10.0, line_height: 1.5, advance: 0.5, mono_advance: 0.6, code_scale: 1.0 };
+        let metrics = TextMetrics {
+            size: 10.0,
+            line_height: 1.5,
+            advance: 0.5,
+            mono_advance: 0.6,
+            code_scale: 1.0,
+        };
         // 10 px per em, code at 8.8 px, 5.28 px per column: 100 px of plate
         // less 10 px of padding holds 17 columns
-        let summary = ContentSummary { segments: vec![Segment::Mono { lines: vec![17, 18, 0, 35], scale: 0.88 }], indent: 0.0 };
+        let summary = ContentSummary {
+            segments: vec![Segment::Mono {
+                lines: vec![17, 18, 0, 35],
+                scale: 0.88,
+            }],
+            indent: 0.0,
+        };
         let rows = 1 + 2 + 1 + 3;
         let expected = rows as f32 * 8.8 * 1.5 + 10.0;
         assert!((metrics.estimate(&summary, 100.0) - expected).abs() < 0.01);
@@ -186,9 +242,18 @@ mod tests {
         assert_eq!(
             summary.segments,
             vec![
-                Segment::Prose { chars: 14, scale: 1.0 },
-                Segment::Mono { lines: vec![2, 4], scale: MONO_SCALE },
-                Segment::Prose { chars: 6, scale: 1.0 },
+                Segment::Prose {
+                    chars: 14,
+                    scale: 1.0
+                },
+                Segment::Mono {
+                    lines: vec![2, 4],
+                    scale: MONO_SCALE
+                },
+                Segment::Prose {
+                    chars: 6,
+                    scale: 1.0
+                },
             ]
         );
     }

@@ -1908,7 +1908,9 @@ pub fn is_speculative() -> bool {
 /// Mark a disposable measurement for as long as the guard lives
 pub(crate) fn speculate() -> impl Drop {
     SPECULATING.with(|depth| depth.set(depth.get() + 1));
-    NamedStateGuard(Some(|| SPECULATING.with(|depth| depth.set(depth.get() - 1))))
+    NamedStateGuard(Some(|| {
+        SPECULATING.with(|depth| depth.set(depth.get() - 1))
+    }))
 }
 
 pub(crate) fn isolate_named_state() -> impl Drop {

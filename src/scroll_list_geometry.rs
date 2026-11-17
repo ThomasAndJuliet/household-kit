@@ -219,7 +219,10 @@ impl<K> Default for Geometry<K> {
 
 /// A fast mixing of what a revision is made of
 pub fn mix(hash: u64, value: u64) -> u64 {
-    (hash ^ value).wrapping_mul(0x0100_0000_01b3).rotate_left(23) ^ (value >> 7)
+    (hash ^ value)
+        .wrapping_mul(0x0100_0000_01b3)
+        .rotate_left(23)
+        ^ (value >> 7)
 }
 
 /// The width estimates are made for before any layout
@@ -256,7 +259,10 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
     /// Forget every item, keeping the counts
     pub fn clear(&mut self) {
         let counts = self.counts;
-        *self = Self { counts, ..Self::default() };
+        *self = Self {
+            counts,
+            ..Self::default()
+        };
     }
 
     /// Bring the items up to date, unless `revision` says nothing changed
@@ -265,7 +271,14 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
     /// them, the first shown item has no gap. A pass over the specs,
     /// without allocating, when only content changed; rebuilt when items
     /// came, went or moved
-    pub fn sync(&mut self, revision: u64, len: usize, leading: bool, told: impl Fn(usize) -> ItemSpec<K>, estimate: impl Fn(usize) -> Estimate) {
+    pub fn sync(
+        &mut self,
+        revision: u64,
+        len: usize,
+        leading: bool,
+        told: impl Fn(usize) -> ItemSpec<K>,
+        estimate: impl Fn(usize) -> Estimate,
+    ) {
         if self.synced == Some(revision) {
             return;
         }
@@ -274,15 +287,24 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
         let first = std::cell::Cell::new(!leading);
         let spec = |i: usize| {
             let spec = told(i);
-            if spec.shown && first.replace(false) { ItemSpec { gap: 0.0, ..spec } } else { spec }
+            if spec.shown && first.replace(false) {
+                ItemSpec { gap: 0.0, ..spec }
+            } else {
+                spec
+            }
         };
-        let same_order = len == self.items.len() && (0..len).all(|i| self.items[i].key == told(i).key);
+        let same_order =
+            len == self.items.len() && (0..len).all(|i| self.items[i].key == told(i).key);
         if same_order {
             let mut changed = false;
             for i in 0..len {
                 let s = spec(i);
                 let item = &self.items[i];
-                if item.revision == s.revision && item.class == s.class && item.shown == s.shown && item.gap == s.gap {
+                if item.revision == s.revision
+                    && item.class == s.class
+                    && item.shown == s.shown
+                    && item.gap == s.gap
+                {
                     continue;
                 }
                 changed = true;
@@ -296,7 +318,10 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
             return;
         }
         self.counts.passes += 1;
-        let mut old: HashMap<K, Item<K>> = std::mem::take(&mut self.items).into_iter().map(|item| (item.key, item)).collect();
+        let mut old: HashMap<K, Item<K>> = std::mem::take(&mut self.items)
+            .into_iter()
+            .map(|item| (item.key, item))
+            .collect();
         let mut items = Vec::with_capacity(len);
         for i in 0..len {
             let s = spec(i);
@@ -312,7 +337,11 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
                         item.shown = s.shown;
                         item.exact = false;
                         item.previous = None;
-                        item.height = if s.shown { self.estimate_of(&item) } else { 0.0 };
+                        item.height = if s.shown {
+                            self.estimate_of(&item)
+                        } else {
+                            0.0
+                        };
                     }
                     item
                 }
@@ -339,8 +368,17 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
             items.push(item);
         }
         self.items = items;
-        self.by_key = self.items.iter().enumerate().map(|(i, item)| (item.key, i)).collect();
-        debug_assert_eq!(self.by_key.len(), self.items.len(), "every key in a list is unique");
+        self.by_key = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| (item.key, i))
+            .collect();
+        debug_assert_eq!(
+            self.by_key.len(),
+            self.items.len(),
+            "every key in a list is unique"
+        );
         self.positions = Positions::new(self.items.iter().map(|item| item.height).collect());
     }
 
@@ -383,7 +421,11 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
 
     /// The width estimates are made for: the last laid out, or a likely one
     fn estimate_width(&self) -> f32 {
-        if self.width > 0.0 { self.width } else { LIKELY_WIDTH }
+        if self.width > 0.0 {
+            self.width
+        } else {
+            LIKELY_WIDTH
+        }
     }
 
     /// The height `item` is estimated to take at the current width
@@ -392,7 +434,11 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
         let height = match &item.estimate {
             Estimate::Fixed { ems } => self.learned.get(&item.class).copied().unwrap_or(ems * size),
             Estimate::Content { around, .. } if item.content.is_some() => {
-                let around = self.around.get(&item.class).copied().unwrap_or(around * size);
+                let around = self
+                    .around
+                    .get(&item.class)
+                    .copied()
+                    .unwrap_or(around * size);
                 item.content.unwrap_or_default() + around
             }
             Estimate::Content { summary, around } => {
@@ -481,7 +527,9 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
     /// current width: its estimate, while the list has not laid it out, is
     /// that and the room its class takes around it. O(log n)
     pub fn content_height_known(&mut self, key: K, height: f32) {
-        let Some(index) = self.index_of(key) else { return };
+        let Some(index) = self.index_of(key) else {
+            return;
+        };
         let item = &mut self.items[index];
         if item.content == Some(height) {
             return;
@@ -525,7 +573,11 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
             return None;
         }
         let relative = y - self.top;
-        let mut index = if relative <= 0.0 { 0 } else { self.positions.find(relative) };
+        let mut index = if relative <= 0.0 {
+            0
+        } else {
+            self.positions.find(relative)
+        };
         // Past the end of the one it falls in (in its gap's place below)
         while index < self.items.len() {
             let item = &self.items[index];
@@ -588,7 +640,12 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
     pub fn end_layout(&mut self, offset: f32, bounds: (f32, f32), content: (f32, f32)) {
         self.pending = None;
         self.moved = 0.0;
-        self.last = Some(Last { offset, place: self.place_at(offset), bounds, content });
+        self.last = Some(Last {
+            offset,
+            place: self.place_at(offset),
+            bounds,
+            content,
+        });
     }
 
     /// Keep `place` from the next layout on, rather than what is at the
@@ -610,11 +667,23 @@ mod tests {
     use super::*;
 
     fn spec(i: usize) -> ItemSpec<u64> {
-        ItemSpec { key: i as u64, revision: i as u64, class: EstimateClass(1), gap: 10.0, shown: true }
+        ItemSpec {
+            key: i as u64,
+            revision: i as u64,
+            class: EstimateClass(1),
+            gap: 10.0,
+            shown: true,
+        }
     }
 
     fn prose(chars: u32) -> Estimate {
-        Estimate::Content { summary: ContentSummary { segments: vec![Segment::Prose { chars, scale: 1.0 }], indent: 0.0 }, around: 0.0 }
+        Estimate::Content {
+            summary: ContentSummary {
+                segments: vec![Segment::Prose { chars, scale: 1.0 }],
+                indent: 0.0,
+            },
+            around: 0.0,
+        }
     }
 
     #[test]
@@ -634,7 +703,10 @@ mod tests {
         positions.set(10, 100.0);
         assert!((positions.total() - (sum - values[10] + 100.0)).abs() < 0.01);
         assert_eq!(positions.find(positions.prefix(10) + 50.0), 10);
-        assert_eq!(positions.find(positions.prefix(11) + 0.1), if values[11] > 0.0 { 11 } else { 12 });
+        assert_eq!(
+            positions.find(positions.prefix(11) + 0.1),
+            if values[11] > 0.0 { 11 } else { 12 }
+        );
     }
 
     #[test]
@@ -647,10 +719,19 @@ mod tests {
         let old = geometry.item(10).height;
         geometry.measured(10, 123.0);
         assert!(geometry.item(10).exact);
-        assert!((geometry.offset_of(4000) - before - (123.0 - old)).abs() < 0.05, "later items shift by the delta");
-        assert_eq!(geometry.counts.passes, passes, "a measurement is not a pass over the items");
+        assert!(
+            (geometry.offset_of(4000) - before - (123.0 - old)).abs() < 0.05,
+            "later items shift by the delta"
+        );
+        assert_eq!(
+            geometry.counts.passes, passes,
+            "a measurement is not a pass over the items"
+        );
         geometry.sync(1, 5000, true, spec, |_| prose(400));
-        assert_eq!(geometry.counts.passes, passes, "nothing changed: no pass at all");
+        assert_eq!(
+            geometry.counts.passes, passes,
+            "nothing changed: no pass at all"
+        );
     }
 
     #[test]
@@ -661,7 +742,11 @@ mod tests {
         for i in 0..1000 {
             geometry.measured(i, 50.0);
         }
-        assert_eq!(geometry.window(10_000.0, 500.0), 190..221, "items from 9 500 to 11 000 px");
+        assert_eq!(
+            geometry.window(10_000.0, 500.0),
+            190..221,
+            "items from 9 500 to 11 000 px"
+        );
         assert_eq!(geometry.window(0.0, 500.0), 0..21);
         assert_eq!(geometry.window(1e9, 500.0).end, 1000);
     }
@@ -680,9 +765,16 @@ mod tests {
         assert!((place.1 - 0.5).abs() < 0.01);
         let y = geometry.y_of(place).unwrap();
         geometry.measured(3, 160.0);
-        assert!((geometry.y_of(place).unwrap() - y - 100.0).abs() < 0.01, "an item above grows: the place moves down by as much");
+        assert!(
+            (geometry.y_of(place).unwrap() - y - 100.0).abs() < 0.01,
+            "an item above grows: the place moves down by as much"
+        );
         let (key, fraction, above) = geometry.place_at(24.0 + 60.0 * 41.0 + 100.0 + 4.0).unwrap();
-        assert_eq!((key, fraction), (41, 0.0), "in the gap above an item: the item");
+        assert_eq!(
+            (key, fraction),
+            (41, 0.0),
+            "in the gap above an item: the item"
+        );
         assert!((above - 6.0).abs() < 0.01, "and the room above it");
     }
 
@@ -697,11 +789,17 @@ mod tests {
         geometry.end_layout(1000.0, (600.0, 500.0), (600.0, 6000.0));
         geometry.begin_layout(Some(1000.0));
         geometry.measured(2, 100.0);
-        assert!((geometry.target().unwrap() - 1040.0).abs() < 0.01, "not scrolled: items above grow, the place is kept");
+        assert!(
+            (geometry.target().unwrap() - 1040.0).abs() < 0.01,
+            "not scrolled: items above grow, the place is kept"
+        );
         geometry.end_layout(1040.0, (600.0, 500.0), (600.0, 6040.0));
         geometry.begin_layout(Some(2000.0));
         geometry.measured(50, 70.0);
-        assert!((geometry.target().unwrap() - 2000.0).abs() < 0.01, "scrolled: an item below the place moves nothing");
+        assert!(
+            (geometry.target().unwrap() - 2000.0).abs() < 0.01,
+            "scrolled: an item below the place moves nothing"
+        );
     }
 
     #[test]
@@ -716,7 +814,13 @@ mod tests {
         geometry.set_width(600.0, TextMetrics::default());
         assert!(geometry.item(0).exact);
         assert_eq!(geometry.item(0).height, 200.0);
-        geometry.set_width(600.0, TextMetrics { size: 18.0, ..TextMetrics::default() });
+        geometry.set_width(
+            600.0,
+            TextMetrics {
+                size: 18.0,
+                ..TextMetrics::default()
+            },
+        );
         assert!(!geometry.item(0).exact, "a new font forgets them");
     }
 
@@ -724,7 +828,10 @@ mod tests {
     fn hidden_items_take_no_room_and_are_never_the_place() {
         let mut geometry = Geometry::default();
         geometry.set_width(600.0, TextMetrics::default());
-        let hidden = |i: usize| ItemSpec { shown: i.is_multiple_of(2), ..spec(i) };
+        let hidden = |i: usize| ItemSpec {
+            shown: i.is_multiple_of(2),
+            ..spec(i)
+        };
         geometry.sync(1, 10, true, hidden, |_| prose(100));
         for i in (0..10).step_by(2) {
             geometry.measured(i, 40.0);
@@ -738,20 +845,47 @@ mod tests {
     fn fixed_estimates_learn_their_class_height() {
         let mut geometry = Geometry::default();
         geometry.set_width(600.0, TextMetrics::default());
-        let closed = |i: usize| ItemSpec { class: EstimateClass(2), ..spec(i) };
+        let closed = |i: usize| ItemSpec {
+            class: EstimateClass(2),
+            ..spec(i)
+        };
         geometry.sync(1, 3, true, closed, |_| Estimate::Fixed { ems: 2.0 });
-        assert_eq!(geometry.item(1).height, 30.0 + 10.0, "two ems of 15 px and the gap");
+        assert_eq!(
+            geometry.item(1).height,
+            30.0 + 10.0,
+            "two ems of 15 px and the gap"
+        );
         geometry.measured(0, 10.0 + 44.0);
-        geometry.sync(2, 3, true, |i| ItemSpec { revision: 7, ..closed(i) }, |_| Estimate::Fixed { ems: 2.0 });
-        assert_eq!(geometry.item(1).height, 44.0 + 10.0, "the class's learned height");
+        geometry.sync(
+            2,
+            3,
+            true,
+            |i| ItemSpec {
+                revision: 7,
+                ..closed(i)
+            },
+            |_| Estimate::Fixed { ems: 2.0 },
+        );
+        assert_eq!(
+            geometry.item(1).height,
+            44.0 + 10.0,
+            "the class's learned height"
+        );
     }
 
     #[test]
     fn a_known_content_height_estimates_with_the_room_around_it() {
         let mut geometry = Geometry::default();
         geometry.set_width(600.0, TextMetrics::default());
-        geometry.sync(1, 3, true, spec, |_| Estimate::Content { summary: ContentSummary::default(), around: 2.0 });
+        geometry.sync(1, 3, true, spec, |_| Estimate::Content {
+            summary: ContentSummary::default(),
+            around: 2.0,
+        });
         geometry.content_height_known(1, 100.0);
-        assert_eq!(geometry.item(1).height, 100.0 + 30.0 + 10.0, "content, two ems around it, the gap");
+        assert_eq!(
+            geometry.item(1).height,
+            100.0 + 30.0 + 10.0,
+            "content, two ems around it, the gap"
+        );
     }
 }
