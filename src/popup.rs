@@ -371,34 +371,31 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
                 );
             }
         }
-        let mut before = FocusProbe::default();
-        self.content
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, &mut before);
+        // Only keys need the focus
+        let keys = matches!(event, Event::Keyboard(_));
+        let probe = |content: &mut Element<'a, Message>, tree: &mut Tree| {
+            let mut probe = FocusProbe::default();
+            if keys {
+                content
+                    .as_widget_mut()
+                    .operate(tree, layout, renderer, &mut probe);
+            }
+            probe.focused
+        };
+        let before = probe(&mut self.content, &mut tree.children[0]);
         if matches!(event, Event::Keyboard(_) | Event::Mouse(_)) {
             let state = tree.state.downcast_mut::<State>();
             state.keyboard_entry = None;
             if self.panels.is_empty()
                 && is_opening_event(event)
                 && before
-                    .focused
                     .as_ref()
                     .is_some_and(|id| self.anchors.focused_trigger(id))
             {
                 state.keyboard_entry = Some(0);
             }
         }
-        // Information dismissal has priority over native Escape handling.
-        if matches!(
-            event,
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                ..
-            })
-        ) && self
-            .anchors
-            .information_key(event, before.focused.as_ref(), shell)
-        {
+        if keys && self.anchors.dismiss_keyboard_card(event, shell) {
             return;
         }
         self.content.as_widget_mut().update(
@@ -411,20 +408,21 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
             shell,
             viewport,
         );
-        let mut after = FocusProbe::default();
-        self.content
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, &mut after);
-        if is_navigation_event(event) && before.focused != after.focused {
-            if let Some(id) = &after.focused {
+        let after = probe(&mut self.content, &mut tree.children[0]);
+        if keys && is_navigation_event(event) && before != after {
+            if let Some(id) = &after {
                 self.anchors.keyboard_target(id);
             } else {
                 self.anchors.leave_keyboard_target();
             }
         }
-        if !shell.is_event_captured() {
-            self.anchors
-                .information_key(event, after.focused.as_ref(), shell);
+        // Native children first: an editor that acted on Escape (left, or
+        // captured it) keeps it, and a card the pointer owns stays until the
+        // pointer leaves. Otherwise Escape dismisses it and Alt+H opens the
+        // focused control's information.
+        let native_escape = anchor::is_escape(event) && before != after;
+        if keys && !shell.is_event_captured() && !native_escape {
+            self.anchors.information_key(event, after.as_ref(), shell);
         }
         self.anchors.update_timer(event, shell);
     }
@@ -1013,14 +1011,8 @@ impl<'a, Message: Clone + 'a> overlay::Overlay<Message, Theme, Renderer>
         if matches!(event, Event::Window(cosmic::iced::window::Event::Focused)) {
             self.anchors.activate();
         }
-        if matches!(
-            event,
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                ..
-            })
-        ) && self.anchors.information_key(event, None, shell)
-        {
+        // Within a menu, Escape dismisses information before the menu
+        if anchor::is_escape(event) && self.anchors.information_key(event, None, shell) {
             return;
         }
         self.anchors.update_timer(event, shell);
@@ -1123,6 +1115,12 @@ impl<'a, Message: Clone + 'a> overlay::Overlay<Message, Theme, Renderer>
             {
                 return;
             }
+        }
+        // A wheel outside the chain would scroll the content from under it:
+        // it dismisses the chain and is consumed, as a press there is
+        if matches!(event, Event::Mouse(mouse::Event::WheelScrolled { .. })) && top.is_none() {
+            self.dismiss(shell);
+            return;
         }
         if matches!(event, Event::Mouse(mouse::Event::ButtonPressed(_))) && top.is_none() {
             if cursor.position().is_some_and(|point| {
@@ -1435,6 +1433,8 @@ fn is_navigation_event(event: &Event) -> bool {
                     | keyboard::key::Named::ArrowRight
                     | keyboard::key::Named::Home
                     | keyboard::key::Named::End
+                    | keyboard::key::Named::PageUp
+                    | keyboard::key::Named::PageDown
                     | keyboard::key::Named::F6
             ),
             ..

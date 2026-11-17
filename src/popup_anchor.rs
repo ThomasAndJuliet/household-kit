@@ -283,6 +283,27 @@ impl Anchors {
         registry.suppressed = true;
         opened
     }
+    /// Escape dismisses a card the keyboard owns before any control sees the
+    /// key, even an editor: the keyboard asked for it. A card the pointer
+    /// owns waits for the controls (see `Host::update`).
+    pub(crate) fn dismiss_keyboard_card<Message>(
+        &self,
+        event: &Event,
+        shell: &mut Shell<'_, Message>,
+    ) -> bool {
+        let keyboard_card = self.hovered().is_some() && {
+            let registry = self.0.borrow();
+            registry.opened && !registry.pointer_owner
+        };
+        if keyboard_card && is_escape(event) {
+            self.dismiss_information();
+            shell.invalidate_layout();
+            shell.request_redraw();
+            shell.capture_event();
+            return true;
+        }
+        false
+    }
     /// Cancel ownership and every pending opening when the native window leaves
     /// focus. A later activation starts with no information target.
     pub fn deactivate(&self) {
@@ -365,9 +386,7 @@ impl Anchors {
             shell.capture_event();
             return true;
         }
-        if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
-            && self.dismiss_information()
-        {
+        if is_escape(event) && self.dismiss_information() {
             shell.invalidate_layout();
             shell.request_redraw();
             shell.capture_event();
@@ -428,6 +447,16 @@ impl Anchors {
             registry.visible.insert(key, Source { bounds, trigger });
         }
     }
+}
+
+pub(crate) fn is_escape(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(keyboard::key::Named::Escape),
+            ..
+        })
+    )
 }
 
 #[derive(Clone)]

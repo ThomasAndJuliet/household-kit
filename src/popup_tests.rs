@@ -535,3 +535,13 @@ impl Widget<Message, Theme, Renderer> for Paint {
         );
     }
 }
+
+#[test]
+fn page_keys_are_deliberate_navigation_for_information() {
+    use keyboard::key::Named;
+    for named in [Named::PageUp, Named::PageDown, Named::ArrowDown, Named::Tab] {
+        assert!(is_navigation_event(&key(named)), "{named:?}");
+    }
+    assert!(!is_navigation_event(&key(Named::Enter)));
+    assert!(!is_navigation_event(&character("a")));
+}
