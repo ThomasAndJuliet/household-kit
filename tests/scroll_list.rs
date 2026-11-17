@@ -438,13 +438,22 @@ fn row_id(i: usize) -> Id {
 
 /// `count` rows of 40 px, each a focusable button
 fn rows<'a>(state: &'a ListState<u64>, count: usize, virtualised: bool) -> Element<'a, Message> {
-    let spec = |i: usize| ItemSpec {
+    rows_navigable(state, count, virtualised, true)
+}
+
+fn rows_navigable<'a>(
+    state: &'a ListState<u64>,
+    count: usize,
+    virtualised: bool,
+    navigable: bool,
+) -> Element<'a, Message> {
+    let spec = move |i: usize| ItemSpec {
         key: i as u64,
         revision: 1,
         class: EstimateClass(0),
         gap: 0.0,
         shown: true,
-        navigable: true,
+        navigable,
     };
     scroll_list(state)
         .virtualised(virtualised)
@@ -635,4 +644,26 @@ fn the_target_stays_built_and_focused_when_scrolled_away() {
         Some(row_id(2)),
         "its focus survives"
     );
+}
+
+#[test]
+fn a_list_without_targets_leaves_the_keys_to_its_items() {
+    use keyboard::key::Named;
+    let mut window = Window::new();
+    let mut state = ListState::new();
+    fn view(state: &ListState<u64>) -> Element<'_, Message> {
+        rows_navigable(state, 20, false, false)
+    }
+    window.show(&mut state, view, None);
+    let mut focus = operation::focusable::focus(row_id(3));
+    window.show(&mut state, view, Some(&mut focus));
+    let none = keyboard::Modifiers::default();
+    let reported = window.send(
+        &mut state,
+        view,
+        None,
+        &[named(Named::Tab, none), named(Named::ArrowDown, none)],
+    );
+    assert!(reported.is_empty(), "nothing taken: {reported:?}");
+    assert_eq!(state.target(), None, "no target in a list of none");
 }

@@ -1418,6 +1418,9 @@ impl<K: Copy + Eq + Hash + 'static, Message> Column<'_, K, Message> {
             self.focus_item(tree, layout, renderer, index, shell);
             return;
         }
+        // Only a target's focus makes the keys the list's: in a list with
+        // no targets (a conversation), a button inside an item keeps them
+        let focused = focused.filter(|&index| self.geometry.borrow().navigable(index));
         if shell.is_event_captured() || focused.is_none() {
             return;
         }
