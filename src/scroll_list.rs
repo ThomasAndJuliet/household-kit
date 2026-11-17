@@ -261,8 +261,8 @@ impl<K: Copy + Eq + Hash> ListState<K> {
                 let view = self.view_top_in(&geometry);
                 if top < view {
                     top
-                } else if bottom > view + self.page {
-                    (bottom - self.page).max(0.0)
+                } else if bottom > view + self.page_height() {
+                    (bottom - self.page_height()).max(0.0)
                 } else {
                     return Some(Task::none());
                 }
