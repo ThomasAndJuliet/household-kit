@@ -149,6 +149,19 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         Task::none()
     }
 
+    /// Show the list from its top, not following its end, as a fresh view
+    /// of earlier items does
+    pub fn show_top(&mut self) {
+        self.follow = false;
+        self.position = AbsoluteOffset::default().into();
+        self.offset = Some(0.0);
+    }
+
+    /// The scroll position restored when the list's widget is rebuilt
+    pub fn position(&self) -> scrollable::Position {
+        self.position
+    }
+
     /// Whether the list follows its end as items arrive
     pub fn follows_end(&self) -> bool {
         self.follow
