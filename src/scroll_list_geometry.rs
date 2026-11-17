@@ -37,6 +37,9 @@ pub struct ItemSpec<K> {
     pub gap: f32,
     /// Whether it is shown: a hidden item takes no room and is never built
     pub shown: bool,
+    /// Whether the keyboard can make it the list's target, as a row can
+    /// and a heading cannot
+    pub navigable: bool,
 }
 
 /// The reader's place: an item, how far into it (past its gap) the view's
@@ -53,6 +56,7 @@ pub(crate) struct Item<K> {
     pub exact: bool,
     /// The cross size `extent` is for
     cross: f32,
+    pub navigable: bool,
     /// The room before it, which its extent includes
     pub gap: f32,
     pub shown: bool,
@@ -197,6 +201,15 @@ pub(crate) struct Geometry<K> {
     /// place is now
     moved: f32,
     pub counts: Counts,
+    /// The keyboard's target: the item arrow keys move from, which keeps
+    /// its child built while it is out of view
+    pub target: Option<K>,
+    /// Whether the target's child is to take the keyboard's focus once it
+    /// is built
+    pub focus_pending: bool,
+    /// A place being revealed, until a layout has shown it: the list builds
+    /// the items around it, not around where the view last stood
+    pub revealing: Option<Place<K>>,
 }
 
 impl<K> Default for Geometry<K> {
@@ -216,6 +229,9 @@ impl<K> Default for Geometry<K> {
             pending: None,
             moved: 0.0,
             counts: Counts::default(),
+            target: None,
+            focus_pending: false,
+            revealing: None,
         }
     }
 }
@@ -286,6 +302,7 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
             return;
         }
         self.synced = Some(revision);
+        let target_was = self.target.and_then(|key| self.index_of(key));
         // In order, so that the first shown is known as it is reached
         let first = std::cell::Cell::new(!leading);
         let spec = |i: usize| {
@@ -306,6 +323,7 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
                 if item.revision == s.revision
                     && item.class == s.class
                     && item.shown == s.shown
+                    && item.navigable == s.navigable
                     && item.gap == s.gap
                 {
                     continue;
@@ -318,6 +336,7 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
             if changed {
                 self.counts.passes += 1;
             }
+            self.repair_target(target_was);
             return;
         }
         self.counts.passes += 1;
@@ -330,6 +349,7 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
             let s = spec(i);
             let item = match old.remove(&s.key) {
                 Some(mut item) if item.revision == s.revision && item.class == s.class => {
+                    item.navigable = s.navigable;
                     if item.gap != s.gap {
                         if item.shown {
                             item.extent += s.gap - item.gap;
@@ -356,6 +376,7 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
                         cross: self.cross,
                         gap: s.gap,
                         shown: s.shown,
+                        navigable: s.navigable,
                         class: s.class,
                         previous: None,
                         revision: s.revision,
@@ -383,10 +404,80 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
             "every key in a list is unique"
         );
         self.positions = Positions::new(self.items.iter().map(|item| item.extent).collect());
+        self.repair_target(target_was);
+    }
+
+    /// Whether item `index` can be the keyboard's target
+    pub fn navigable(&self, index: usize) -> bool {
+        self.items
+            .get(index)
+            .is_some_and(|item| item.shown && item.navigable)
+    }
+
+    /// When the target is no longer in the list, or no longer a target (a
+    /// row archived, deleted or filtered out), the next item takes its
+    /// place: the one now where it was, or after it, else the one before
+    fn repair_target(&mut self, was: Option<usize>) {
+        let Some(key) = self.target else { return };
+        if self
+            .index_of(key)
+            .is_some_and(|index| self.navigable(index))
+        {
+            return;
+        }
+        let from = was.unwrap_or(0).min(self.items.len());
+        let next = (from..self.items.len())
+            .find(|&i| self.navigable(i))
+            .or_else(|| (0..from).rev().find(|&i| self.navigable(i)));
+        self.target = next.map(|i| self.items[i].key);
+    }
+
+    /// The navigable item after (`forward`) or before item `index`
+    pub fn step(&self, index: usize, forward: bool) -> Option<usize> {
+        if forward {
+            (index + 1..self.items.len()).find(|&i| self.navigable(i))
+        } else {
+            (0..index).rev().find(|&i| self.navigable(i))
+        }
+    }
+
+    /// The first (`first`) or last navigable item
+    pub fn end(&self, first: bool) -> Option<usize> {
+        if first {
+            (0..self.items.len()).find(|&i| self.navigable(i))
+        } else {
+            (0..self.items.len()).rev().find(|&i| self.navigable(i))
+        }
+    }
+
+    /// The navigable item at `offset` in the content, or the nearest one
+    /// after (`forward`) or before it
+    pub fn navigable_at(&self, offset: f32, forward: bool) -> Option<usize> {
+        let at = self
+            .place_at(offset)
+            .and_then(|(key, ..)| self.index_of(key))?;
+        if self.navigable(at) {
+            return Some(at);
+        }
+        self.step(at, forward).or_else(|| self.step(at, !forward))
+    }
+
+    /// Where item `index` starts in the content, together with the items
+    /// that cannot be targets directly before it (its section's heading),
+    /// so that revealing it shows what it belongs to
+    pub fn start_with_heading(&self, index: usize) -> Option<f32> {
+        let mut first = index;
+        while first > 0 && self.items[first - 1].shown && !self.items[first - 1].navigable {
+            first -= 1;
+        }
+        // Not the leading children: only items of the list itself
+        let key = self.items.get(first)?.key;
+        self.start_of(key)
     }
 
     fn update_item(&mut self, i: usize, s: ItemSpec<K>, estimate: Option<Estimate>) {
         let item = &mut self.items[i];
+        item.navigable = s.navigable;
         let old_gap = item.gap;
         if let Some(estimate) = estimate {
             item.estimate = estimate;
@@ -643,9 +734,12 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
     pub fn end_layout(&mut self, offset: f32, bounds: (f32, f32), content: (f32, f32)) {
         self.pending = None;
         self.moved = 0.0;
+        // A place revealed is kept one layout more, while the items around
+        // it that the first built are measured
+        let place = self.revealing.take().or_else(|| self.place_at(offset));
         self.last = Some(Last {
             offset,
-            place: self.place_at(offset),
+            place,
             bounds,
             content,
         });
@@ -654,6 +748,7 @@ impl<K: Copy + Eq + Hash> Geometry<K> {
     /// Keep `place` from the next layout on, rather than what is at the
     /// view's start now. False if nothing was laid out yet to keep it in
     pub fn keep(&mut self, place: Place<K>) -> bool {
+        self.revealing = Some(place);
         match &mut self.last {
             Some(last) => {
                 last.place = Some(place);
@@ -676,6 +771,7 @@ mod tests {
             class: EstimateClass(1),
             gap: 10.0,
             shown: true,
+            navigable: true,
         }
     }
 
@@ -889,6 +985,69 @@ mod tests {
             geometry.item(1).extent,
             100.0 + 30.0 + 10.0,
             "content, two ems around it, the gap"
+        );
+    }
+
+    #[test]
+    fn a_dropped_target_moves_to_the_next_item() {
+        let mut geometry = Geometry::default();
+        geometry.sync(1, 5, true, spec, |_| prose(10));
+        geometry.target = Some(2);
+        // Item 2 goes: the one now where it was, item 3, takes its place
+        let without = |gone: &'static [usize]| {
+            move |i: usize| {
+                let keys: Vec<usize> = (0..5).filter(|k| !gone.contains(k)).collect();
+                spec(keys[i])
+            }
+        };
+        geometry.sync(2, 4, true, without(&[2]), |_| prose(10));
+        assert_eq!(geometry.target, Some(3));
+        // The last goes: the one before it
+        geometry.target = Some(4);
+        geometry.sync(3, 3, true, without(&[2, 4]), |_| prose(10));
+        assert_eq!(geometry.target, Some(3));
+        // No longer a target (a row turned into a heading): the next
+        geometry.target = Some(1);
+        geometry.sync(
+            4,
+            3,
+            true,
+            |i| ItemSpec {
+                navigable: i != 1,
+                ..without(&[2, 4])(i)
+            },
+            |_| prose(10),
+        );
+        assert_eq!(geometry.target, Some(3));
+    }
+
+    #[test]
+    fn a_row_is_revealed_with_its_heading() {
+        let mut geometry = Geometry::default();
+        geometry.set_cross(600.0, TextMetrics::default());
+        geometry.sync(
+            1,
+            4,
+            true,
+            |i| ItemSpec {
+                navigable: i != 2,
+                ..spec(i)
+            },
+            |_| prose(10),
+        );
+        for i in 0..4 {
+            geometry.measured(i, 50.0);
+        }
+        assert_eq!(
+            geometry.start_with_heading(3),
+            geometry.start_of(2),
+            "item 2 heads item 3"
+        );
+        assert_eq!(geometry.start_with_heading(1), geometry.start_of(1));
+        assert_eq!(
+            geometry.step(1, true),
+            Some(3),
+            "a heading is never a target"
         );
     }
 }

@@ -4,8 +4,10 @@
 //! of items not built, and measurement that commits nothing.
 
 use cosmic::iced::advanced::widget::operation::Scrollable;
+use cosmic::iced::advanced::widget::operation::{self, Focusable};
 use cosmic::iced::advanced::widget::{Id, Operation};
 use cosmic::iced::advanced::{clipboard, renderer::Headless};
+use cosmic::iced::keyboard;
 use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
 use cosmic::iced::widget::scrollable::AbsoluteOffset;
 use cosmic::iced::{Font, Length, Pixels, Point, Rectangle, Size, Vector, mouse};
@@ -18,6 +20,7 @@ use household_widgets::scroll_list::{
 #[derive(Clone, Debug)]
 enum Message {
     List(ListAction),
+    Pressed,
 }
 
 struct Board;
@@ -57,6 +60,19 @@ impl Window {
         content: impl FnOnce(&ListState<u64>) -> Element<'_, Message>,
         operation: Option<&mut dyn Operation>,
     ) {
+        drop(self.send(state, content, operation, &[]));
+    }
+
+    /// Lay `content` out, run `operation` on it, deliver `events` and then
+    /// a redraw, apply the list's scroll reports to `state`, and return
+    /// what else the list reported
+    fn send(
+        &mut self,
+        state: &mut ListState<u64>,
+        content: impl FnOnce(&ListState<u64>) -> Element<'_, Message>,
+        operation: Option<&mut dyn Operation>,
+        events: &[cosmic::iced::Event],
+    ) -> Vec<ListAction> {
         let mut messages = Vec::new();
         {
             let root = widget::container(content(state))
@@ -67,6 +83,15 @@ impl Window {
                 UserInterface::build(root, Size::new(600.0, PAGE), cache, &mut self.renderer);
             if let Some(operation) = operation {
                 ui.operate(&self.renderer, operation);
+            }
+            for event in events {
+                let _ = ui.update(
+                    std::slice::from_ref(event),
+                    mouse::Cursor::Available(Point::new(10.0, 10.0)),
+                    &mut self.renderer,
+                    &mut Board,
+                    &mut messages,
+                );
             }
             // A redraw reports the viewport, as the runtime's does
             let _ = ui.update(
@@ -80,9 +105,17 @@ impl Window {
             );
             self.cache = ui.into_cache();
         }
-        for Message::List(action) in messages {
-            drop(state.apply::<()>(action));
+        let mut reported = Vec::new();
+        for message in messages {
+            match message {
+                Message::List(ListAction::Scrolled(viewport)) => {
+                    drop(state.apply::<()>(ListAction::Scrolled(viewport)))
+                }
+                Message::List(action) => reported.push(action),
+                Message::Pressed => {}
+            }
         }
+        reported
     }
 }
 
@@ -133,6 +166,7 @@ fn list<'a>(
         class: EstimateClass(0),
         gap: 10.0,
         shown: true,
+        navigable: true,
     };
     scroll_list(state)
         .virtualised(virtualised)
@@ -341,6 +375,7 @@ fn row<'a>(
         class: EstimateClass(0),
         gap: 8.0,
         shown: true,
+        navigable: true,
     };
     scroll_list(state)
         .virtualised(true)
@@ -394,5 +429,210 @@ fn a_horizontal_list_builds_and_reveals_along_its_width() {
         (state.view_start() - start).abs() < 1.0,
         "its start at the view's start: {} for {start}",
         state.view_start()
+    );
+}
+
+fn row_id(i: usize) -> Id {
+    Id::new(format!("row-{i}"))
+}
+
+/// `count` rows of 40 px, each a focusable button
+fn rows<'a>(state: &'a ListState<u64>, count: usize, virtualised: bool) -> Element<'a, Message> {
+    let spec = |i: usize| ItemSpec {
+        key: i as u64,
+        revision: 1,
+        class: EstimateClass(0),
+        gap: 0.0,
+        shown: true,
+        navigable: true,
+    };
+    scroll_list(state)
+        .virtualised(virtualised)
+        .items(
+            1,
+            count,
+            spec,
+            |_| Estimate::Fixed { ems: 40.0 / 15.0 },
+            |i| {
+                ListChild::new(
+                    widget::button::custom(widget::Space::new().width(Length::Fill).height(40))
+                        .id(row_id(i))
+                        .on_press(Message::Pressed),
+                )
+            },
+        )
+        .on_action(Message::List)
+        .into()
+}
+
+fn named(key: keyboard::key::Named, modifiers: keyboard::Modifiers) -> cosmic::iced::Event {
+    cosmic::iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: keyboard::Key::Named(key),
+        modified_key: keyboard::Key::Named(key),
+        physical_key: keyboard::key::Physical::Unidentified(
+            keyboard::key::NativeCode::Unidentified,
+        ),
+        location: keyboard::Location::Standard,
+        modifiers,
+        text: None,
+        repeat: false,
+    })
+}
+
+/// The id of the focused widget, if any
+#[derive(Default)]
+struct Focused(Option<Id>);
+
+impl Operation for Focused {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self);
+    }
+    fn focusable(&mut self, id: Option<&Id>, _: Rectangle, state: &mut dyn Focusable) {
+        if state.is_focused() {
+            self.0 = id.cloned();
+        }
+    }
+}
+
+fn focused(
+    window: &mut Window,
+    state: &mut ListState<u64>,
+    count: usize,
+    virtualised: bool,
+) -> Option<Id> {
+    let mut look = Focused::default();
+    window.show(
+        state,
+        |state| rows(state, count, virtualised),
+        Some(&mut look),
+    );
+    look.0
+}
+
+/// Focus row `i` as a click or Tab into it does
+fn focus_row(
+    window: &mut Window,
+    state: &mut ListState<u64>,
+    count: usize,
+    virtualised: bool,
+    i: usize,
+) {
+    let mut focus = operation::focusable::focus(row_id(i));
+    window.show(
+        state,
+        |state| rows(state, count, virtualised),
+        Some(&mut focus),
+    );
+    window.show(state, |state| rows(state, count, virtualised), None);
+}
+
+#[test]
+fn arrow_keys_move_the_target_and_its_focus() {
+    use keyboard::key::Named;
+    let mut window = Window::new();
+    let mut state = ListState::new();
+    window.show(&mut state, |state| rows(state, 50, false), None);
+    focus_row(&mut window, &mut state, 50, false, 3);
+    assert_eq!(
+        state.target(),
+        Some(3),
+        "focusing a row makes it the target"
+    );
+    let none = keyboard::Modifiers::default();
+    let reported = window.send(
+        &mut state,
+        |state| rows(state, 50, false),
+        None,
+        &[named(Named::ArrowDown, none)],
+    );
+    assert!(reported.is_empty());
+    assert_eq!(state.target(), Some(4));
+    assert_eq!(
+        focused(&mut window, &mut state, 50, false),
+        Some(row_id(4)),
+        "the focus follows the target"
+    );
+    focus_row(&mut window, &mut state, 50, false, 0);
+    let reported = window.send(
+        &mut state,
+        |state| rows(state, 50, false),
+        None,
+        &[named(Named::ArrowUp, none)],
+    );
+    assert!(
+        matches!(reported.as_slice(), [ListAction::PastStart]),
+        "up from the first row: {reported:?}"
+    );
+    assert_eq!(state.target(), Some(0), "the list stays where it was");
+    let reported = window.send(
+        &mut state,
+        |state| rows(state, 50, false),
+        None,
+        &[named(Named::Tab, none)],
+    );
+    assert!(
+        matches!(reported.as_slice(), [ListAction::Leave { forward: true }]),
+        "Tab leaves the list: {reported:?}"
+    );
+}
+
+#[test]
+fn end_reaches_a_row_not_built_and_focuses_it_once_built() {
+    use keyboard::key::Named;
+    let mut window = Window::new();
+    let mut state = ListState::new();
+    window.show(&mut state, |state| rows(state, 1000, true), None);
+    focus_row(&mut window, &mut state, 1000, true, 0);
+    assert!(
+        !state.measured_keys().contains(&999),
+        "the last row is not built"
+    );
+    let none = keyboard::Modifiers::default();
+    drop(window.send(
+        &mut state,
+        |state| rows(state, 1000, true),
+        None,
+        &[named(Named::End, none)],
+    ));
+    assert_eq!(state.target(), Some(999));
+    window.show(&mut state, |state| rows(state, 1000, true), None);
+    assert_eq!(
+        focused(&mut window, &mut state, 1000, true),
+        Some(row_id(999)),
+        "focused once built"
+    );
+    let end = state.start_of(999).unwrap() + 40.0;
+    assert!(
+        (state.view_start() + PAGE - end).abs() < 1.0,
+        "the view ends with it: {} + {PAGE} for {end}; content {}, stands {:?}, measured {}",
+        state.view_start(),
+        state.content_extent(),
+        state.stands(),
+        state.measured_keys().len()
+    );
+}
+
+#[test]
+fn the_target_stays_built_and_focused_when_scrolled_away() {
+    let mut window = Window::new();
+    let mut state = ListState::new();
+    window.show(&mut state, |state| rows(state, 1000, true), None);
+    focus_row(&mut window, &mut state, 1000, true, 2);
+    let mut away = Offset {
+        id: state.id().clone(),
+        y: None,
+        scroll_to: Some(30_000.0),
+    };
+    window.show(&mut state, |state| rows(state, 1000, true), Some(&mut away));
+    window.show(&mut state, |state| rows(state, 1000, true), None);
+    assert!(
+        state.view_start() > 20_000.0,
+        "scrolled far away: {}",
+        state.view_start()
+    );
+    assert_eq!(
+        focused(&mut window, &mut state, 1000, true),
+        Some(row_id(2)),
+        "its focus survives"
     );
 }

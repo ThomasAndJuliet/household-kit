@@ -38,7 +38,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use cosmic::iced::advanced::widget::operation::Scrollable;
-use cosmic::iced::advanced::widget::{Id, Operation, Tree, tree};
+use cosmic::iced::advanced::widget::{Id, Operation, Tree, operation, tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::widget::scrollable::{
     self, AbsoluteOffset, Direction, RelativeOffset, Scrollbar, Viewport,
@@ -142,11 +142,19 @@ impl Along for Axis {
     }
 }
 
-/// What a list's scrollable reports, for [`ListState::apply`]
+/// What a list reports, for [`ListState::apply`]
 #[derive(Clone, Debug)]
 pub enum ListAction {
     /// The view scrolled, by the user or by a layout
     Scrolled(Viewport),
+    /// Tab or Shift+Tab from the list's target: the keyboard leaves the
+    /// list, which is one stop in the window's Tab order
+    Leave { forward: bool },
+    /// An arrow key past the list's first target. The app may take the
+    /// keyboard somewhere (a filter field above the list); the list stays
+    PastStart,
+    /// An arrow key past the list's last target
+    PastEnd,
 }
 
 /// Where a revealed item is brought to
@@ -231,6 +239,8 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     pub fn apply<T: Send + 'static>(&mut self, action: ListAction) -> Task<T> {
         match action {
             ListAction::Scrolled(viewport) => self.scrolled(&viewport),
+            ListAction::Leave { forward } => leave(self.id.clone(), forward),
+            ListAction::PastStart | ListAction::PastEnd => Task::none(),
         }
     }
 
@@ -405,9 +415,17 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     }
 
     fn view_start_in(&self, geometry: &Geometry<K>) -> f32 {
-        match self.offset {
-            Some(start) if !self.follow => start,
-            _ => (geometry.content_extent() - self.page_extent()).max(0.0),
+        if let Some(offset) = geometry
+            .revealing
+            .and_then(|place| geometry.offset_of_place(place))
+        {
+            return offset.max(0.0);
+        }
+        match (self.follow, self.offset) {
+            (false, Some(start)) => start,
+            // Not scrolled yet: where it starts
+            (false, None) => 0.0,
+            (true, _) => (geometry.content_extent() - self.page_extent()).max(0.0),
         }
     }
 
@@ -508,6 +526,117 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     pub fn counts(&self) -> Counts {
         self.geometry.borrow().counts
     }
+
+    /// The keyboard's target: the item arrow keys move from. It is not a
+    /// selection and activates nothing
+    pub fn target(&self) -> Option<K> {
+        self.geometry.borrow().target
+    }
+
+    /// Give the keyboard to the list's first (`first`) or last target, as
+    /// moving down from a filter field above the list does: it is
+    /// revealed, and takes the focus once it is built. None if the list
+    /// has no item that can be a target
+    pub fn enter<T: Send + 'static>(&mut self, first: bool) -> Option<Task<T>> {
+        let key = {
+            let geometry = self.geometry.borrow();
+            let index = geometry.end(first)?;
+            geometry.item(index).key
+        };
+        self.target_key(key)
+    }
+
+    /// Make item `key` the keyboard's target and give it the focus, as a
+    /// command that goes to an item does. None if it cannot be a target
+    pub fn target_key<T: Send + 'static>(&mut self, key: K) -> Option<Task<T>> {
+        {
+            let mut geometry = self.geometry.borrow_mut();
+            let index = geometry.index_of(key)?;
+            if !geometry.navigable(index) {
+                return None;
+            }
+            geometry.target = Some(key);
+            geometry.focus_pending = true;
+        }
+        self.reveal(key, Reveal::Nearest)
+    }
+}
+
+/// Where a list's children begin and end among the operations that visit
+/// a window's widgets, so that the keyboard can leave the list
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Boundary {
+    Begin,
+    End,
+}
+
+/// Move the keyboard's focus from inside the list `id` to the first
+/// focusable widget after it (`forward`) or the last before it
+fn leave<T: Send + 'static>(id: Id, forward: bool) -> Task<T> {
+    use cosmic::iced::advanced::widget::operation::{Focusable, Outcome};
+    /// Counts the focusable widgets before the list, then focuses the one
+    /// wanted: the count is known only once every widget was visited
+    struct Count {
+        id: Id,
+        forward: bool,
+        before: usize,
+        after: Option<usize>,
+        seen: usize,
+    }
+    impl<T> Operation<T> for Count {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
+            operate(self);
+        }
+        fn custom(&mut self, id: Option<&Id>, _: Rectangle, state: &mut dyn std::any::Any) {
+            if id == Some(&self.id)
+                && let Some(boundary) = state.downcast_ref::<Boundary>()
+            {
+                if *boundary == Boundary::Begin {
+                    self.before = self.seen;
+                } else {
+                    self.after = Some(self.seen);
+                }
+            }
+        }
+        fn focusable(&mut self, _: Option<&Id>, _: Rectangle, _: &mut dyn Focusable) {
+            self.seen += 1;
+        }
+        fn finish(&self) -> Outcome<T> {
+            let target = match (self.forward, self.after) {
+                (true, Some(after)) if after < self.seen => Some(after),
+                (false, _) if self.before > 0 => Some(self.before - 1),
+                _ => None,
+            };
+            match target {
+                Some(index) => Outcome::Chain(Box::new(FocusNth { index, seen: 0 })),
+                None => Outcome::None,
+            }
+        }
+    }
+    struct FocusNth {
+        index: usize,
+        seen: usize,
+    }
+    impl<T> Operation<T> for FocusNth {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
+            operate(self);
+        }
+        fn focusable(&mut self, _: Option<&Id>, _: Rectangle, state: &mut dyn Focusable) {
+            if self.seen == self.index {
+                state.focus();
+            } else {
+                state.unfocus();
+            }
+            self.seen += 1;
+        }
+    }
+    cosmic::iced::runtime::task::widget(Count {
+        id,
+        forward,
+        before: 0,
+        after: None,
+        seen: 0,
+    })
 }
 
 /// An item's child, as the app builds it
@@ -703,8 +832,19 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
         } else {
             0..len
         };
+        // The keyboard's target stays built out of view, so that its focus
+        // and whatever is being typed into it outlive a scroll away
+        let target = {
+            let geometry = self.state.geometry.borrow();
+            geometry
+                .target
+                .and_then(|key| geometry.index_of(key))
+                .filter(|index| !window.contains(index))
+        };
         let mut built = 0;
-        for index in window {
+        let before = target.filter(|&index| index < window.start);
+        let after = target.filter(|&index| index >= window.end);
+        for index in before.into_iter().chain(window).chain(after) {
             if !self.state.geometry.borrow().item(index).shown {
                 continue;
             }
@@ -748,6 +888,8 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> From<ScrollList<'a, K, Mess
         let axis = state.axis;
         let column = Element::new(Column {
             geometry: state.geometry.clone(),
+            id: state.id.clone(),
+            on_action: list.on_action.clone(),
             axis,
             metrics: list.metrics,
             padding: list.padding,
@@ -799,6 +941,9 @@ struct ColumnState<K> {
 /// trailing. Every item not built is room of its known or estimated extent
 struct Column<'a, K, Message> {
     geometry: Rc<RefCell<Geometry<K>>>,
+    /// The list's id, marking where its children begin and end
+    id: Id,
+    on_action: Option<Rc<dyn Fn(ListAction) -> Message + 'a>>,
     axis: Axis,
     metrics: TextMetrics,
     padding: Padding,
@@ -983,6 +1128,7 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer>
         operation: &mut dyn Operation,
     ) {
         operation.container(None, layout.bounds());
+        operation.custom(Some(&self.id), layout.bounds(), &mut Boundary::Begin);
         operation.traverse(&mut |operation| {
             for ((child, state), child_layout) in self
                 .children
@@ -998,6 +1144,7 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer>
                 );
             }
         });
+        operation.custom(Some(&self.id), layout.bounds(), &mut Boundary::End);
     }
 
     fn update(
@@ -1028,6 +1175,7 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer>
                 viewport,
             );
         }
+        self.keyboard(tree, event, layout, renderer, shell, viewport);
     }
 
     fn mouse_interaction(
@@ -1122,6 +1270,253 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer>
                 .as_widget()
                 .drag_destinations(state, child_layout, renderer, dnd_rectangles);
         }
+    }
+}
+
+/// Whether any focusable widget it visits has the keyboard's focus
+#[derive(Default)]
+struct FocusProbe {
+    focused: bool,
+}
+
+impl Operation for FocusProbe {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self);
+    }
+    fn focusable(&mut self, _: Option<&Id>, _: Rectangle, state: &mut dyn operation::Focusable) {
+        self.focused |= state.is_focused();
+    }
+}
+
+/// Focus the first focusable widget it visits (`focus`), or none, and
+/// take the focus from every other
+struct FocusFirst {
+    focus: bool,
+    focused: Option<Option<Id>>,
+}
+
+impl Operation for FocusFirst {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self);
+    }
+    fn focusable(&mut self, id: Option<&Id>, _: Rectangle, state: &mut dyn operation::Focusable) {
+        if self.focus && self.focused.is_none() {
+            state.focus();
+            self.focused = Some(id.cloned());
+        } else {
+            state.unfocus();
+        }
+    }
+}
+
+impl<K: Copy + Eq + Hash + 'static, Message> Column<'_, K, Message> {
+    /// The index among the children of item `key`'s child, if it is built
+    fn child_of(&self, index: usize) -> Option<usize> {
+        self.roles
+            .iter()
+            .position(|role| matches!(role, Role::Item(i, _) if *i == index))
+    }
+
+    fn operate_child(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        child: usize,
+        operation: &mut dyn Operation,
+    ) {
+        if let (Some(element), Some(state), Some(child_layout)) = (
+            self.children.get_mut(child),
+            tree.children.get_mut(child),
+            layout.children().nth(child),
+        ) {
+            element.as_widget_mut().operate(
+                state,
+                child_layout.with_virtual_offset(layout.virtual_offset()),
+                renderer,
+                operation,
+            );
+        }
+    }
+
+    /// Give the focus to item `index`'s child, which is built, and show it
+    /// as the keyboard's target; take it from every other child
+    fn focus_item(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        index: usize,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        let Some(target) = self.child_of(index) else {
+            return;
+        };
+        for child in 0..self.children.len() {
+            let mut focus = FocusFirst {
+                focus: child == target,
+                focused: None,
+            };
+            self.operate_child(tree, layout, renderer, child, &mut focus);
+            if let Some(Some(id)) = focus.focused {
+                let mut show = crate::popup::show_keyboard_target(id, true);
+                self.operate_child(tree, layout, renderer, child, &mut show);
+            }
+        }
+        shell.request_redraw();
+    }
+
+    /// The list's own keys, when one of its items has the keyboard's focus
+    /// and no child took the key: arrows along its axis, Home and End,
+    /// Page Up and Page Down, and Tab out of the list
+    fn keyboard(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        // Which item holds the focus, if any: a click or Tab into a row
+        // makes it the target
+        let items: Vec<(usize, usize)> = self
+            .roles
+            .iter()
+            .enumerate()
+            .filter_map(|(child, role)| match role {
+                Role::Item(index, _) => Some((child, *index)),
+                _ => None,
+            })
+            .collect();
+        let mut focused = None;
+        for (child, index) in items {
+            let mut probe = FocusProbe::default();
+            self.operate_child(tree, layout, renderer, child, &mut probe);
+            if probe.focused {
+                focused = Some(index);
+                break;
+            }
+        }
+        if let Some(index) = focused {
+            let mut geometry = self.geometry.borrow_mut();
+            // Not while the focus is on its way to a target not yet built
+            if geometry.navigable(index) && !geometry.focus_pending {
+                geometry.target = Some(geometry.item(index).key);
+            }
+        }
+        // A target moved to out of view takes the focus once it is built
+        let pending = {
+            let geometry = self.geometry.borrow();
+            geometry
+                .focus_pending
+                .then(|| geometry.target.and_then(|key| geometry.index_of(key)))
+                .flatten()
+        };
+        if let Some(index) = pending.filter(|&index| self.child_of(index).is_some()) {
+            self.geometry.borrow_mut().focus_pending = false;
+            self.focus_item(tree, layout, renderer, index, shell);
+            return;
+        }
+        if shell.is_event_captured() || focused.is_none() {
+            return;
+        }
+        let Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
+            key: cosmic::iced::keyboard::Key::Named(key),
+            modifiers,
+            ..
+        }) = event
+        else {
+            return;
+        };
+        if modifiers.control() || modifiers.alt() || modifiers.logo() {
+            return;
+        }
+        use cosmic::iced::keyboard::key::Named;
+        let axis = self.axis;
+        let (back, forth) = match axis {
+            Axis::Vertical => (Named::ArrowUp, Named::ArrowDown),
+            Axis::Horizontal => (Named::ArrowLeft, Named::ArrowRight),
+        };
+        if *key == Named::Tab {
+            if let Some(on_action) = &self.on_action {
+                shell.publish(on_action(ListAction::Leave {
+                    forward: !modifiers.shift(),
+                }));
+                shell.capture_event();
+            }
+            return;
+        }
+        if modifiers.shift() {
+            return;
+        }
+        // The view's start and extent, in the list's content
+        let view = axis.main(Size::new(
+            viewport.x - layout.bounds().x,
+            viewport.y - layout.bounds().y,
+        ));
+        let page = axis.main(viewport.size());
+        let geometry = self.geometry.borrow();
+        let Some(from) = geometry.target.and_then(|key| geometry.index_of(key)) else {
+            return;
+        };
+        let start = geometry.lead + geometry.offset_of(from);
+        let to = match *key {
+            k if k == forth => geometry.step(from, true).ok_or(ListAction::PastEnd),
+            k if k == back => geometry.step(from, false).ok_or(ListAction::PastStart),
+            Named::Home => geometry.end(true).ok_or(ListAction::PastStart),
+            Named::End => geometry.end(false).ok_or(ListAction::PastEnd),
+            Named::PageDown => geometry
+                .navigable_at(start + page, true)
+                .ok_or(ListAction::PastEnd),
+            Named::PageUp => geometry
+                .navigable_at((start - page).max(0.0), false)
+                .ok_or(ListAction::PastStart),
+            _ => return,
+        };
+        let to = match to {
+            Ok(to) => to,
+            Err(past) => {
+                drop(geometry);
+                if let Some(on_action) = &self.on_action {
+                    shell.publish(on_action(past));
+                }
+                shell.capture_event();
+                return;
+            }
+        };
+        let key = geometry.item(to).key;
+        // Just into view, its heading with it when going back
+        let begin = if to < from {
+            geometry.start_with_heading(to)
+        } else {
+            geometry.start_of(key)
+        };
+        let end = geometry.end_of(key);
+        let offset = match (begin, end) {
+            (Some(begin), _) if begin < view => Some(begin),
+            (_, Some(end)) if end > view + page => Some((end - page).max(0.0)),
+            _ => None,
+        };
+        let item_start = geometry.start_of(key);
+        drop(geometry);
+        let mut geometry = self.geometry.borrow_mut();
+        geometry.target = Some(key);
+        if let (Some(offset), Some(item_start)) = (offset, item_start) {
+            // The list goes there at its next layout, and keeps the place
+            geometry.keep((key, 0.0, item_start - offset));
+        }
+        let built = self.child_of(to).is_some();
+        geometry.focus_pending = !built;
+        drop(geometry);
+        if built {
+            self.focus_item(tree, layout, renderer, to, shell);
+        }
+        if offset.is_some() || !built {
+            shell.invalidate_layout();
+            shell.request_redraw();
+        }
+        shell.capture_event();
     }
 }
 
