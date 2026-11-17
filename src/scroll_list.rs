@@ -183,6 +183,34 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         self.follow = false;
     }
 
+    /// Scroll so that the content's `y` is at the view's top, as dragging a
+    /// stand-in for the scrollbar does. Stops following the end
+    pub fn scroll_to<T: Send + 'static>(&mut self, y: f32) -> Task<T> {
+        self.follow = false;
+        self.offset = Some(y.max(0.0));
+        scrollable::scroll_to(
+            self.id.clone(),
+            AbsoluteOffset {
+                x: None,
+                y: Some(y.max(0.0)),
+            },
+        )
+    }
+
+    /// Scroll `fraction` of the way down, as a jump to somewhere the list
+    /// cannot place by key (an item not loaded yet) does. Stops following
+    /// the end
+    pub fn scroll_to_fraction<T: Send + 'static>(&mut self, fraction: f32) -> Task<T> {
+        self.follow = false;
+        scrollable::snap_to(
+            self.id.clone(),
+            RelativeOffset {
+                x: None,
+                y: Some(fraction.clamp(0.0, 1.0)),
+            },
+        )
+    }
+
     /// Follow the end again and go there
     pub fn follow_end<T: Send + 'static>(&mut self) -> Task<T> {
         self.follow = true;
