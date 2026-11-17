@@ -2,24 +2,26 @@
 
 //! A scrollable list of boxes, and its optional virtualisation.
 //!
-//! [`scroll_list`] declares one vertical list: some leading children (a
-//! loading line, a "Load earlier" button), the items, and some trailing
-//! children (a status line), each a gap below the child before it. The
-//! list owns the scrollable, its viewport and the reader's place in it;
-//! the app supplies the items' keys and gaps, a child for each item, and
-//! what each item holds, for an estimate of its height before it is laid
-//! out ([`Estimate`]).
+//! [`scroll_list`] declares one list along an [`Axis`]: some leading
+//! children (a loading line, a "Load earlier" button), the items, and some
+//! trailing children (a status line), each a gap after the child before
+//! it. Along the main axis the list's extent grows with its content; across
+//! it, its parent gives its size (a vertical list's width, a horizontal
+//! list's height). The list owns the scrollable, its viewport and the
+//! reader's place in it; the app supplies the items' keys and gaps, a child
+//! for each item, and what each item holds, for an estimate of its extent
+//! before it is laid out ([`Estimate`]).
 //!
 //! An ordinary list builds every item. A [`ScrollList::virtualised`] list
 //! builds only the items that meet the viewport and a screen either side
-//! of it; every other item is room of its known or estimated height, so the
-//! scrollable's content is as tall as the whole list, and nothing but the
+//! of it; every other item is room of its known or estimated extent, so the
+//! scrollable's content is as long as the whole list, and nothing but the
 //! items near the view is laid out, diffed, drawn or sent events. Both are
 //! the same contract: the same keys, children, reveal and reading position.
 //!
-//! The list keeps the reader's place across layouts: when items above the
-//! view turn out taller or shorter than their estimates, rewrap at a new
-//! width, or arrive, it moves the scroll offset by the difference, in the
+//! The list keeps the reader's place across layouts: when items before the
+//! view turn out larger or smaller than their estimates, rewrap at a new
+//! cross size, or arrive, it moves the scroll offset by the difference, in the
 //! same layout, so no frame shows the jump. Children are diffed by key, so
 //! an item's widgets keep their state as the window slides.
 //!
@@ -55,6 +57,91 @@ pub use geometry::{Counts, ItemSpec, Last, Place, mix};
 
 use crate::scroll::{SCROLLBAR_GAP, SCROLLBAR_WIDTH};
 
+pub use crate::list_navigation::Axis;
+
+/// The main axis's measure of sizes, offsets and points: along a vertical
+/// list's height, a horizontal list's width
+trait Along {
+    fn main(self, size: Size) -> f32;
+    fn cross(self, size: Size) -> f32;
+    fn size(self, main: f32, cross: f32) -> Size;
+    fn point(self, main: f32, cross: f32) -> Point;
+    fn of(self, offset: Vector) -> f32;
+    fn to(self, main: f32) -> AbsoluteOffset<Option<f32>>;
+    fn by(self, main: f32) -> AbsoluteOffset;
+    fn fraction(self, fraction: f32) -> RelativeOffset<Option<f32>>;
+    fn end(self) -> scrollable::Position;
+}
+
+impl Along for Axis {
+    fn main(self, size: Size) -> f32 {
+        match self {
+            Axis::Vertical => size.height,
+            Axis::Horizontal => size.width,
+        }
+    }
+    fn cross(self, size: Size) -> f32 {
+        match self {
+            Axis::Vertical => size.width,
+            Axis::Horizontal => size.height,
+        }
+    }
+    fn size(self, main: f32, cross: f32) -> Size {
+        match self {
+            Axis::Vertical => Size::new(cross, main),
+            Axis::Horizontal => Size::new(main, cross),
+        }
+    }
+    fn point(self, main: f32, cross: f32) -> Point {
+        match self {
+            Axis::Vertical => Point::new(cross, main),
+            Axis::Horizontal => Point::new(main, cross),
+        }
+    }
+    fn of(self, offset: Vector) -> f32 {
+        match self {
+            Axis::Vertical => offset.y,
+            Axis::Horizontal => offset.x,
+        }
+    }
+    fn to(self, main: f32) -> AbsoluteOffset<Option<f32>> {
+        match self {
+            Axis::Vertical => AbsoluteOffset {
+                x: None,
+                y: Some(main),
+            },
+            Axis::Horizontal => AbsoluteOffset {
+                x: Some(main),
+                y: None,
+            },
+        }
+    }
+    fn by(self, main: f32) -> AbsoluteOffset {
+        match self {
+            Axis::Vertical => AbsoluteOffset { x: 0.0, y: main },
+            Axis::Horizontal => AbsoluteOffset { x: main, y: 0.0 },
+        }
+    }
+    fn fraction(self, fraction: f32) -> RelativeOffset<Option<f32>> {
+        match self {
+            Axis::Vertical => RelativeOffset {
+                x: None,
+                y: Some(fraction),
+            },
+            Axis::Horizontal => RelativeOffset {
+                x: Some(fraction),
+                y: None,
+            },
+        }
+    }
+    fn end(self) -> scrollable::Position {
+        match self {
+            Axis::Vertical => RelativeOffset { x: 0.0, y: 1.0 }.into(),
+            Axis::Horizontal => RelativeOffset { x: 1.0, y: 0.0 }.into(),
+        }
+    }
+}
+
 /// What a list's scrollable reports, for [`ListState::apply`]
 #[derive(Clone, Debug)]
 pub enum ListAction {
@@ -65,8 +152,8 @@ pub enum ListAction {
 /// Where a revealed item is brought to
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Reveal {
-    /// Its top `margin` below the view's top, as a jump to it does
-    Top { margin: f32 },
+    /// Its start `margin` after the view's start, as a jump to it does
+    Start { margin: f32 },
     /// Just into view, moving no more than needed, as keyboard
     /// navigation does; not at all if it is in view already
     Nearest,
@@ -78,6 +165,7 @@ pub enum Reveal {
 pub struct ListState<K> {
     geometry: Rc<RefCell<Geometry<K>>>,
     id: Id,
+    axis: Axis,
     /// Restored when the list's widget tree position is reused by another
     /// list, as tabs reuse theirs
     position: scrollable::Position,
@@ -96,11 +184,12 @@ impl<K: Copy + Eq + Hash> Default for ListState<K> {
 }
 
 impl<K: Copy + Eq + Hash> ListState<K> {
-    /// A list at its top
+    /// A vertical list at its start
     pub fn new() -> Self {
         Self {
             geometry: Rc::default(),
             id: Id::unique(),
+            axis: Axis::Vertical,
             position: AbsoluteOffset::default().into(),
             follow: false,
             offset: None,
@@ -110,13 +199,26 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         }
     }
 
-    /// A list that follows its end as items arrive, as a conversation does
-    pub fn following_end() -> Self {
+    /// A list along `axis`, at its start
+    pub fn along(axis: Axis) -> Self {
         Self {
-            follow: true,
-            position: RelativeOffset { x: 0.0, y: 1.0 }.into(),
+            axis,
             ..Self::new()
         }
+    }
+
+    /// A vertical list that follows its end as items arrive, as a
+    /// conversation does
+    pub fn following_end() -> Self {
+        let mut state = Self::new();
+        state.follow = true;
+        state.position = state.axis.end();
+        state
+    }
+
+    /// The list's main axis
+    pub fn axis(&self) -> Axis {
+        self.axis
     }
 
     /// The scrollable's id, for operations the list does not offer yet
@@ -133,35 +235,44 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     }
 
     fn scrolled<T: Send + 'static>(&mut self, viewport: &Viewport) -> Task<T> {
-        let bounds = viewport.bounds();
-        let content = viewport.content_bounds();
-        let offset = viewport.absolute_offset();
+        let axis = self.axis;
+        let bounds = axis.main(viewport.bounds().size());
+        let content = axis.main(viewport.content_bounds().size());
+        let offset = axis.of(Vector::new(
+            viewport.absolute_offset().x,
+            viewport.absolute_offset().y,
+        ));
         // When the layout changes under the reader, who did not scroll, the
         // list has kept their place already, in the same layout
-        let at_end = offset.y + bounds.height >= content.height - 0.5;
-        self.follow = viewport.is_pinned_to_end() || (viewport.is_user_scroll() && at_end);
+        let at_end = offset + bounds >= content - 0.5;
+        // Only a vertical scrollable keeps a pin to its end as content grows
+        let pinned = match axis {
+            Axis::Vertical => viewport.is_pinned_to_end(),
+            Axis::Horizontal => self.follow && at_end,
+        };
+        self.follow = pinned || (viewport.is_user_scroll() && at_end);
         self.position = if self.follow {
-            RelativeOffset { x: 0.0, y: 1.0 }.into()
+            axis.end()
         } else {
             viewport.position()
         };
-        self.page = bounds.height;
-        self.content = content.height;
-        self.offset = Some(offset.y);
+        self.page = bounds;
+        self.content = content;
+        self.offset = Some(offset);
         if !self.follow
-            && let Some(place) = self.geometry.borrow().place_at(offset.y)
+            && let Some(place) = self.geometry.borrow().place_at(offset)
         {
             self.place = Some(place);
         }
-        if viewport.is_user_scroll() && at_end && !viewport.is_pinned_to_end() {
+        if viewport.is_user_scroll() && at_end && !pinned {
             return self.pin_to_end();
         }
         Task::none()
     }
 
-    /// Show the list from its top, not following its end, as a fresh view
+    /// Show the list from its start, not following its end, as a fresh view
     /// of earlier items does
-    pub fn show_top(&mut self) {
+    pub fn show_start(&mut self) {
         self.follow = false;
         self.position = AbsoluteOffset::default().into();
         self.offset = Some(0.0);
@@ -183,51 +294,36 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         self.follow = false;
     }
 
-    /// Scroll so that the content's `y` is at the view's top, as dragging a
-    /// stand-in for the scrollbar does. Stops following the end
-    pub fn scroll_to<T: Send + 'static>(&mut self, y: f32) -> Task<T> {
+    /// Scroll so that the content's `offset` is at the view's start, as
+    /// dragging a stand-in for the scrollbar does. Stops following the end
+    pub fn scroll_to<T: Send + 'static>(&mut self, offset: f32) -> Task<T> {
         self.follow = false;
-        self.offset = Some(y.max(0.0));
-        scrollable::scroll_to(
-            self.id.clone(),
-            AbsoluteOffset {
-                x: None,
-                y: Some(y.max(0.0)),
-            },
-        )
+        self.offset = Some(offset.max(0.0));
+        scrollable::scroll_to(self.id.clone(), self.axis.to(offset.max(0.0)))
     }
 
-    /// Scroll `fraction` of the way down, as a jump to somewhere the list
+    /// Scroll `fraction` of the way along, as a jump to somewhere the list
     /// cannot place by key (an item not loaded yet) does. Stops following
     /// the end
     pub fn scroll_to_fraction<T: Send + 'static>(&mut self, fraction: f32) -> Task<T> {
         self.follow = false;
         scrollable::snap_to(
             self.id.clone(),
-            RelativeOffset {
-                x: None,
-                y: Some(fraction.clamp(0.0, 1.0)),
-            },
+            self.axis.fraction(fraction.clamp(0.0, 1.0)),
         )
     }
 
     /// Follow the end again and go there
     pub fn follow_end<T: Send + 'static>(&mut self) -> Task<T> {
         self.follow = true;
-        self.position = RelativeOffset { x: 0.0, y: 1.0 }.into();
-        scrollable::snap_to(
-            self.id.clone(),
-            RelativeOffset {
-                x: None,
-                y: Some(1.0),
-            },
-        )
+        self.position = self.axis.end();
+        scrollable::snap_to(self.id.clone(), self.axis.fraction(1.0))
     }
 
     /// Pin a deliberate return to the end, only if the user has not
     /// scrolled away again by the time this reaches the scrollable
     fn pin_to_end<T: Send + 'static>(&self) -> Task<T> {
-        struct Pin(Id);
+        struct Pin(Id, Axis);
         impl<T> Operation<T> for Pin {
             fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
                 operate(self);
@@ -240,15 +336,16 @@ impl<K: Copy + Eq + Hash> ListState<K> {
                 translation: Vector,
                 state: &mut dyn Scrollable,
             ) {
-                if id == Some(&self.0) && translation.y + bounds.height >= content.height - 0.5 {
-                    state.snap_to(RelativeOffset {
-                        x: None,
-                        y: Some(1.0),
-                    });
+                let axis = self.1;
+                if id == Some(&self.0)
+                    && axis.of(translation) + axis.main(bounds.size())
+                        >= axis.main(content.size()) - 0.5
+                {
+                    state.snap_to(axis.fraction(1.0));
                 }
             }
         }
-        cosmic::iced::runtime::task::widget(Pin(self.id.clone()))
+        cosmic::iced::runtime::task::widget(Pin(self.id.clone(), self.axis))
     }
 
     /// Scroll by `pages` of the view, keeping a little of the last page in
@@ -262,13 +359,7 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         } else {
             400.0
         };
-        let scroll = scrollable::scroll_by(
-            self.id.clone(),
-            AbsoluteOffset {
-                x: 0.0,
-                y: pages * page,
-            },
-        );
+        let scroll = scrollable::scroll_by(self.id.clone(), self.axis.by(pages * page));
         if pages > 0.0 {
             scroll.chain(self.pin_to_end())
         } else {
@@ -277,56 +368,51 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     }
 
     /// Bring item `key` into view, built or not, and keep it there as the
-    /// items around it are laid out and their heights corrected. Stops
+    /// items around it are laid out and their extents corrected. Stops
     /// following the end. None if the list has no such item shown
     pub fn reveal<T: Send + 'static>(&mut self, key: K, reveal: Reveal) -> Option<Task<T>> {
         let mut geometry = self.geometry.borrow_mut();
-        let top = geometry.top_of(key)?;
-        let y = match reveal {
-            Reveal::Top { margin } => (top - margin).max(0.0),
+        let start = geometry.start_of(key)?;
+        let offset = match reveal {
+            Reveal::Start { margin } => (start - margin).max(0.0),
             Reveal::Nearest => {
-                let bottom = geometry.bottom_of(key)?;
-                let view = self.view_top_in(&geometry);
-                if top < view {
-                    top
-                } else if bottom > view + self.page_height() {
-                    (bottom - self.page_height()).max(0.0)
+                let end = geometry.end_of(key)?;
+                let view = self.view_start_in(&geometry);
+                if start < view {
+                    start
+                } else if end > view + self.page_extent() {
+                    (end - self.page_extent()).max(0.0)
                 } else {
                     return Some(Task::none());
                 }
             }
         };
         self.follow = false;
-        self.offset = Some(y);
+        self.offset = Some(offset);
         // Laid out before: the list goes there itself at its next layout
-        // and keeps this place from then on, rather than what was at its top
-        if geometry.keep((key, 0.0, top - y)) {
+        // and keeps this place from then on, rather than what was at its
+        // start
+        if geometry.keep((key, 0.0, start - offset)) {
             return Some(Task::none());
         }
         drop(geometry);
-        Some(scrollable::scroll_to(
-            self.id.clone(),
-            AbsoluteOffset {
-                x: None,
-                y: Some(y),
-            },
-        ))
+        Some(scrollable::scroll_to(self.id.clone(), self.axis.to(offset)))
     }
 
-    /// Where the view's top stands, as last scrolled or at the end
-    pub fn view_top(&self) -> f32 {
-        self.view_top_in(&self.geometry.borrow())
+    /// Where the view's start stands, as last scrolled or at the end
+    pub fn view_start(&self) -> f32 {
+        self.view_start_in(&self.geometry.borrow())
     }
 
-    fn view_top_in(&self, geometry: &Geometry<K>) -> f32 {
+    fn view_start_in(&self, geometry: &Geometry<K>) -> f32 {
         match self.offset {
-            Some(top) if !self.follow => top,
-            _ => (geometry.content_height() - self.page_height()).max(0.0),
+            Some(start) if !self.follow => start,
+            _ => (geometry.content_extent() - self.page_extent()).max(0.0),
         }
     }
 
-    /// The view's height, as last scrolled, or a likely one before then
-    pub fn page_height(&self) -> f32 {
+    /// The view's extent, as last scrolled, or a likely one before then
+    pub fn page_extent(&self) -> f32 {
         if self.page > 0.0 { self.page } else { 1000.0 }
     }
 
@@ -334,7 +420,7 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     /// screen either side of it
     pub fn window(&self) -> Range<usize> {
         let geometry = self.geometry.borrow();
-        geometry.window(self.view_top_in(&geometry), self.page_height())
+        geometry.window(self.view_start_in(&geometry), self.page_extent())
     }
 
     /// Whether item `index` meets the view, rather than only being near it
@@ -343,9 +429,9 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         if index >= geometry.len() || !geometry.item(index).shown {
             return false;
         }
-        let top = self.view_top_in(&geometry);
-        let at = geometry.top + geometry.offset_of(index);
-        at + geometry.item(index).height >= top && at <= top + self.page_height()
+        let view = self.view_start_in(&geometry);
+        let at = geometry.lead + geometry.offset_of(index);
+        at + geometry.item(index).extent >= view && at <= view + self.page_extent()
     }
 
     /// The reader's place, as last scrolled while not following the end
@@ -353,14 +439,14 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         self.place
     }
 
-    /// The place at `y` in the content
-    pub fn place_at(&self, y: f32) -> Option<Place<K>> {
-        self.geometry.borrow().place_at(y)
+    /// The place at `offset` in the content
+    pub fn place_at(&self, offset: f32) -> Option<Place<K>> {
+        self.geometry.borrow().place_at(offset)
     }
 
-    /// Where item `key`'s top, past its gap, is in the content
-    pub fn top_of(&self, key: K) -> Option<f32> {
-        self.geometry.borrow().top_of(key)
+    /// Where item `key`'s start, past its gap, is in the content
+    pub fn start_of(&self, key: K) -> Option<f32> {
+        self.geometry.borrow().start_of(key)
     }
 
     /// Item `key`'s index, among all the items synced
@@ -368,31 +454,34 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         self.geometry.borrow().index_of(key)
     }
 
-    /// The content's height: its items' known and estimated heights and
+    /// The content's extent: its items' known and estimated extents and
     /// the room around them
-    pub fn content_height(&self) -> f32 {
+    pub fn content_extent(&self) -> f32 {
         let geometry = self.geometry.borrow();
         if geometry.last.is_some() || self.content <= 0.0 {
-            geometry.content_height()
+            geometry.content_extent()
         } else {
             self.content
         }
     }
 
-    /// The view as last laid out: its top, its content's height and its
+    /// The view as last laid out: its start, its content's extent and its
     /// own, or as last scrolled before the first layout
     pub fn stands(&self) -> (f32, f32, f32) {
         match self.geometry.borrow().last {
-            Some(last) => (last.offset, last.content.1, last.bounds.1),
+            Some(last) => {
+                let main = |(width, height): (f32, f32)| self.axis.main(Size::new(width, height));
+                (last.offset, main(last.content), main(last.bounds))
+            }
             None => (self.offset.unwrap_or_default(), self.content, self.page),
         }
     }
 
-    /// Item `key`'s content was laid out `height` tall elsewhere at the
-    /// list's width (by a worker that shapes text): a better estimate until
-    /// the list lays the item out itself
-    pub fn content_height_known(&self, key: K, height: f32) {
-        self.geometry.borrow_mut().content_height_known(key, height);
+    /// Item `key`'s content was laid out `extent` long elsewhere at the
+    /// list's cross size (by a worker that shapes text): a better estimate
+    /// until the list lays the item out itself
+    pub fn content_extent_known(&self, key: K, extent: f32) {
+        self.geometry.borrow_mut().content_extent_known(key, extent);
     }
 
     /// Forget every item, as when what the list shows is unloaded
@@ -405,7 +494,7 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         self.geometry.borrow().total() > 0.0
     }
 
-    /// The keys of the items laid out at the current width, for tests
+    /// The keys of the items laid out at the current cross size, for tests
     pub fn measured_keys(&self) -> Vec<K> {
         let geometry = self.geometry.borrow();
         (0..geometry.len())
@@ -436,8 +525,8 @@ impl<'a, Message> ListChild<'a, Message> {
     }
 
     /// A child standing in for content still being prepared (text a worker
-    /// has not shaped yet): room is kept at the item's estimated height,
-    /// not at the height of what stands in for it meanwhile
+    /// has not shaped yet): room is kept at the item's estimated extent,
+    /// not at the extent of what stands in for it meanwhile
     pub fn provisional(element: impl Into<Element<'a, Message>>) -> Self {
         Self {
             element: element.into(),
@@ -457,9 +546,9 @@ pub enum ScrollbarLane {
     Hidden,
 }
 
-/// Declare a vertical scrollable list whose retained state is `state`.
-/// Add its leading children, then its [`ScrollList::items`], then its
-/// trailing children, in that order
+/// Declare a scrollable list, along the axis of `state`, its retained
+/// state. Add its leading children, then its [`ScrollList::items`], then
+/// its trailing children, in that order
 pub fn scroll_list<'a, K: Copy + Eq + Hash + 'static, Message: 'a>(
     state: &'a ListState<K>,
 ) -> ScrollList<'a, K, Message> {
@@ -468,7 +557,7 @@ pub fn scroll_list<'a, K: Copy + Eq + Hash + 'static, Message: 'a>(
         virtualised: false,
         spacing: 0.0,
         padding: Padding::ZERO,
-        max_width: f32::INFINITY,
+        max_cross: f32::INFINITY,
         metrics: TextMetrics::default(),
         scrollbar: ScrollbarLane::Lane,
         children: Vec::new(),
@@ -489,12 +578,12 @@ enum Key<K> {
 
 #[derive(Clone, Copy, Debug)]
 enum Role {
-    /// Above the items, with the gap above it
+    /// Before the items, with the gap before it
     Leading(f32),
     /// The item at this index, and whether it is provisional: then its
-    /// height stays the estimate
+    /// extent stays the estimate
     Item(usize, bool),
-    /// Below the items, with the gap above it
+    /// After the items, with the gap before it
     Trailing(f32),
 }
 
@@ -506,7 +595,7 @@ pub struct ScrollList<'a, K, Message> {
     virtualised: bool,
     spacing: f32,
     padding: Padding,
-    max_width: f32,
+    max_cross: f32,
     metrics: TextMetrics,
     scrollbar: ScrollbarLane,
     children: Vec<Element<'a, Message>>,
@@ -524,7 +613,7 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
         self
     }
 
-    /// The gap above each leading and trailing child but the list's first
+    /// The gap before each leading and trailing child but the list's first
     pub fn spacing(mut self, spacing: f32) -> Self {
         self.spacing = spacing;
         self
@@ -535,10 +624,11 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
         self
     }
 
-    /// The column's widest, padding included; it stands at the left of the
-    /// content unless [`Self::map_content`] places it
-    pub fn max_width(mut self, max_width: f32) -> Self {
-        self.max_width = max_width;
+    /// The list's largest cross size, padding included (a vertical list's
+    /// widest); it stands at the start of the content's cross axis unless
+    /// [`Self::map_content`] places it
+    pub fn max_cross(mut self, max_cross: f32) -> Self {
+        self.max_cross = max_cross;
         self
     }
 
@@ -569,12 +659,12 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
         self
     }
 
-    /// Whether anything is above the next child
+    /// Whether anything is before the next child
     fn anything_before(&self) -> bool {
         !self.children.is_empty() || (self.items_added && self.state.any_shown())
     }
 
-    /// A child above the items
+    /// A child before the items
     pub fn leading(mut self, element: impl Into<Element<'a, Message>>) -> Self {
         debug_assert!(!self.items_added, "leading children come before the items");
         let gap = if self.anything_before() {
@@ -592,7 +682,7 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
     /// its child by `child(i)` (asked only for items that are built: every
     /// shown item, or those near the view when virtualised). Nothing is
     /// recomputed while `revision` stays the same. The first shown item has
-    /// no gap above it when nothing leads the list
+    /// no gap before it when nothing leads the list
     pub fn items(
         mut self,
         revision: u64,
@@ -631,7 +721,7 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> ScrollList<'a, K, Message> 
         self
     }
 
-    /// A child below the items
+    /// A child after the items
     pub fn trailing(mut self, element: impl Into<Element<'a, Message>>) -> Self {
         let gap = if self.anything_before() {
             self.spacing
@@ -655,11 +745,13 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> From<ScrollList<'a, K, Mess
 {
     fn from(list: ScrollList<'a, K, Message>) -> Self {
         let state = list.state;
+        let axis = state.axis;
         let column = Element::new(Column {
             geometry: state.geometry.clone(),
+            axis,
             metrics: list.metrics,
             padding: list.padding,
-            max_width: list.max_width,
+            max_cross: list.max_cross,
             children: list.children,
             keys: list.keys,
             roles: list.roles,
@@ -668,14 +760,16 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> From<ScrollList<'a, K, Mess
             Some(map) => map(column),
             None => column,
         };
-        let direction = match list.scrollbar {
-            ScrollbarLane::Lane => Direction::Vertical(
-                Scrollbar::new()
-                    .width(SCROLLBAR_WIDTH)
-                    .scroller_width(SCROLLBAR_WIDTH)
-                    .spacing(SCROLLBAR_GAP),
-            ),
-            ScrollbarLane::Hidden => Direction::Vertical(Scrollbar::hidden()),
+        let scrollbar = match list.scrollbar {
+            ScrollbarLane::Lane => Scrollbar::new()
+                .width(SCROLLBAR_WIDTH)
+                .scroller_width(SCROLLBAR_WIDTH)
+                .spacing(SCROLLBAR_GAP),
+            ScrollbarLane::Hidden => Scrollbar::hidden(),
+        };
+        let direction = match axis {
+            Axis::Vertical => Direction::Vertical(scrollbar),
+            Axis::Horizontal => Direction::Horizontal(scrollbar),
         };
         let mut scroll = widget::scrollable(content)
             .direction(direction)
@@ -689,6 +783,7 @@ impl<'a, K: Copy + Eq + Hash + 'static, Message: 'a> From<ScrollList<'a, K, Mess
         Element::new(Anchored {
             content: scroll.into(),
             id: state.id.clone(),
+            axis,
             geometry: state.geometry.clone(),
             follow: state.follow,
         })
@@ -700,13 +795,14 @@ struct ColumnState<K> {
     keys: Vec<Key<K>>,
 }
 
-/// The list's children: leading, the items built, trailing. Every item not
-/// built is room of its known or estimated height
+/// The list's children along its axis: leading, the items built,
+/// trailing. Every item not built is room of its known or estimated extent
 struct Column<'a, K, Message> {
     geometry: Rc<RefCell<Geometry<K>>>,
+    axis: Axis,
     metrics: TextMetrics,
     padding: Padding,
-    max_width: f32,
+    max_cross: f32,
     children: Vec<Element<'a, Message>>,
     keys: Vec<Key<K>>,
     roles: Vec<Role>,
@@ -764,7 +860,10 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer>
     }
 
     fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Shrink)
+        match self.axis {
+            Axis::Vertical => Size::new(Length::Fill, Length::Shrink),
+            Axis::Horizontal => Size::new(Length::Shrink, Length::Fill),
+        }
     }
 
     fn layout(
@@ -773,30 +872,57 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer>
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let limits = limits
-            .max_width(self.max_width)
-            .width(Length::Fill)
-            .height(Length::Shrink);
-        let width = limits.max().width;
-        let inner = (width - self.padding.left - self.padding.right).max(0.0);
-        // As a column lays its children out, compressed as the scrollable
-        // asks
-        let child_limits = layout::Limits::with_compression(
-            Size::ZERO,
-            Size::new(inner, f32::INFINITY),
-            Size::new(false, limits.compression().height),
-        );
+        let axis = self.axis;
+        let padding = self.padding;
+        // Padding at the main axis's start and end, and across it
+        let (lead_pad, trail_pad, cross_start, cross_pad) = match axis {
+            Axis::Vertical => (
+                padding.top,
+                padding.bottom,
+                padding.left,
+                padding.left + padding.right,
+            ),
+            Axis::Horizontal => (
+                padding.left,
+                padding.right,
+                padding.top,
+                padding.top + padding.bottom,
+            ),
+        };
+        let size = self.size();
+        let limits = match axis {
+            Axis::Vertical => limits.max_width(self.max_cross),
+            Axis::Horizontal => limits.max_height(self.max_cross),
+        }
+        .width(size.width)
+        .height(size.height);
+        let cross = axis.cross(limits.max());
+        let inner = (cross - cross_pad).max(0.0);
+        // As a column or row lays its children out: the cross size given,
+        // the main axis unbounded and compressed as the scrollable asks
+        let compression = limits.compression();
+        let child_limits = match axis {
+            Axis::Vertical => layout::Limits::with_compression(
+                Size::ZERO,
+                Size::new(inner, f32::INFINITY),
+                Size::new(false, compression.height),
+            ),
+            Axis::Horizontal => layout::Limits::with_compression(
+                Size::ZERO,
+                Size::new(f32::INFINITY, inner),
+                Size::new(compression.width, false),
+            ),
+        };
         // A disposable measurement reads the geometry but commits nothing
-        // to it: the retained heights are those of the layout presented
+        // to it: the retained extents are those of the layout presented
         let commit = !crate::layout::is_speculative();
         let mut geometry = self.geometry.borrow_mut();
         if commit {
-            geometry.set_width(inner, self.metrics);
+            geometry.set_cross(inner, self.metrics);
         }
-        let x = self.padding.left;
-        let mut y = self.padding.top;
-        // Where the first item's top is: below the leading children
-        let mut items_top = None;
+        let mut at = lead_pad;
+        // Where the first item's start is: after the leading children
+        let mut items_lead = None;
         let mut after_items = false;
         let mut nodes = Vec::with_capacity(self.children.len());
         for ((child, child_tree), role) in self
@@ -808,40 +934,44 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer>
             let node = child
                 .as_widget_mut()
                 .layout(child_tree, renderer, &child_limits);
-            let height = node.size().height;
+            let extent = axis.main(node.size());
             match *role {
                 Role::Leading(gap) => {
-                    nodes.push(node.move_to(Point::new(x, y + gap)));
-                    y += gap + height;
+                    nodes.push(node.move_to(axis.point(at + gap, cross_start)));
+                    at += gap + extent;
                 }
                 Role::Item(index, provisional) => {
-                    let top = *items_top.get_or_insert(y);
+                    let lead = *items_lead.get_or_insert(at);
                     let gap = geometry.item(index).gap;
                     if commit && !provisional {
-                        geometry.measured(index, gap + height);
+                        geometry.measured(index, gap + extent);
                     }
-                    nodes.push(node.move_to(Point::new(x, top + geometry.offset_of(index) + gap)));
+                    nodes.push(
+                        node.move_to(
+                            axis.point(lead + geometry.offset_of(index) + gap, cross_start),
+                        ),
+                    );
                 }
                 Role::Trailing(gap) => {
                     if !after_items {
-                        y = *items_top.get_or_insert(y) + geometry.total();
+                        at = *items_lead.get_or_insert(at) + geometry.total();
                         after_items = true;
                     }
-                    nodes.push(node.move_to(Point::new(x, y + gap)));
-                    y += gap + height;
+                    nodes.push(node.move_to(axis.point(at + gap, cross_start)));
+                    at += gap + extent;
                 }
             }
         }
-        let items_top = items_top.unwrap_or(y);
+        let items_lead = items_lead.unwrap_or(at);
         if !after_items {
-            y = items_top + geometry.total();
+            at = items_lead + geometry.total();
         }
-        let end = y + self.padding.bottom;
+        let end = at + trail_pad;
         if commit {
-            geometry.top = items_top;
-            geometry.bottom = end - (items_top + geometry.total());
+            geometry.lead = items_lead;
+            geometry.trail = end - (items_lead + geometry.total());
         }
-        let size = limits.resolve(Length::Fill, Length::Shrink, Size::new(width, end));
+        let size = limits.resolve(size.width, size.height, axis.size(end, cross));
         layout::Node::with_children(size, nodes)
     }
 
@@ -996,9 +1126,10 @@ impl<K: Copy + Eq + Hash + 'static, Message> Widget<Message, Theme, Renderer>
 }
 
 /// The scrollable `id`'s offset, bounds and content, and a new offset to
-/// give it; nothing inside it is visited
+/// give it along `axis`; nothing inside it is visited
 struct Probe {
     id: Id,
+    axis: Axis,
     found: Option<(Rectangle, Rectangle, Vector)>,
     scroll_to: Option<f32>,
 }
@@ -1016,11 +1147,8 @@ impl Operation for Probe {
     ) {
         if id == Some(&self.id) {
             self.found = Some((bounds, content, translation));
-            if let Some(y) = self.scroll_to {
-                state.scroll_to(AbsoluteOffset {
-                    x: None,
-                    y: Some(y),
-                });
+            if let Some(offset) = self.scroll_to {
+                state.scroll_to(self.axis.to(offset));
             }
         }
     }
@@ -1031,6 +1159,7 @@ impl Operation for Probe {
 struct Anchored<'a, K, Message> {
     content: Element<'a, Message>,
     id: Id,
+    axis: Axis,
     geometry: Rc<RefCell<Geometry<K>>>,
     follow: bool,
 }
@@ -1045,6 +1174,7 @@ impl<K: Copy + Eq + Hash, Message> Anchored<'_, K, Message> {
     ) -> Option<(Rectangle, Rectangle, Vector)> {
         let mut probe = Probe {
             id: self.id.clone(),
+            axis: self.axis,
             found: None,
             scroll_to,
         };
@@ -1071,7 +1201,8 @@ impl<K: Copy + Eq + Hash, Message> Widget<Message, Theme, Renderer> for Anchored
                 .as_widget_mut()
                 .layout(&mut tree.children[0], renderer, limits);
         }
-        // Where the scrollable's top stands now, against the layout it had
+        let axis = self.axis;
+        // Where the scrollable's start stands now, against the layout it had
         let last = self.geometry.borrow().last;
         let before = last.and_then(|last| {
             let node = layout::Node::with_children(
@@ -1079,7 +1210,7 @@ impl<K: Copy + Eq + Hash, Message> Widget<Message, Theme, Renderer> for Anchored
                 vec![layout::Node::new(Size::new(last.content.0, last.content.1))],
             );
             self.probe(&mut tree.children[0], renderer, &node, None)
-                .map(|(_, _, translation)| translation.y)
+                .map(|(_, _, translation)| axis.of(translation))
         });
         self.geometry.borrow_mut().begin_layout(before);
         let node = self
@@ -1091,12 +1222,12 @@ impl<K: Copy + Eq + Hash, Message> Widget<Message, Theme, Renderer> for Anchored
         else {
             return node;
         };
-        let mut offset = translation.y;
+        let mut offset = axis.of(translation);
         let target = self.geometry.borrow().target();
         if !self.follow
             && let Some(target) = target
         {
-            let most = (content.height - bounds.height).max(0.0);
+            let most = (axis.main(content.size()) - axis.main(bounds.size())).max(0.0);
             let target = target.clamp(0.0, most);
             if (target - offset).abs() > 0.5 {
                 self.probe(&mut tree.children[0], renderer, &node, Some(target));

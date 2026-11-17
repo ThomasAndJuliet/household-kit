@@ -12,7 +12,7 @@ use cosmic::iced::{Font, Length, Pixels, Point, Rectangle, Size, Vector, mouse};
 use cosmic::{Element, Renderer, widget};
 use household_widgets::layout;
 use household_widgets::scroll_list::{
-    Estimate, EstimateClass, ItemSpec, ListAction, ListChild, ListState, Reveal, scroll_list,
+    Axis, Estimate, EstimateClass, ItemSpec, ListAction, ListChild, ListState, Reveal, scroll_list,
 };
 
 #[derive(Clone, Debug)]
@@ -169,7 +169,7 @@ fn a_virtualised_list_builds_only_what_is_near_the_view() {
         "about three pages of items each time, not all 1000: {built}"
     );
     assert!(
-        state.content_height() > 1000.0 * 40.0,
+        state.content_extent() > 1000.0 * 40.0,
         "the content is as tall as every item, built or not"
     );
 }
@@ -187,9 +187,9 @@ fn an_ordinary_list_builds_every_item_and_measures_it() {
     assert_eq!(state.measured_keys().len(), 100);
     // 24 leading, then 100 items of 50 with a gap of 10 above each
     assert!(
-        (state.content_height() - (24.0 + 100.0 * 60.0)).abs() < 0.5,
+        (state.content_extent() - (24.0 + 100.0 * 60.0)).abs() < 0.5,
         "{}",
-        state.content_height()
+        state.content_extent()
     );
 }
 
@@ -219,7 +219,7 @@ fn the_reading_position_holds_when_items_above_grow() {
         None,
     );
     let (place, ..) = state.place().expect("a place once scrolled");
-    let before = state.top_of(place).unwrap();
+    let before = state.start_of(place).unwrap();
     // Items 42 to 46, above the view and built, turn out 100 px taller
     let mut look = Offset {
         id: id.clone(),
@@ -249,7 +249,7 @@ fn the_reading_position_holds_when_items_above_grow() {
         },
         Some(&mut look),
     );
-    let after = state.top_of(place).unwrap();
+    let after = state.start_of(place).unwrap();
     assert!(
         (after - before - 500.0).abs() < 0.5,
         "the place moved down by what grew above it: {before} → {after}"
@@ -276,7 +276,7 @@ fn reveal_brings_an_item_not_built_into_view() {
     );
     drop(
         state
-            .reveal::<()>(700, Reveal::Top { margin: 16.0 })
+            .reveal::<()>(700, Reveal::Start { margin: 16.0 })
             .expect("item 700 is in the list"),
     );
     let mut look = Offset {
@@ -295,7 +295,7 @@ fn reveal_brings_an_item_not_built_into_view() {
         Some(&mut look),
     );
     assert!(state.measured_keys().contains(&700), "built once revealed");
-    let top = state.top_of(700).unwrap();
+    let top = state.start_of(700).unwrap();
     let y = look.y.expect("the scrollable");
     assert!(
         (y - (top - 16.0)).abs() < 1.0,
@@ -326,4 +326,73 @@ fn a_disposable_measurement_commits_nothing() {
         "no heights measured, no place kept"
     );
     assert!(state.measured_keys().is_empty());
+}
+
+/// `count` buttons-like items along a horizontal list, item `i` `width(i)`
+/// wide
+fn row<'a>(
+    state: &'a ListState<u64>,
+    count: usize,
+    width: impl Fn(usize) -> f32 + 'a,
+) -> Element<'a, Message> {
+    let spec = |i: usize| ItemSpec {
+        key: i as u64,
+        revision: 1,
+        class: EstimateClass(0),
+        gap: 8.0,
+        shown: true,
+    };
+    scroll_list(state)
+        .virtualised(true)
+        .items(
+            1,
+            count,
+            spec,
+            |_| Estimate::Fixed { ems: 80.0 / 15.0 },
+            |i| ListChild::new(widget::Space::new().width(width(i)).height(Length::Fill)),
+        )
+        .on_action(Message::List)
+        .into()
+}
+
+#[test]
+fn a_horizontal_list_builds_and_reveals_along_its_width() {
+    let mut window = Window::new();
+    let mut state = ListState::along(Axis::Horizontal);
+    window.show(&mut state, |state| row(state, 500, |_| 80.0), None);
+    window.show(&mut state, |state| row(state, 500, |_| 80.0), None);
+    assert!(
+        state.counts().built < 2 * 30,
+        "about three widths of 600 px of items each time, not all 500: {}",
+        state.counts().built
+    );
+    // 500 items of 80 with a gap of 8 before all but the first
+    assert!(
+        (state.content_extent() - (500.0 * 88.0 - 8.0)).abs() < 0.5,
+        "the content is as wide as every item: {}",
+        state.content_extent()
+    );
+    drop(
+        state
+            .reveal::<()>(400, Reveal::Start { margin: 0.0 })
+            .expect("item 400"),
+    );
+    let mut look = Offset {
+        id: state.id().clone(),
+        y: None,
+        scroll_to: None,
+    };
+    window.show(&mut state, |state| row(state, 500, |_| 80.0), None);
+    window.show(
+        &mut state,
+        |state| row(state, 500, |_| 80.0),
+        Some(&mut look),
+    );
+    assert!(state.measured_keys().contains(&400), "built once revealed");
+    let start = state.start_of(400).unwrap();
+    assert!(
+        (state.view_start() - start).abs() < 1.0,
+        "its start at the view's start: {} for {start}",
+        state.view_start()
+    );
 }

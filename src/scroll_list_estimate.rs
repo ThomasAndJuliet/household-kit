@@ -188,15 +188,19 @@ pub struct EstimateClass(pub u8);
 /// How tall an item is likely to be before it is laid out
 #[derive(Clone, Debug, PartialEq)]
 pub enum Estimate {
-    /// Its content, at the list's width, and `around` body ems of room
-    /// around it (a label, a header). The list learns the ratio of laid-out
-    /// to estimated content per class
+    /// Its running content, wrapped across a vertical list's width, and
+    /// `around` body ems of room around it (a label, a header). The list
+    /// learns the ratio of laid-out to estimated content per class. A
+    /// horizontal list of columns, where text flows from one column into
+    /// the next, estimates how many columns it needs instead: that comes
+    /// with pagination
     Content {
         summary: ContentSummary,
         around: f32,
     },
-    /// About `ems` body ems tall, whatever the width, as a closed card or
-    /// a one-line row is. The list learns the actual height per class
+    /// About `ems` body ems along the list's axis, whatever its cross size,
+    /// as a closed card, a one-line row or a button is. The list learns
+    /// the actual extent per class
     Fixed { ems: f32 },
 }
 
