@@ -184,6 +184,28 @@ fn information_anchors_to_the_drawn_text_not_the_stretched_source() {
 }
 
 #[test]
+fn information_anchors_to_drawn_content_that_reports_no_text_too() {
+    // An icon beside its count: the card attaches to both, from the icon
+    let anchors = Anchors::default();
+    let icon: Element<'static, ()> = native::space().width(16).height(16).into();
+    let row: Element<'static, ()> =
+        native::container(native::row![drawn(icon), native::text("x3")].spacing(4.0))
+            .width(Length::Fill)
+            .height(Length::Fixed(40.0))
+            .into();
+    let window = Rectangle::with_size(Size::new(600.0, 200.0));
+    shown_source(&anchors, anchors.anchor("iconed", row), 400.0, window);
+    let id = Id::new("iconed");
+    let whole = anchors.visible(&id).unwrap();
+    let anchor = anchors.information_anchor(&id).unwrap();
+    assert_eq!(
+        anchor.x, whole.x,
+        "the card starts at the icon, not at the text beside it"
+    );
+    assert!(anchor.width > 16.0 && anchor.width < 100.0, "{anchor:?}");
+}
+
+#[test]
 fn information_anchor_is_clipped_to_the_visible_source() {
     let anchors = Anchors::default();
     let wide: Element<'static, ()> = native::container(native::text("A rather long line"))

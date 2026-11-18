@@ -106,13 +106,58 @@ impl Operation for ContentProbe {
         operate(self);
     }
     fn text(&mut self, _: Option<&Id>, bounds: Rectangle, text: &str) {
-        if text.trim().is_empty() || bounds.width <= 0.0 || bounds.height <= 0.0 {
+        if text.trim().is_empty() {
+            return;
+        }
+        self.add(bounds);
+    }
+    fn custom(&mut self, _: Option<&Id>, bounds: Rectangle, state: &mut dyn std::any::Any) {
+        if state.is::<DrawnMark>() {
+            self.add(bounds);
+        }
+    }
+}
+impl ContentProbe {
+    fn add(&mut self, bounds: Rectangle) {
+        if bounds.width <= 0.0 || bounds.height <= 0.0 {
             return;
         }
         self.union = Some(match self.union {
             Some(union) => union.union(&bounds),
             None => bounds,
         });
+    }
+}
+
+/// What [`drawn`] reports to a source's traversal
+struct DrawnMark;
+
+/// `content` as drawn content of the source it is in: icons and pictures
+/// report nothing to a traversal, so an information card would attach to
+/// the text beside them alone. Wrap a source's icon with its text, as wide
+/// as they are drawn.
+pub fn drawn<'a, Message: 'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    Element::new(Drawn {
+        content: content.into(),
+    })
+}
+
+struct Drawn<'a, Message> {
+    content: Element<'a, Message>,
+}
+impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Drawn<'a, Message> {
+    forward_widget!(Message, Theme, Renderer; children, diff, size, size_hint, layout, update, draw, mouse_interaction, overlay, drag_destinations);
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        operation.custom(None, layout.bounds(), &mut DrawnMark);
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
     }
 }
 

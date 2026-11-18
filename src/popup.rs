@@ -20,7 +20,7 @@ use cosmic::{Element, Renderer, Theme, widget};
 
 #[path = "popup_anchor.rs"]
 mod anchor;
-pub use anchor::{Anchors, INFORMATION_DELAY};
+pub use anchor::{Anchors, INFORMATION_DELAY, drawn};
 pub(crate) use anchor::{Ident, declared_source, retained_source, source};
 
 #[path = "popup_focus.rs"]
