@@ -58,6 +58,7 @@ pub struct Panel<'a, Message> {
     pub stages: Vec<Stage<'a, Message>>,
     pub targets: Vec<FocusTarget<Message>>,
     embedded: Vec<Vec<Stage<'a, Message>>>,
+    lateral: Option<(Message, Message)>,
     parent_edges: bool,
     surface_insets: Padding,
     source: Option<Id>,
@@ -76,6 +77,7 @@ impl<'a, Message: 'a> Panel<'a, Message> {
             stages,
             targets: Vec::new(),
             embedded: Vec::new(),
+            lateral: None,
             parent_edges: false,
             surface_insets: Padding::ZERO,
             source: None,
@@ -93,6 +95,13 @@ impl<'a, Message: 'a> Panel<'a, Message> {
     /// level exhausts its permitted candidates. The host never inspects them.
     pub fn embedded_compositions(mut self, alternatives: Vec<Vec<Stage<'a, Message>>>) -> Self {
         self.embedded = alternatives;
+        self
+    }
+    /// A menu bar's menu: Left at this root panel publishes `previous`, and
+    /// Right where the keyboard's target opens no submenu publishes `next`
+    /// (at any depth), opening the bar's neighbouring menus.
+    pub fn lateral(mut self, previous: Message, next: Message) -> Self {
+        self.lateral = Some((previous, next));
         self
     }
     /// Keep a row's vertical anchor while placing side candidates beyond its
@@ -1341,6 +1350,16 @@ impl<'a, Message: Clone + 'a> Chain<'_, 'a, Message> {
             }
             return;
         }
+        let lateral = self.panels.first().and_then(|panel| panel.lateral.as_ref());
+        if key == Named::ArrowLeft
+            && count == 1
+            && let Some((previous, _)) = lateral
+        {
+            self.anchors.leave_keyboard_target();
+            shell.publish(previous.clone());
+            shell.capture_event();
+            return;
+        }
         if matches!(key, Named::Escape) || (key == Named::ArrowLeft && count > 1) {
             self.anchors.leave_keyboard_target();
             if count > 1 {
@@ -1415,7 +1434,10 @@ impl<'a, Message: Clone + 'a> Chain<'_, 'a, Message> {
         {
             let action = match key {
                 Named::Enter => target.activate.as_ref(),
-                Named::ArrowRight => target.open.as_ref(),
+                Named::ArrowRight => target
+                    .open
+                    .as_ref()
+                    .or_else(|| lateral.map(|(_, next)| next)),
                 _ => None,
             };
             if let Some(action) = action {

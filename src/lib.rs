@@ -30,6 +30,7 @@ mod level;
 pub mod list_navigation;
 pub mod look;
 pub mod menu;
+pub mod menu_bar;
 pub mod menu_parts;
 pub mod menu_surface;
 pub mod navigation_style;

@@ -57,6 +57,12 @@ enum Internal<R> {
         root: R,
         entry: Entry,
     },
+    /// Open `root` unless it is the one open: a menu bar's neighbour, by
+    /// the pointer moving onto its title or by Left and Right
+    Open {
+        root: R,
+        entry: Entry,
+    },
     Path {
         session: u64,
         path: Vec<usize>,
@@ -135,6 +141,11 @@ impl<R: Clone + PartialEq + Debug + 'static> WindowUi<R> {
                 if self.chain.as_ref().is_some_and(|chain| chain.root == root) {
                     self.chain = None;
                 } else {
+                    self.open(root, entry);
+                }
+            }
+            Internal::Open { root, entry } => {
+                if self.chain.as_ref().is_none_or(|chain| chain.root != root) {
                     self.open(root, entry);
                 }
             }
@@ -311,6 +322,11 @@ impl<'w, R: 'static> ChainRequest<'w, R> {
         let session = self.session;
         move |path| UiEvent::Internal(WindowAction(Internal::Path { session, path }))
     }
+    /// The message that opens `root`'s chain in place of this one, as a
+    /// menu bar's Left and Right open its neighbours ([`Panel::lateral`]).
+    pub fn open<M>(&self, root: R, entry: Entry) -> UiEvent<R, M> {
+        UiEvent::Internal(WindowAction(Internal::Open { root, entry }))
+    }
     /// The message that expands or collapses the disclosure `row`; it is
     /// session state, gone when the chain closes.
     pub fn expand<M>(&self, row: usize, open: bool) -> UiEvent<R, M> {
@@ -386,6 +402,11 @@ impl Context {
 
 fn current() -> Option<Context> {
     CURRENT.with(|stack| stack.borrow().last().cloned())
+}
+
+/// Open `root` in the current window unless it is the one open
+pub(crate) fn queue_open<R: 'static>(root: R, entry: Entry) {
+    queue(Internal::Open { root, entry });
 }
 
 fn queue<R: 'static>(action: Internal<R>) {
