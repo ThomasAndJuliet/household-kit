@@ -14,12 +14,16 @@
 //!   widget, sharing the text box's history, steps and keys.
 //! - [`scroll_list`]: a scrollable list of boxes, optionally virtualised,
 //!   keeping the reader's place.
+//! - `content` (feature `content`): the content boxes, inline text and
+//!   formulas from household-kit's content model.
 //!
 //! Plain colour maths stays in household-kit's `household-tones`; this
 //! crate turns it into libcosmic's types.
 
 #[macro_use]
 mod forward;
+#[cfg(feature = "content")]
+pub mod content;
 pub mod focus_regions;
 #[doc(hidden)]
 pub mod history;
