@@ -12,6 +12,7 @@
 //!   Shift+click, and its selection drawn dimmed while unfocused.
 //! - [`short_text_box`]: the one-line text box, [`ShortTextBox`] and its
 //!   widget, sharing the text box's history, steps and keys.
+//! - [`dropdown`]: a dropdown whose list is the window's one menu chain.
 //! - [`scroll_list`]: a scrollable list of boxes, optionally virtualised,
 //!   keeping the reader's place.
 //!
@@ -20,6 +21,7 @@
 
 #[macro_use]
 mod forward;
+pub mod dropdown;
 pub mod focus_regions;
 #[doc(hidden)]
 pub mod history;
