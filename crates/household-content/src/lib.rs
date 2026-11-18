@@ -26,15 +26,18 @@
 //! No module depends on libcosmic or iced (household-kit's rule): the
 //! boxes that shape and draw content are household-widgets' `content`.
 
-// pub mod anchor;
+pub mod anchor;
 pub mod blocks;
 pub mod display;
-// pub mod document;
-// pub mod highlight;
-// pub mod inline;
-// pub mod math;
+pub mod document;
+pub mod highlight;
+pub mod inline;
+pub mod math;
 pub mod maths;
 pub mod syntax;
+
+#[cfg(test)]
+mod pr145_tests;
 
 use pulldown_cmark::Options;
 

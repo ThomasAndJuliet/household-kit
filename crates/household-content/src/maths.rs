@@ -506,8 +506,42 @@ pub fn recognise(text: &str) -> Recognised {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Terminal PR 145's formulas: the `cases` Juliet was sent (the first
+    /// four; the first two have a line that is only `=`), and the other
+    /// environments and commands in use
+    pub(crate) const FORMULAS: [&str; 28] = [
+        "\\sup_{s\\ne I}\\operatorname{diam}_{\\{s\\}}(\\mathrm{SL}_n(F))\n=\n\\begin{cases}\n\\infty, & \\mu_n(F)\\ne\\{1\\},\\\\\n\\Delta_1(\\mathrm{SL}_n(F)), & \\mu_n(F)=\\{1\\},\n\\end{cases}",
+        "\\mathrm{cn}_{\\mathrm{ng}}(\\mathrm{SL}_n(F))\n=\n\\begin{cases}\nn+1, & |F|\\geq4,\\quad \\mu_n(F)\\ne\\{1\\},\\\\[3pt]\nn, & \\substack{|F|\\geq4,\\quad \\mu_n(F)=\\{1\\},\\\\\nn\\geq4\\ \\text{or}\\ (n=3,\\ F\\text{ finite or algebraically closed})},\\\\[3pt]\nn, & F=\\mathbb F_2\n\\end{cases}",
+        "\\|X\\|_T=\n\\begin{cases}\nr+1,&\\text{if }X|_W=\\beta I_W\\text{ for some }\\beta\\neq1,\\\\\nr,&\\text{otherwise.}\n\\end{cases}",
+        "B_g\\cong\n\\begin{cases}\nM_\\ell(R_h),&g_{11}\\ne0,\\\\[2mm]\nN_\\ell\\otimes R_h,&g_{11}=0,\n\\end{cases}\n\\qquad\nR_h=\\mathbb C[u]/(T_\\ell(u)-h)",
+        "|x|=\\begin{cases} x & x\\ge 0 \\\\ -x & x<0 \\end{cases}",
+        "g=\\begin{cases}\n+ 1 & x>0\\\\\n- 1 & x<0\\\\\n1. & x=0\n\\end{cases}",
+        "\\begin{cases} 1 & \\text{if $x>0$} \\\\ 0 & \\text{otherwise} \\end{cases}",
+        "\\begin{aligned}\na&=b\n+c\\\\\n&=d\n- e\n\\end{aligned}",
+        "\\begin{align}\na&=b\\\\\nc&=d\n\\end{align}",
+        "\\begin{align*}\na&=b\\\\\nc&=d\n\\end{align*}",
+        "\\begin{matrix}a&b\\\\c&d\\end{matrix}",
+        "\\begin{pmatrix}\np&q&h\\\\\n0&1&0\\\\\n0&0&1\n\\end{pmatrix}",
+        "\\begin{bmatrix}a&b\\\\c&d\\end{bmatrix}",
+        "\\left[\\begin{array}{c|c}a&b\\\\\\hline c&d\\end{array}\\right]",
+        "\\begin{gathered}a=b\\\\c=d\\end{gathered}",
+        "\\begin{gather}a=b\\\\c=d\\end{gather}",
+        "\\begin{split}a&=b\\\\&=c\\end{split}",
+        "\\begin{equation}\\begin{split}a&=b\\\\&=c\\end{split}\\end{equation}",
+        "x\\text{ for all } y",
+        "\\operatorname{rank}(A)+\\operatorname*{argmax}_x f",
+        "\\mathbb{R}\\mathbb C",
+        "\\mathcal{O}_q\\mathcal A",
+        "\\frac{a}{b}+\\tfrac12+\\dfrac{1}{2}",
+        "\\sqrt{x}+\\sqrt[3]{y}",
+        "\\sum_{i=0}^{n}x_i+\\prod_{j}y_j+\\int_0^1 f",
+        "\\left(\\frac{a}{b}\\right)\\left[x\\right]\\left\\{y\\right\\}\\left|z\\right|\\left.t\\right|",
+        "a\n=\nb",
+        "\\begin{pmatrix}a\\\\\n- b\\end{pmatrix}\n=\n\\begin{pmatrix}c\\\\\n+ d\\end{pmatrix}",
+    ];
 
     /// The rewritten text, with the markers shown as `⏎`
     fn shown(r: &Recognised) -> String {
