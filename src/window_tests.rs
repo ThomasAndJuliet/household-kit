@@ -15,7 +15,7 @@ use cosmic::iced::event::Status;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
 use cosmic::iced::{Font, Pixels, Point, keyboard, window as native_window};
-use cosmic::widget;
+use cosmic::widget::{self, tooltip::Position};
 use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -41,6 +41,11 @@ struct Scene {
     editor: native::text_editor::Content<Renderer>,
     list: ListState<u64>,
     protected: bool,
+    /// Legacy tooltips, in two areas below: what the first says, whether
+    /// the second is there, and whether the list's first row has one
+    legacy_tip: &'static str,
+    legacy_two: bool,
+    legacy_row: bool,
 }
 
 impl Scene {
@@ -51,8 +56,15 @@ impl Scene {
             editor: native::text_editor::Content::new(),
             list: ListState::new(),
             protected: false,
+            legacy_tip: "First",
+            legacy_two: true,
+            legacy_row: false,
         }
     }
+}
+
+fn tip<'w>(said: &'static str) -> crate::Tip<'w, Message> {
+    crate::Tip::new(said, move || native::text(said).into())
 }
 
 fn help<'w, M: 'w>() -> crate::layout::Child<'w, M> {
@@ -190,14 +202,19 @@ fn view<'w>(window: &'w WindowUi<Root>, scene: &'w Scene) -> Element<'w, Ev> {
             spec,
             |_| Estimate::Fixed { ems: 40.0 / 15.0 },
             |i| {
-                ListChild::new(hover_box(
-                    row_help(i),
-                    widget::button::custom(native::space().width(Length::Fill).height(40))
-                        .id(row_id(i))
-                        .on_press(Message::Pressed),
-                    help(),
-                    vec![AnchorCandidate::new(Side::Left, Alignment::StartBounded)],
-                ))
+                let button = widget::button::custom(native::space().width(Length::Fill).height(40))
+                    .id(row_id(i))
+                    .on_press(Message::Pressed);
+                ListChild::new(if i == 0 && scene.legacy_row {
+                    crate::tooltip_with(button, tip("Row"), Position::Left)
+                } else {
+                    hover_box(
+                        row_help(i),
+                        button,
+                        help(),
+                        vec![AnchorCandidate::new(Side::Left, Alignment::StartBounded)],
+                    )
+                })
             },
         )
         .on_action(Message::List);
@@ -206,6 +223,32 @@ fn view<'w>(window: &'w WindowUi<Root>, scene: &'w Scene) -> Element<'w, Ev> {
         native::container(area_b).width(200).into(),
         native::container(list).width(200).height(200).into(),
     ]);
+    // Two areas with legacy tooltips, which know no identity of their own
+    let legacy = |id: &'static str, said: &'static str| -> Element<'w, Message> {
+        crate::tooltip_with(
+            focus_target(
+                id,
+                native::button(native::space().width(60).height(30))
+                    .padding(0)
+                    .on_press(Message::Pressed),
+            ),
+            tip(said),
+            Position::Bottom,
+        )
+    };
+    let tips = native::row(vec![
+        native::container(legacy("l1", scene.legacy_tip))
+            .width(200)
+            .into(),
+        native::container(if scene.legacy_two {
+            legacy("l2", "Second")
+        } else {
+            space()
+        })
+        .width(200)
+        .into(),
+    ]);
+    let content = native::column(vec![content.into(), tips.into()]);
     window
         .mount(content, panels(window))
         .protected_keys(scene.protected)
@@ -368,6 +411,14 @@ impl App {
         self.window
             .anchors()
             .information_visible(&Id::new(id.to_owned()))
+    }
+
+    /// The source the window's hover is on, if its information shows
+    fn informing(&self) -> Option<Id> {
+        let anchors = self.window.anchors();
+        anchors
+            .hovered()
+            .filter(|source| anchors.information_visible(source))
     }
 
     fn open_root(&self) -> Option<Root> {
@@ -739,4 +790,115 @@ fn a_declaration_outside_any_window_root_is_a_construction_error() {
         &mut cosmic::iced::advanced::clipboard::Null,
         &mut Vec::new(),
     );
+}
+
+/// The legacy tooltips' controls sit in a row below the three areas
+const L1: Point = Point::new(30.0, 215.0);
+const L2: Point = Point::new(230.0, 215.0);
+
+#[test]
+fn legacy_tips_in_two_areas_are_the_windows_one_hover() {
+    let mut app = App::new();
+    app.point(L1);
+    assert!(app.informing().is_none(), "not before the delay");
+    app.wait();
+    let first = app
+        .informing()
+        .expect("the first tip shows after the delay");
+    // The same source after the view is rebuilt; no timer restarts
+    app.frame(Instant::now() + INFORMATION_DELAY);
+    assert_eq!(app.informing(), Some(first.clone()));
+    // Moving to the other area's tip hands the one hover over
+    app.point(L2);
+    assert!(app.informing().is_none(), "the first card closes at once");
+    app.wait();
+    let second = app.informing().expect("the second tip shows");
+    assert_ne!(first, second);
+    assert!(!app.window.anchors().information_visible(&first));
+    // And to a declared source in another area
+    let control = app.visible("a-info");
+    app.point(control.center());
+    app.wait();
+    assert_eq!(app.informing(), Some(Id::new("a-info")));
+    assert!(!app.window.anchors().information_visible(&second));
+}
+
+#[test]
+fn alt_h_opens_a_legacy_tip_at_once() {
+    let mut app = App::new();
+    app.focus("l1");
+    assert!(app.informing().is_none());
+    let statuses = app.key(
+        keyboard::Key::Character("h".into()),
+        keyboard::Modifiers::ALT,
+    );
+    assert_eq!(statuses, [Status::Captured]);
+    assert!(app.informing().is_some(), "no delay");
+}
+
+#[test]
+fn escape_on_an_ordinary_control_dismisses_a_legacy_tip() {
+    let mut app = App::new();
+    app.focus("b-tool");
+    app.point(L1);
+    app.wait();
+    assert!(app.informing().is_some());
+    let statuses = app.named(keyboard::key::Named::Escape);
+    assert_eq!(statuses, [Status::Captured]);
+    assert!(app.informing().is_none());
+    // Not again for the unchanged target
+    app.wait();
+    assert!(app.informing().is_none());
+}
+
+#[test]
+fn a_legacy_tip_whose_source_is_removed_or_changed_closes() {
+    let mut app = App::new();
+    app.point(L2);
+    app.wait();
+    assert!(app.informing().is_some());
+    app.scene.legacy_two = false;
+    app.frame(Instant::now());
+    assert!(
+        app.informing().is_none(),
+        "the removed source's card closes"
+    );
+    app.wait();
+    assert!(app.informing().is_none(), "and nothing replaces it");
+    // The same place saying something else is another source, with its own delay
+    app.point(L1);
+    app.wait();
+    assert!(app.informing().is_some());
+    app.scene.legacy_tip = "Changed";
+    app.frame(Instant::now());
+    assert!(app.informing().is_none(), "a new source restarts the delay");
+    app.wait();
+    assert!(
+        app.informing().is_none(),
+        "and waits for the pointer to move"
+    );
+    app.point(L1);
+    app.wait();
+    assert!(app.informing().is_some());
+}
+
+#[test]
+fn a_legacy_tip_scrolled_out_of_its_list_closes() {
+    let mut app = App::new();
+    app.scene.legacy_row = true;
+    app.frame(Instant::now());
+    let at = Point::new(405.0, 20.0);
+    app.point(at);
+    app.wait();
+    assert!(app.informing().is_some(), "row 0's tip shows");
+    app.send(&[Event::Mouse(mouse::Event::WheelScrolled {
+        delta: mouse::ScrollDelta::Pixels { x: 0.0, y: -300.0 },
+    })]);
+    app.frame(Instant::now());
+    assert!(
+        app.informing().is_none(),
+        "the row has left the list's view"
+    );
+    app.wait();
+    assert!(app.informing().is_none());
 }

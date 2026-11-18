@@ -412,6 +412,10 @@ pub(crate) enum Owner {
     #[cfg(test)]
     Anchors(Anchors),
     Window,
+    /// The current window if there is one: legacy tooltip sites also appear
+    /// in views no window owner mounts (a native popup's menu), where they
+    /// show nothing.
+    Legacy,
 }
 
 impl Owner {
@@ -420,6 +424,7 @@ impl Owner {
         match self {
             #[cfg(test)]
             Self::Anchors(anchors) => Some(anchors.clone()),
+            Self::Legacy => current().map(|context| context.anchors),
             Self::Window => {
                 let context = current();
                 debug_assert!(

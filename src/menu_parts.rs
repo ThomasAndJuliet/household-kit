@@ -203,7 +203,7 @@ pub fn row_content<'a, M: 'a>(
 pub enum TooltipChoice<'a, M> {
     NoTooltip,
     Tooltip {
-        content: Element<'a, M>,
+        content: crate::Tip<'a, M>,
         position: Position,
     },
 }

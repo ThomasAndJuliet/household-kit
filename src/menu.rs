@@ -392,10 +392,13 @@ fn item_element<M: Clone + 'static>(
         button = button.selected(true).class(selected_menu_item());
     }
     match item.disabled_reason {
-        Some(reason) => crate::tooltip_with(
+        // A row of libcosmic's own menu, which hands its rows no viewport
+        // and may be a native popup outside any window owner
+        Some(reason) => crate::native_tooltip(
             button,
             (style.body)(reason),
             widget::tooltip::Position::Bottom,
+            false,
         ),
         None => Element::from(button.on_press(item.message)),
     }

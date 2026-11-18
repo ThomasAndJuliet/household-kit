@@ -4,7 +4,7 @@
 //! staged-engine measurements only invoke layout, so disposable probes never
 //! publish geometry into this registry.
 
-use cosmic::iced::advanced::widget::{Id, Operation, Tree};
+use cosmic::iced::advanced::widget::{Id, Operation, Tree, tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector, keyboard};
 use cosmic::{Element, Renderer, Theme};
@@ -494,6 +494,20 @@ impl Drop for RegistryTransaction {
     }
 }
 
+/// A source's identity as its widgets read it: the declared id, or for a
+/// legacy source the one its tree retains ([`retained_source`]).
+#[derive(Clone)]
+pub(crate) struct Ident(Rc<RefCell<Id>>);
+
+impl Ident {
+    pub(crate) fn new(id: Id) -> Self {
+        Self(Rc::new(RefCell::new(id)))
+    }
+    pub(crate) fn get(&self) -> Id {
+        self.0.borrow().clone()
+    }
+}
+
 /// Register `content` as source `id` of the registry `owner` resolves to.
 pub(crate) fn source<'a, Message: 'a>(
     owner: Owner,
@@ -503,7 +517,8 @@ pub(crate) fn source<'a, Message: 'a>(
     information: Option<(crate::layout::SourceId, u64)>,
 ) -> Element<'a, Message> {
     Element::new(SourceWidget {
-        id,
+        id: Ident::new(id),
+        retained: None,
         content,
         owner,
         trigger,
@@ -511,15 +526,70 @@ pub(crate) fn source<'a, Message: 'a>(
     })
 }
 
-struct SourceWidget<'a, Message> {
+/// A source whose identity is retained by its place in the widget tree: it
+/// keeps the one it first had while the tree keeps the widget, and takes a
+/// new one when `content_key` changes, so another occupant of the place is
+/// a new source with its own delay. `id` is what the declaring widgets read.
+pub(crate) fn retained_source<'a, Message: 'a>(
+    owner: Owner,
+    id: Ident,
+    content_key: u64,
+    content: Element<'a, Message>,
+) -> Element<'a, Message> {
+    Element::new(SourceWidget {
+        id,
+        retained: Some(content_key),
+        content,
+        owner,
+        trigger: false,
+        information: None,
+    })
+}
+
+/// What a retained source's tree keeps.
+struct Retained {
     id: Id,
+    content_key: u64,
+}
+
+struct SourceWidget<'a, Message> {
+    id: Ident,
+    retained: Option<u64>,
     content: Element<'a, Message>,
     owner: Owner,
     trigger: bool,
     information: Option<(crate::layout::SourceId, u64)>,
 }
 impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Message> {
-    forward_widget!(Message, Theme, Renderer; children, diff, size, layout, draw, update, operate, mouse_interaction, drag_destinations);
+    forward_widget!(Message, Theme, Renderer; children, size, layout, draw, update, operate, mouse_interaction, drag_destinations);
+    fn tag(&self) -> tree::Tag {
+        match self.retained {
+            Some(_) => tree::Tag::of::<Retained>(),
+            None => tree::Tag::stateless(),
+        }
+    }
+    fn state(&self) -> tree::State {
+        match self.retained {
+            Some(content_key) => tree::State::new(Retained {
+                id: self.id.get(),
+                content_key,
+            }),
+            None => tree::State::None,
+        }
+    }
+    fn diff(&mut self, tree: &mut Tree) {
+        if let Some(content_key) = self.retained {
+            let kept = tree.state.downcast_mut::<Retained>();
+            if kept.content_key != content_key {
+                *kept = Retained {
+                    id: Id::unique(),
+                    content_key,
+                };
+            }
+            *self.id.0.borrow_mut() = kept.id.clone();
+        }
+        tree.diff_children(std::slice::from_mut(&mut self.content));
+    }
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut Tree,
@@ -542,7 +612,8 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Mess
                 translation,
             );
         };
-        anchors.record(self.id.clone(), bounds, *viewport, self.trigger);
+        let id = self.id.get();
+        anchors.record(id.clone(), bounds, *viewport, self.trigger);
         if let Some((source, revision)) = self.information {
             let mut reports = crate::layout::SourceReports::default();
             self.content.as_widget_mut().operate(
@@ -556,7 +627,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Mess
             });
             let report = matching.next();
             let unique = matching.next().is_none();
-            let key = SourceKey::of(&self.id);
+            let key = SourceKey::of(&id);
             let mut registry = anchors.0.borrow_mut();
             registry.information.remove(&key);
             if unique

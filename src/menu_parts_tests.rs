@@ -90,7 +90,7 @@ fn disabled_row_does_not_activate_and_enabled_row_does() {
     let mut disabled = action_row(
         space(40.0),
         TooltipChoice::Tooltip {
-            content: space(30.0),
+            content: crate::Tip::new("space", || space(30.0)),
             position: widget::tooltip::Position::FollowCursor,
         },
         None,

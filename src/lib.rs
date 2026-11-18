@@ -61,7 +61,10 @@ pub use switch::{SwitchItem, muted_colours, switch, switch_maybe, toggler};
 pub use text_box::TextBox;
 pub use text_button::{BUTTON_HEIGHT, Tertiary, TextButton, button_padding};
 pub use text_menu::{TextMenu, TextMenuHistory, TextMenuWords, text_menu};
-pub use tooltip::{TIP_WIDTH, link_tooltip, tip_bubble, tip_padding, tooltip_unless, tooltip_with};
+pub use tooltip::{
+    TIP_WIDTH, Tip, link_tooltip, native_tooltip, tip_bubble, tip_padding, tooltip_unless,
+    tooltip_with,
+};
 
 #[cfg(test)]
 mod menu_fixture_tests;

@@ -45,7 +45,9 @@ fn row(
     );
     let tip = if message.is_none() {
         parts::TooltipChoice::Tooltip {
-            content: label("Select an item before using this action."),
+            content: crate::Tip::new("select", || {
+                label("Select an item before using this action.")
+            }),
             position: widget::tooltip::Position::Right,
         }
     } else {

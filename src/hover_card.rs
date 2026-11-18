@@ -3,6 +3,7 @@
 //! Informational hover attached to a live native source.
 use crate::layout::{AnchorCandidate, Attachment, HoverRetained, Stage, commit_hover_retaining};
 use crate::popup::Anchors;
+use crate::popup::Ident;
 use crate::window::Owner;
 use cosmic::iced::advanced::widget::{Id, Operation, Tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
@@ -177,7 +178,15 @@ pub(crate) fn hover_with_report_owned<'a, Message: 'a>(
     prepare: Box<ReportPreparation<'a, Message>>,
     candidates: Vec<AnchorCandidate>,
 ) -> Element<'a, Message> {
-    hover_with_preparation(owner, source, target, Vec::new(), Some(prepare), candidates)
+    hover_with_preparation(
+        owner,
+        Ident::new(source),
+        None,
+        target,
+        Vec::new(),
+        Some(prepare),
+        candidates,
+    )
 }
 
 /// Wrap any target, including a disabled control. The source ID must remain
@@ -209,12 +218,45 @@ pub(crate) fn hover_owned<'a, Message: 'a>(
     stages: Vec<Stage<'a, Message>>,
     candidates: Vec<AnchorCandidate>,
 ) -> Element<'a, Message> {
-    hover_with_preparation(owner, source, target, stages, None, candidates)
+    hover_with_preparation(
+        owner,
+        Ident::new(source),
+        None,
+        target,
+        stages,
+        None,
+        candidates,
+    )
+}
+
+/// One prepared box of information for a legacy tooltip site, whose source
+/// has no declared identity: the tree retains one for it, renewed when
+/// `content_key` (a hash of what the box says) changes. The owner may be
+/// outside any window, in which case nothing shows.
+pub(crate) fn retained_hover_box<'a, Message: 'a>(
+    content_key: u64,
+    target: Element<'a, Message>,
+    content: crate::layout::Child<'a, Message>,
+    candidates: Vec<AnchorCandidate>,
+) -> Element<'a, Message> {
+    hover_with_preparation(
+        Owner::Legacy,
+        Ident::new(Id::unique()),
+        Some(content_key),
+        target,
+        vec![Stage::new(
+            crate::layout::Level::Preferred,
+            surface_box(content),
+        )],
+        None,
+        candidates,
+    )
 }
 
 fn hover_with_preparation<'a, Message: 'a>(
     owner: Owner,
-    source: Id,
+    source: Ident,
+    retained: Option<u64>,
     target: Element<'a, Message>,
     stages: Vec<Stage<'a, Message>>,
     prepare: Option<Box<ReportPreparation<'a, Message>>>,
@@ -230,12 +272,16 @@ fn hover_with_preparation<'a, Message: 'a>(
         body: widget::space().width(0).height(0).into(),
         retained: HoverRetained::default(),
     };
-    crate::popup::source(owner, source, Element::new(card), false, None)
+    let card = Element::new(card);
+    match retained {
+        Some(key) => crate::popup::retained_source(owner, source, key, card),
+        None => crate::popup::source(owner, source.get(), card, false, None),
+    }
 }
 
 struct Hover<'a, Message> {
     content: Element<'a, Message>,
-    source: Id,
+    source: Ident,
     owner: Owner,
     stages: Vec<Stage<'a, Message>>,
     prepare: Option<Box<ReportPreparation<'a, Message>>>,
@@ -267,23 +313,24 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Hover<'a, Message> {
         viewport: &Rectangle,
     ) {
         if let Some(anchors) = self.owner.resolve() {
-            let was = anchors.hover_is_owner(&self.source);
+            let source = self.source.get();
+            let was = anchors.hover_is_owner(&source);
             // A redraw, layout or keystroke cannot let a stationary pointer take
             // ownership back from a deliberate keyboard target.
             if matches!(event, Event::Mouse(mouse::Event::CursorMoved { .. })) {
                 if cursor.is_over(layout.bounds())
                     && cursor.position().is_some_and(|p| viewport.contains(p))
                 {
-                    anchors.claim_hover(&self.source);
+                    anchors.claim_hover(&source);
                 } else {
-                    anchors.release_hover(&self.source);
+                    anchors.release_hover(&source);
                 }
             } else if matches!(event, Event::Mouse(mouse::Event::CursorLeft)) {
-                anchors.release_hover(&self.source);
+                anchors.release_hover(&source);
             } else if matches!(event, Event::Window(cosmic::iced::window::Event::Unfocused)) {
                 anchors.deactivate();
             }
-            if was != anchors.hover_is_owner(&self.source) {
+            if was != anchors.hover_is_owner(&source) {
                 shell.invalidate_layout();
                 shell.request_redraw();
             }
@@ -309,6 +356,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Hover<'a, Message> {
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let anchors = self.owner.resolve();
+        let source = self.source.get();
         if let Some(anchors) = &anchors {
             let mut focus = crate::popup::FocusProbe::default();
             self.content.as_widget_mut().operate(
@@ -317,7 +365,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Hover<'a, Message> {
                 renderer,
                 &mut focus,
             );
-            anchors.register_information(&self.source, focus.ids);
+            anchors.register_information(&source, focus.ids);
         }
         let (target_tree, body_tree) = tree.children.split_at_mut(1);
         let target = self.content.as_widget_mut().overlay(
@@ -327,13 +375,12 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Hover<'a, Message> {
             viewport,
             translation,
         );
-        let Some(anchors) = anchors.filter(|anchors| anchors.information_visible(&self.source))
-        else {
+        let Some(anchors) = anchors.filter(|anchors| anchors.information_visible(&source)) else {
             return target;
         };
         let card = overlay::Element::new(Box::new(Card {
             anchors,
-            source: self.source.clone(),
+            source: source.clone(),
             stages: &mut self.stages,
             prepare: self.prepare.as_deref(),
             candidates: &self.candidates,
@@ -917,7 +964,7 @@ mod report_preparation_tests {
     ) -> Hover<'static, ()> {
         Hover {
             content: source_target(anchors, source.clone(), snapshot),
-            source,
+            source: Ident::new(source),
             owner: Owner::Anchors(anchors.clone()),
             stages: Vec::new(),
             prepare: Some(prepare(snapshot, inputs)),
@@ -950,7 +997,7 @@ mod report_preparation_tests {
             &viewport,
             Vector::ZERO,
         ));
-        if !anchors.claim_hover(&hover.source) {
+        if !anchors.claim_hover(&hover.source.get()) {
             return None;
         }
         // Complete the same shared delay as the native pointer/keyboard path.
