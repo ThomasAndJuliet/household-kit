@@ -93,6 +93,7 @@ fn panels<'a>(window: &'a WindowUi<Root>) -> Vec<Panel<'a, Ev>> {
             )
             .choice_rows(chosen)
             .preferred_width(decl.0.width)
+            .initial_target(decl.0.selected)
             .panels(
                 declared.source().clone(),
                 request.path().to_vec(),
@@ -318,6 +319,9 @@ fn the_trigger_is_as_wide_as_the_widest_option_and_the_list_as_wide_as_the_trigg
     let wide = trigger_width(&options(&["On", "Off", "Only when the window is in front"]));
     assert!(wide > narrow + 80.0, "{narrow} {wide}");
     let mut app = App::new();
+    // libcosmic's dropdown: 8 px padding round a 14 px label in 1.2 line height
+    let face = app.visible(&Id::new("sizes")).expect("the trigger");
+    assert!((face.height - (14.0 * 1.2 + 16.0)).abs() < 0.5, "{face:?}");
     app.click(app.trigger());
     assert!(app.is_dropdown_open());
     let list = app.window.anchors().surfaces();
@@ -374,18 +378,23 @@ fn choosing_an_option_sets_the_value_once_and_closes_the_list() {
 fn the_keyboard_opens_navigates_and_chooses() {
     use keyboard::key::Named;
     let mut app = App::new();
+    app.selected = 1;
+    app.frame();
     app.focus(trigger_id("sizes"));
     app.named(Named::Enter);
     assert!(app.is_dropdown_open(), "Enter opens the list");
     assert_eq!(app.window.chain().unwrap().entry(), Entry::Keyboard);
-    app.named(Named::ArrowDown);
+    let option = |label: &str| Some(row_id(NS, &[], row_key(label, false, 0)));
     assert_eq!(
         app.focused(),
-        Some(row_id(NS, &[], row_key("Medium", false, 0)))
+        option("Medium"),
+        "the keyboard's target starts on the selected option"
     );
+    app.named(Named::ArrowUp);
+    assert_eq!(app.focused(), option("Small"));
     assert!(app.app.is_empty(), "moving chooses nothing");
     app.named(Named::Enter);
-    assert_eq!(app.app, [Message::Size(1)]);
+    assert_eq!(app.app, [Message::Size(0)]);
     assert!(app.window.chain().is_none());
 }
 

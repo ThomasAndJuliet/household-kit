@@ -4,20 +4,33 @@
 //! window's one menu chain rather than an overlay of its own. Opening it
 //! replaces any other open menu, the list's rows can show information (a
 //! disabled option says why), and the keyboard moves through it as through
-//! any menu: Enter or Space on the trigger opens it with its first row the
+//! any menu: Enter or Space on the trigger opens it with the selected option the
 //! keyboard's target, Up and Down move, Enter chooses, Escape closes.
 //!
 //! The trigger is a [`menu_button`](crate::window::menu_button); the app's
 //! window adapter builds the list's panels from the [`DropdownMenu`] it
 //! declares, as whole rows with the selected value in a grey fill and
 //! semibold text ([`MenuSurface::choice_rows`](crate::menu_surface::MenuSurface::choice_rows)),
-//! as wide as the trigger ([`DropdownMenu::width`]).
+//! as wide as the trigger ([`DropdownMenu::width`]), the keyboard's target
+//! the selected option ([`DropdownMenu::selected`]).
+//!
+//! The trigger ([`Face`]) is libcosmic's dropdown as it draws today: the
+//! theme's pick-list style at rest and hovered, 8 px padding, the label at
+//! 14 px in 1.2 line height, the 16 px `pan-down-symbolic` caret 4 px from
+//! the right edge.
 
 use crate::menu::{Menu, MenuItem, MenuMark, measured_width};
 use crate::window::{Declaration, Declared, Toggle, menu_button};
-use cosmic::iced::{Alignment, Length, Padding};
-use cosmic::widget::{self, button, icon};
-use cosmic::{Element, theme};
+use cosmic::Element;
+use cosmic::iced::advanced::widget::Tree;
+use cosmic::iced::advanced::{
+    Clipboard, Layout, Shell, Widget, layout, mouse, renderer, svg, text,
+};
+use cosmic::iced::widget::pick_list::{Catalog, Status};
+use cosmic::iced::{Event, Pixels, Rectangle, Size, alignment};
+use cosmic::iced::{Length, Padding};
+use cosmic::widget::{self, icon};
+use cosmic::{Renderer, Theme};
 use std::marker::PhantomData;
 
 const TEXT_SIZE: f32 = 14.0;
@@ -31,6 +44,8 @@ const CARET: f32 = 16.0;
 pub struct DropdownMenu<M> {
     pub menu: Menu<M>,
     pub width: f32,
+    /// The selected option, which the keyboard's target starts on
+    pub selected: Option<usize>,
 }
 
 /// One option of a dropdown
@@ -74,6 +89,7 @@ pub fn dropdown_menu<M>(
     DropdownMenu {
         menu,
         width: trigger_width(options),
+        selected,
     }
 }
 
@@ -172,32 +188,170 @@ pub fn trigger_id(name: &str) -> widget::Id {
     widget::Id::new(format!("{name}:dropdown-trigger"))
 }
 
-/// The trigger: the selected value and a caret, publishing a [`Toggle`]
+/// The trigger: the selected value and a caret, publishing a [`Toggle`], a
+/// focus target Enter and Space open from
 fn trigger<'a>(shown: String, width: Length, id: Option<widget::Id>) -> Element<'a, Toggle> {
-    let content = widget::row::with_children(vec![
-        widget::text(shown)
-            .size(TEXT_SIZE)
-            .wrapping(cosmic::iced::widget::text::Wrapping::None)
-            .width(Length::Fill)
-            .into(),
-        icon::from_name("pan-down-symbolic")
-            .size(CARET as u16)
-            .icon()
-            .into(),
-    ])
-    .spacing(GAP)
-    .align_y(Alignment::Center);
-    let trigger = button::custom(content);
-    let trigger = match id {
-        Some(id) => trigger.id(id),
-        None => trigger,
-    };
-    trigger
-        .class(theme::Button::Standard)
-        .padding(Padding::new(PADDING))
-        .width(width)
-        .on_press(Toggle)
+    let face = Element::new(Face::new(shown, width));
+    let id = id.unwrap_or_else(widget::Id::unique);
+    crate::popup::focus_target(id, face)
+        .on_activate(Toggle)
         .into()
+}
+
+/// libcosmic's dropdown trigger, drawn as it draws it
+pub struct Face {
+    label: String,
+    width: Length,
+    caret: Option<svg::Handle>,
+}
+
+impl Face {
+    fn new(label: String, width: Length) -> Self {
+        let caret = match icon::from_name("pan-down-symbolic").size(16).handle().data {
+            icon::Data::Svg(handle) => Some(handle),
+            icon::Data::Image(_) => None,
+        };
+        Self {
+            label,
+            width,
+            caret,
+        }
+    }
+}
+
+const LINE: text::LineHeight = text::LineHeight::Relative(1.2);
+
+impl Widget<Toggle, Theme, Renderer> for Face {
+    fn size(&self) -> Size<Length> {
+        Size::new(self.width, Length::Shrink)
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let padding = Padding::new(PADDING);
+        let limits = limits
+            .width(self.width)
+            .height(Length::Shrink)
+            .shrink(padding);
+        let text = match self.width {
+            Length::Shrink => {
+                measured_width(&self.label, TEXT_SIZE, cosmic::font::default()).round()
+            }
+            _ => 0.0,
+        };
+        let intrinsic = Size::new(
+            text + GAP + CARET,
+            f32::from(LINE.to_absolute(Pixels(TEXT_SIZE))),
+        );
+        layout::Node::new(
+            limits
+                .resolve(self.width, Length::Shrink, intrinsic)
+                .expand(padding),
+        )
+    }
+
+    fn update(
+        &mut self,
+        _tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &Renderer,
+        _clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Toggle>,
+        _viewport: &Rectangle,
+    ) {
+        if matches!(
+            event,
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+        ) && cursor.is_over(layout.bounds())
+        {
+            shell.publish(Toggle);
+            shell.capture_event();
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        _tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+        _renderer: &Renderer,
+    ) -> mouse::Interaction {
+        if cursor.is_over(layout.bounds()) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+
+    fn draw(
+        &self,
+        _tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        use cosmic::iced::advanced::Renderer as _;
+        use cosmic::iced::advanced::svg::Renderer as _;
+        use cosmic::iced::advanced::text::Renderer as _;
+        let bounds = layout.bounds();
+        let status = if cursor.is_over(bounds) {
+            Status::Hovered
+        } else {
+            Status::Active
+        };
+        let style = Catalog::style(theme, &(), status);
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                border: style.border,
+                shadow: cosmic::iced::Shadow::default(),
+                snap: true,
+            },
+            style.background,
+        );
+        if let Some(handle) = self.caret.clone() {
+            let at = Rectangle {
+                x: bounds.x + bounds.width - GAP - CARET,
+                y: bounds.center_y() - CARET / 2.0,
+                width: CARET,
+                height: CARET,
+            };
+            renderer.draw_svg(svg::Svg::new(handle).color(style.text_color), at, at);
+        }
+        let area = Rectangle {
+            x: bounds.x + PADDING,
+            y: bounds.center_y(),
+            width: bounds.width - 2.0 * PADDING,
+            height: f32::from(LINE.to_absolute(Pixels(TEXT_SIZE))),
+        };
+        renderer.fill_text(
+            text::Text {
+                content: self.label.clone(),
+                size: Pixels(TEXT_SIZE),
+                line_height: LINE,
+                font: cosmic::font::default(),
+                bounds: area.size(),
+                align_x: text::Alignment::Left,
+                align_y: alignment::Vertical::Center,
+                shaping: text::Shaping::Advanced,
+                wrapping: text::Wrapping::default(),
+                ellipsize: text::Ellipsize::default(),
+            },
+            area.position(),
+            style.text_color,
+            *viewport,
+        );
+    }
 }
 
 #[cfg(test)]

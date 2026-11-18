@@ -68,6 +68,7 @@ pub struct MenuSurface<M> {
     emphasized_body: Option<fn(String) -> Element<'static, M>>,
     preferred_width: Option<f32>,
     root_region: Option<Rectangle>,
+    initial_target: Option<usize>,
     hover: Option<Hover<M>>,
 }
 
@@ -117,8 +118,16 @@ impl<M: Clone + 'static> MenuSurface<M> {
             emphasized_body: None,
             preferred_width: None,
             root_region: None,
+            initial_target: None,
             hover: None,
         }
+    }
+
+    /// The root panel's keyboard target on opening is its row `index` (a
+    /// dropdown's selected option) rather than the first.
+    pub fn initial_target(mut self, index: Option<usize>) -> Self {
+        self.initial_target = index;
+        self
     }
 
     /// Anchor the root panel at `region` of its source, relative to the
@@ -264,6 +273,12 @@ impl<M: Clone + 'static> MenuSurface<M> {
             .collect();
         if let Some(stale) = stale {
             panels.push(stale);
+        }
+        if let Some(index) = self.initial_target
+            && !panels.is_empty()
+        {
+            let root = panels.remove(0).focus_initial(index);
+            panels.insert(0, root);
         }
         if let Some(region) = self.root_region
             && !panels.is_empty()
