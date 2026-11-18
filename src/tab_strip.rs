@@ -25,8 +25,8 @@
 //! Terminal sets it up): they share the strip's width equally, each as wide
 //! as the strip is divided by the tabs, never narrower than the seven
 //! characters and the tab's other contents need ([`MINIMUM_TITLE_CHARS`]),
-//! with twelve pixels before the icon and after the title (eight after a
-//! close control) and four between parts. COSMIC's tab bar has no maximum
+//! with COSMIC's `space_s` (16) before the icon and after the title (eight
+//! after a close control) and `space_xxs` (8) between parts. COSMIC's tab bar has no maximum
 //! width: the 250 pixels it is built with is only the measure of a tab
 //! given its natural width, which a bar filling its width never uses.
 //!
@@ -50,19 +50,17 @@ use std::rc::Rc;
 
 /// The least a title is given, in characters' worth of the UI font
 pub const MINIMUM_TITLE_CHARS: f32 = 7.0;
-/// The space before a tab's content, and after it where it has no close
-/// control: COSMIC's tab bar `space_s`
-const TAB_INSET: f32 = 12.0;
 /// A tab's close control's distance from the tab's end (libcosmic's tab bar)
 const CLOSE_INSET: f32 = 8.0;
-/// Between a tab's icon, title and close control (COSMIC's `space_xxs`)
-const TAB_GAP: f32 = 4.0;
 const ICON_SIZE: f32 = 16.0;
 /// A tab's height in COSMIC's tab bar, unless the app says otherwise
 const TAB_HEIGHT: f32 = 32.0;
 /// Pointer travel before a press on a tab is a drag
 const DRAG_THRESHOLD: f32 = 4.0;
-const UNDERLINE: f32 = 2.0;
+/// The selected tab's line, and the thin line under the others, as COSMIC's
+/// tab bar draws them (its `active_width` of 4 and 1)
+const UNDERLINE: f32 = 4.0;
+const THIN_LINE: f32 = 1.0;
 /// How far one notch of a wheel scrolls the strip
 const WHEEL_LINE: f32 = 48.0;
 
@@ -428,8 +426,20 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
         let ns = self.namespace.clone();
         let ch = crate::menu::measured_width("0", self.title_size, cosmic::font::default());
         let minimum = ch * MINIMUM_TITLE_CHARS;
+        // The space before a tab's content, and after it where it has no close
+        // control, and between its parts: COSMIC's tab bar's `space_s` and
+        // `space_xxs`
+        let (inset, gap) = {
+            let spacing = cosmic::theme::spacing();
+            (f32::from(spacing.space_s), f32::from(spacing.space_xxs))
+        };
         let mut minimums = Vec::new();
         let selected_id = self.model.selected;
+        let line_colour = self
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.id) == selected_id)
+            .and_then(|tab| tab.identity);
         let mut ids = Vec::new();
         let mut selects = Vec::new();
         let mut elements = Vec::new();
@@ -445,10 +455,10 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
                 hovered: hovered.clone(),
             };
             let mut parts: Vec<Element<'a, M>> = Vec::new();
-            let (mut least, mut end) = (TAB_INSET + minimum, TAB_INSET);
+            let (mut least, mut end) = (inset + minimum, inset);
             if let Some(icon) = tab.icon {
                 parts.push(icon.into());
-                least += ICON_SIZE + TAB_GAP;
+                least += ICON_SIZE + gap;
             }
             parts.push(Element::new(title));
             if let Some(close) = tab.on_close {
@@ -459,14 +469,14 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
                         .on_press(close)
                         .into(),
                 );
-                least += ICON_SIZE + TAB_GAP;
+                least += ICON_SIZE + gap;
                 end = CLOSE_INSET;
             }
             least += end;
             minimums.push(least);
             let body = widget::container(
                 widget::row::with_children(parts)
-                    .spacing(TAB_GAP)
+                    .spacing(gap)
                     .width(Length::Fill)
                     .align_y(cosmic::iced::Alignment::Center),
             )
@@ -476,13 +486,13 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
             .padding(Padding {
                 top: 0.0,
                 bottom: 0.0,
-                left: TAB_INSET,
+                left: inset,
                 right: end,
             });
             let wash = Wash {
                 content: body.into(),
                 selected,
-                identity: tab.identity,
+                line: line_colour,
                 hovered,
             };
             let activate = tab.on_select.clone();
@@ -1069,7 +1079,9 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Strip<'_, M> {
 struct Wash<'a, M> {
     content: Element<'a, M>,
     selected: bool,
-    identity: Option<Color>,
+    /// The colour of the lines: the selected tab's identity, the strip's
+    /// accent for them all as COSMIC's tab bar draws them
+    line: Option<Color>,
     hovered: Rc<Cell<bool>>,
 }
 
@@ -1135,18 +1147,33 @@ impl<M> Widget<M, Theme, Renderer> for Wash<'_, M> {
         let bounds = layout.bounds();
         let over = cursor.is_over(bounds);
         self.hovered.set(over);
-        if over {
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds,
-                    border: Border {
-                        radius: theme.cosmic().radius_s().into(),
+        // COSMIC's tab bar's washes: the neutral at a fifth for the selected
+        // tab; the hovered tab's, a third of it again over the selected's
+        // (the same fill whether selected or not), top corners rounded
+        let cosmic = theme.cosmic();
+        let radius = cosmic.corner_radii.radius_s;
+        let corners = cosmic::iced::border::Radius::from([radius[0], radius[1], 0.0, 0.0]);
+        let neutral = Color::from(cosmic.palette.neutral_5);
+        for (shown, alpha) in [
+            (self.selected, 0.2),
+            (over, if self.selected { 0.125 } else { 0.3 }),
+        ] {
+            if shown {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds,
+                        border: Border {
+                            radius: corners,
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
-                    ..Default::default()
-                },
-                Color::from(theme.cosmic().icon_button.hover),
-            );
+                    Color {
+                        a: alpha,
+                        ..neutral
+                    },
+                );
+            }
         }
         self.content.as_widget().draw(
             &tree.children[0],
@@ -1157,19 +1184,18 @@ impl<M> Widget<M, Theme, Renderer> for Wash<'_, M> {
             cursor,
             viewport,
         );
-        if self.selected {
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: Rectangle::new(
-                        Point::new(bounds.x, bounds.y + bounds.height - UNDERLINE),
-                        Size::new(bounds.width, UNDERLINE),
-                    ),
-                    ..Default::default()
-                },
-                self.identity
-                    .unwrap_or_else(|| Color::from(theme.cosmic().accent_color())),
-            );
-        }
+        let thick = if self.selected { UNDERLINE } else { THIN_LINE };
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: Rectangle::new(
+                    Point::new(bounds.x, bounds.y + bounds.height - thick),
+                    Size::new(bounds.width, thick),
+                ),
+                ..Default::default()
+            },
+            self.line
+                .unwrap_or_else(|| Color::from(theme.cosmic().accent_text_color())),
+        );
     }
 }
 
