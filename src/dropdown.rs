@@ -151,7 +151,11 @@ where
             name,
             ..
         } = dropdown;
-        let declared = dropdown_menu(&options, selected, choose);
+        let mut declared = dropdown_menu(&options, selected, choose);
+        // A fixed trigger gives its width to the list
+        if let Some(Length::Fixed(fixed)) = width {
+            declared.width = fixed;
+        }
         let shown = selected
             .and_then(|i| options.get(i))
             .map(|option| option.label.clone())
