@@ -1517,7 +1517,9 @@ fn resolved_attachment<Message>(
     translation: Vector,
 ) -> Option<Attachment> {
     let mut attachment = panel.attachment.clone();
-    if panel.parent_edges {
+    // A submenu meets its parent, and a context menu its pointer, at its
+    // visible edge, not at its shadow's
+    if panel.parent_edges || panel.region.is_some() {
         attachment.surface_insets = panel.surface_insets;
     }
     if let Some(source) = &panel.source {

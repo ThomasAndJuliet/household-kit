@@ -557,9 +557,12 @@ impl Anchors {
             let trigger = trigger || earlier.is_some_and(|source| source.trigger);
             let context = context || earlier.is_some_and(|source| source.context);
             let full = full_bounds;
+            // A source that draws no information of its own (a menu's)
+            // keeps what another source of the same id found
             let content = content
                 .and_then(|content| content.intersection(&bounds))
-                .filter(|content| content.width > 0.0 && content.height > 0.0);
+                .filter(|content| content.width > 0.0 && content.height > 0.0)
+                .or(earlier.and_then(|source| source.content));
             registry.visible.insert(
                 key,
                 Source {
@@ -632,6 +635,7 @@ pub(crate) fn source<'a, Message: 'a>(
         owner,
         trigger,
         context: false,
+        probe: true,
         information,
     })
 }
@@ -652,6 +656,7 @@ pub(crate) fn declared_source<'a, Message: 'a>(
         owner: Owner::Window,
         trigger,
         context,
+        probe: false,
         information: None,
     })
 }
@@ -675,6 +680,7 @@ pub(crate) fn retained_source<'a, Message: 'a>(
         owner,
         trigger: false,
         context: false,
+        probe: true,
         information: None,
     })
 }
@@ -694,6 +700,10 @@ struct SourceWidget<'a, Message> {
     owner: Owner,
     trigger: bool,
     context: bool,
+    /// Look for the content it draws, for information anchored to it; a
+    /// declared menu's source (a whole conversation, say) has none of its
+    /// own, and is not walked for it on every traversal
+    probe: bool,
     information: Option<(crate::layout::SourceId, u64)>,
 }
 impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Message> {
@@ -758,7 +768,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Mess
         let id = self.id.get();
         // The content drawn inside the source, for information cards; a
         // point source (`at`) is already exact
-        let content = self.at.is_none().then(|| {
+        let content = (self.at.is_none() && self.probe).then(|| {
             let mut probe = ContentProbe::default();
             self.content.as_widget_mut().operate(
                 &mut tree.children[0],

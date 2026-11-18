@@ -377,8 +377,12 @@ fn a_right_press_opens_the_rows_menu_at_the_pointer_in_place_of_an_open_menu() {
     assert_eq!(declared.invocation().entry, Entry::Pointer);
     let surfaces = app.surfaces();
     assert_eq!(surfaces.len(), 1, "one chain in the window: {surfaces:?}");
+    // Its card's top-left corner is the pointer (the surface is its paint
+    // box, the shadow round it)
+    let inset = crate::popup_surface::shadow_padding();
     assert!(
-        (surfaces[0].x - at.x).abs() <= 12.0 && (surfaces[0].y - at.y).abs() <= 12.0,
+        (surfaces[0].x + inset.left - at.x).abs() <= 1.5
+            && (surfaces[0].y + inset.top - at.y).abs() <= 1.5,
         "the menu opens at the pointer: {surfaces:?} at {at:?}"
     );
     // A right press elsewhere on the row opens it there instead
@@ -455,7 +459,9 @@ fn shift_f10_opens_the_menu_of_the_focused_control_at_it() {
     assert_eq!(declared.invocation().entry, Entry::Keyboard);
     let surfaces = app.surfaces();
     assert!(
-        surfaces[0].y >= button.y + button.height - 1.0 && (surfaces[0].x - button.x).abs() <= 12.0,
+        // The surfaces are paint boxes, their shadow round the card
+        (surfaces[0].y - (button.y + button.height)).abs() <= 12.0
+            && (surfaces[0].x - button.x).abs() <= 12.0,
         "below the focused control: {surfaces:?} {button:?}"
     );
     app.key(keyboard::key::Named::Escape, keyboard::Modifiers::empty());
