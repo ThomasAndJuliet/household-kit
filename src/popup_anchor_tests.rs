@@ -133,6 +133,89 @@ fn registered_source_uses_translated_visible_clip_and_drops_hidden_geometry() {
     assert_eq!(anchors.visible(&Id::new("source")), None);
 }
 
+/// Lay `source` out in `width` x 40, show it through `clip`, and
+/// return the registry.
+fn shown_source(
+    anchors: &Anchors,
+    source: Element<'static, ()>,
+    width: f32,
+    clip: Rectangle,
+) -> Anchors {
+    let renderer = renderer();
+    let mut source = source;
+    let mut tree = Tree::new(source.as_widget());
+    let node = source
+        .as_widget_mut()
+        .layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(width, 40.0)),
+        )
+        .move_to(Point::new(20.0, 20.0));
+    drop(source.as_widget_mut().overlay(
+        &mut tree,
+        Layout::new(&node),
+        &renderer,
+        &clip,
+        Vector::ZERO,
+    ));
+    anchors.clone()
+}
+
+#[test]
+fn information_anchors_to_the_drawn_text_not_the_stretched_source() {
+    let anchors = Anchors::default();
+    let wide: Element<'static, ()> = native::container(native::text("Narrow"))
+        .width(Length::Fill)
+        .height(Length::Fixed(40.0))
+        .into();
+    let window = Rectangle::with_size(Size::new(600.0, 200.0));
+    shown_source(&anchors, anchors.anchor("wide", wide), 400.0, window);
+    let id = Id::new("wide");
+    let whole = anchors.visible(&id).unwrap();
+    let anchor = anchors.information_anchor(&id).unwrap();
+    assert_eq!(whole.width, 400.0, "the hover area stays the whole control");
+    assert!(
+        anchor.width > 0.0 && anchor.width < 100.0,
+        "the card attaches to the text, {anchor:?}"
+    );
+    assert_eq!(anchor.x, whole.x, "the text is at the source's left");
+    assert!(whole.contains(anchor.position()));
+}
+
+#[test]
+fn information_anchor_is_clipped_to_the_visible_source() {
+    let anchors = Anchors::default();
+    let wide: Element<'static, ()> = native::container(native::text("A rather long line"))
+        .width(Length::Fill)
+        .height(Length::Fixed(40.0))
+        .into();
+    let clip = Rectangle::new(Point::new(0.0, 0.0), Size::new(60.0, 200.0));
+    shown_source(&anchors, anchors.anchor("clipped", wide), 400.0, clip);
+    let id = Id::new("clipped");
+    let anchor = anchors.information_anchor(&id).unwrap();
+    assert_eq!(
+        anchor,
+        anchors.visible(&id).unwrap().intersection(&anchor).unwrap()
+    );
+    assert!(anchor.x + anchor.width <= 60.0, "{anchor:?}");
+}
+
+#[test]
+fn a_source_reporting_no_content_anchors_to_its_bounds() {
+    let anchors = Anchors::default();
+    let window = Rectangle::with_size(Size::new(600.0, 200.0));
+    shown_source(
+        &anchors,
+        anchors.anchor("blank", native::space().width(100).height(40)),
+        100.0,
+        window,
+    );
+    let id = Id::new("blank");
+    assert_eq!(anchors.information_anchor(&id), anchors.visible(&id));
+    assert!(anchors.information_anchor(&Id::new("absent")).is_none());
+}
+
 #[test]
 fn live_source_reanchors_after_resize_and_hidden_source_is_explicit_no_fit() {
     let mut renderer = renderer();

@@ -86,6 +86,30 @@ impl SourceKey {
 struct Source {
     bounds: Rectangle,
     trigger: bool,
+    /// What the source draws within `bounds`, when its traversal says so
+    content: Option<Rectangle>,
+}
+
+/// The union of the text a source's native traversal reports as drawn.
+/// Fill-width text reports its whole box, so it is as wide as it is told:
+/// narrow content must be laid out narrow to be found narrow.
+#[derive(Default)]
+struct ContentProbe {
+    union: Option<Rectangle>,
+}
+impl Operation for ContentProbe {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self);
+    }
+    fn text(&mut self, _: Option<&Id>, bounds: Rectangle, text: &str) {
+        if text.trim().is_empty() || bounds.width <= 0.0 || bounds.height <= 0.0 {
+            return;
+        }
+        self.union = Some(match self.union {
+            Some(union) => union.union(&bounds),
+            None => bounds,
+        });
+    }
 }
 
 impl Anchors {
@@ -178,6 +202,18 @@ impl Anchors {
             .visible
             .get(&SourceKey::of(id))
             .map(|source| source.bounds)
+    }
+    /// Where an information card attaches: the visible content the source
+    /// draws (its text), clipped to the source's visible region, or that
+    /// region itself when the source reports no content. The hover area is
+    /// always the whole source (Juliet, 18 Nov: "tying it to the actual
+    /// text shown would be more intuitive").
+    pub fn information_anchor(&self, id: &Id) -> Option<Rectangle> {
+        self.0
+            .borrow()
+            .visible
+            .get(&SourceKey::of(id))
+            .map(|source| source.content.unwrap_or(source.bounds))
     }
     /// State comes from the actual host chain, rather than per-tooltip booleans.
     pub fn is_open(&self, id: &Id) -> bool {
@@ -451,7 +487,18 @@ impl Anchors {
             Some(id) != excluded.as_ref() && source.trigger && source.bounds.contains(point)
         })
     }
+    #[cfg(test)]
     fn record(&self, id: Id, bounds: Rectangle, viewport: Rectangle, trigger: bool) {
+        self.record_content(id, bounds, viewport, trigger, None);
+    }
+    fn record_content(
+        &self,
+        id: Id,
+        bounds: Rectangle,
+        viewport: Rectangle,
+        trigger: bool,
+        content: Option<Rectangle>,
+    ) {
         self.0.borrow_mut().present.insert(SourceKey::of(&id));
         if let Some(bounds) = bounds
             .intersection(&viewport)
@@ -464,7 +511,17 @@ impl Anchors {
                     .visible
                     .get(&key)
                     .is_some_and(|source| source.trigger);
-            registry.visible.insert(key, Source { bounds, trigger });
+            let content = content
+                .and_then(|content| content.intersection(&bounds))
+                .filter(|content| content.width > 0.0 && content.height > 0.0);
+            registry.visible.insert(
+                key,
+                Source {
+                    bounds,
+                    trigger,
+                    content,
+                },
+            );
         }
     }
 }
@@ -625,7 +682,29 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Mess
             );
         };
         let id = self.id.get();
-        anchors.record(id.clone(), bounds, *viewport, self.trigger);
+        // The content drawn inside the source, for information cards; a
+        // point source (`at`) is already exact
+        let content = self.at.is_none().then(|| {
+            let mut probe = ContentProbe::default();
+            self.content.as_widget_mut().operate(
+                &mut tree.children[0],
+                layout,
+                renderer,
+                &mut probe,
+            );
+            probe.union.map(|content| Rectangle {
+                x: content.x + translation.x,
+                y: content.y + translation.y,
+                ..content
+            })
+        });
+        anchors.record_content(
+            id.clone(),
+            bounds,
+            *viewport,
+            self.trigger,
+            content.flatten(),
+        );
         if let Some((source, revision)) = self.information {
             let mut reports = crate::layout::SourceReports::default();
             self.content.as_widget_mut().operate(

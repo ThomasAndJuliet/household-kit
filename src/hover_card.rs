@@ -421,7 +421,7 @@ impl<'a, Message: 'a> overlay::Overlay<Message, Theme, Renderer> for Card<'_, 'a
         let window = Rectangle::with_size(bounds);
         let Some(anchor) = self
             .anchors
-            .visible(&self.source)
+            .information_anchor(&self.source)
             .filter(|_| self.anchors.information_visible(&self.source))
         else {
             self.retained.clear();
