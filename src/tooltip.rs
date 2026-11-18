@@ -45,7 +45,8 @@ impl<'a, M: 'a> Tip<'a, M> {
 }
 
 /// Where a tooltip may sit about its source: the named side first, then the
-/// opposite one, centred on the source.
+/// opposite one, centred on the source; where it cannot be centred (a source
+/// near the window's edge), kept inside the window from the source's start.
 fn candidates(position: Position) -> Vec<AnchorCandidate> {
     let gap = theme::active().cosmic().spacing.space_xxs as f32;
     let sides = match position {
@@ -57,22 +58,38 @@ fn candidates(position: Position) -> Vec<AnchorCandidate> {
     };
     sides
         .into_iter()
-        .map(|side| AnchorCandidate::new(side, Alignment::Center).gap(gap))
+        .flat_map(|side| {
+            [Alignment::Center, Alignment::StartBounded]
+                .map(|alignment| AnchorCandidate::new(side, alignment).gap(gap))
+        })
         .collect()
 }
 
-/// Information about `content`, the window's one informational hover (after
-/// the shared delay, at once on Alt+H, dismissed by Escape), through the
-/// legacy-tooltip adapter: the source is retained by the tree.
+/// The legacy-tooltip adapter: information about `content`, the window's one
+/// informational hover (after the shared delay, at once on Alt+H, dismissed
+/// by Escape). The source is retained by the tree, so the widget is the
+/// same whether the tip is `hidden` or not.
+fn adapt<'a, M: 'a>(
+    content: Element<'a, M>,
+    tip: Tip<'a, M>,
+    position: Position,
+    at: Option<f32>,
+    hidden: bool,
+) -> Element<'a, M> {
+    let view = tip.view;
+    let child = layout::child(move |_| view())
+        .minimum_width(|_, preferred| preferred.width.min(TEXT_MIN_WIDTH))
+        .hidden_when(move |_| hidden);
+    hover_card::retained_hover_box(tip.key, at, content, child, candidates(position))
+}
+
+/// Information about `content` as a tooltip says it.
 pub fn tooltip_with<'a, M: 'a>(
     content: impl Into<Element<'a, M>>,
     tip: Tip<'a, M>,
     position: Position,
 ) -> Element<'a, M> {
-    let view = tip.view;
-    let child = layout::child(move |_| view())
-        .minimum_width(|_, preferred| preferred.width.min(TEXT_MIN_WIDTH));
-    hover_card::retained_hover_box(tip.key, content.into(), child, candidates(position))
+    adapt(content.into(), tip, position, None, false)
 }
 
 /// [`tooltip_with`], giving no information while `hidden`. The tree is the
@@ -83,11 +100,20 @@ pub fn tooltip_unless<'a, M: 'a>(
     position: Position,
     hidden: bool,
 ) -> Element<'a, M> {
-    let view = tip.view;
-    let child = layout::child(move |_| view())
-        .minimum_width(|_, preferred| preferred.width.min(TEXT_MIN_WIDTH))
-        .hidden_when(move |_| hidden);
-    hover_card::retained_hover_box(tip.key, content.into(), child, candidates(position))
+    adapt(content.into(), tip, position, None, hidden)
+}
+
+/// [`tooltip_unless`] about the one place `x` pixels from `content`'s left
+/// edge, which a wide control (a tab bar) says it is hovered at: the card
+/// sits there, not at the whole control.
+pub fn tooltip_at<'a, M: 'a>(
+    content: impl Into<Element<'a, M>>,
+    tip: Tip<'a, M>,
+    position: Position,
+    x: f32,
+    hidden: bool,
+) -> Element<'a, M> {
+    adapt(content.into(), tip, position, Some(x), hidden)
 }
 
 /// A libcosmic tooltip, for the sites the window's information cannot yet
@@ -133,5 +159,36 @@ pub fn link_tooltip<'a, M: 'a>(
             .padding(0.0)
             .class(theme::Container::Transparent)
             .into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// libcosmic's tooltip is called in this file alone: every other
+    /// tooltip is the window's information or goes through
+    /// [`super::native_tooltip`]
+    #[test]
+    fn no_production_code_bypasses_the_tooltip_helpers() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(root).unwrap().flatten() {
+            let path = entry.path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name == "tooltip.rs" {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            // What follows a `#[cfg(test)]` is test code
+            let production = text.split("#[cfg(test)]").next().unwrap_or("");
+            for (n, line) in production.lines().enumerate() {
+                if line.contains("widget::tooltip(") || line.contains("Tooltip::new(") {
+                    found.push(format!("{name}:{}", n + 1));
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "tooltips that bypass the helpers: {found:?}"
+        );
     }
 }

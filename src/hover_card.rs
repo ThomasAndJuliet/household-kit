@@ -235,6 +235,7 @@ pub(crate) fn hover_owned<'a, Message: 'a>(
 /// outside any window, in which case nothing shows.
 pub(crate) fn retained_hover_box<'a, Message: 'a>(
     content_key: u64,
+    at: Option<f32>,
     target: Element<'a, Message>,
     content: crate::layout::Child<'a, Message>,
     candidates: Vec<AnchorCandidate>,
@@ -242,7 +243,7 @@ pub(crate) fn retained_hover_box<'a, Message: 'a>(
     hover_with_preparation(
         Owner::Legacy,
         Ident::new(Id::unique()),
-        Some(content_key),
+        Some((content_key, at)),
         target,
         vec![Stage::new(
             crate::layout::Level::Preferred,
@@ -256,7 +257,7 @@ pub(crate) fn retained_hover_box<'a, Message: 'a>(
 fn hover_with_preparation<'a, Message: 'a>(
     owner: Owner,
     source: Ident,
-    retained: Option<u64>,
+    retained: Option<(u64, Option<f32>)>,
     target: Element<'a, Message>,
     stages: Vec<Stage<'a, Message>>,
     prepare: Option<Box<ReportPreparation<'a, Message>>>,
@@ -274,7 +275,7 @@ fn hover_with_preparation<'a, Message: 'a>(
     };
     let card = Element::new(card);
     match retained {
-        Some(key) => crate::popup::retained_source(owner, source, key, card),
+        Some((key, at)) => crate::popup::retained_source(owner, source, key, at, card),
         None => crate::popup::source(owner, source.get(), card, false, None),
     }
 }

@@ -519,6 +519,7 @@ pub(crate) fn source<'a, Message: 'a>(
     Element::new(SourceWidget {
         id: Ident::new(id),
         retained: None,
+        at: None,
         content,
         owner,
         trigger,
@@ -534,11 +535,13 @@ pub(crate) fn retained_source<'a, Message: 'a>(
     owner: Owner,
     id: Ident,
     content_key: u64,
+    at: Option<f32>,
     content: Element<'a, Message>,
 ) -> Element<'a, Message> {
     Element::new(SourceWidget {
         id,
         retained: Some(content_key),
+        at,
         content,
         owner,
         trigger: false,
@@ -555,6 +558,8 @@ struct Retained {
 struct SourceWidget<'a, Message> {
     id: Ident,
     retained: Option<u64>,
+    /// The source is the point this far from its content's left edge
+    at: Option<f32>,
     content: Element<'a, Message>,
     owner: Owner,
     trigger: bool,
@@ -598,11 +603,18 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Mess
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-        let bounds = Rectangle {
+        let mut bounds = Rectangle {
             x: layout.bounds().x + translation.x,
             y: layout.bounds().y + translation.y,
             ..layout.bounds()
         };
+        if let Some(at) = self.at {
+            bounds = Rectangle {
+                x: bounds.x + at - 0.5,
+                width: 1.0,
+                ..bounds
+            };
+        }
         let Some(anchors) = self.owner.resolve() else {
             return self.content.as_widget_mut().overlay(
                 &mut tree.children[0],
