@@ -1213,7 +1213,10 @@ pub fn spacer<'a, Message: 'a>(minimum: f32) -> Child<'a, Message> {
 }
 
 impl<'a, Message: 'a> Child<'a, Message> {
-    fn with_measurement(mut self, query: impl Fn(Level, &Renderer) -> MeasuredSize + 'a) -> Self {
+    pub(crate) fn with_measurement(
+        mut self,
+        query: impl Fn(Level, &Renderer) -> MeasuredSize + 'a,
+    ) -> Self {
         self.refresh_preparation();
         self.query = Rc::new(query);
         self

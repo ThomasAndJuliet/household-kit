@@ -16,12 +16,16 @@
 //!   keeping the reader's place.
 //! - [`tab_strip`]: the user-content tab strip (tabs the user opens and
 //!   closes), distinct from the fixed-section [`tabs`].
+//! - `content` (feature `content`): the content boxes, inline text and
+//!   formulas from household-kit's content model.
 //!
 //! Plain colour maths stays in household-kit's `household-tones`; this
 //! crate turns it into libcosmic's types.
 
 #[macro_use]
 mod forward;
+#[cfg(feature = "content")]
+pub mod content;
 pub mod focus_regions;
 #[doc(hidden)]
 pub mod history;
