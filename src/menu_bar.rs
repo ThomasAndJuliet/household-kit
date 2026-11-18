@@ -18,7 +18,9 @@
 //!   (the app gives each menu's root panel [`MenuBar::lateral`]);
 //! - Escape closes the innermost open menu, and focus returns to its title;
 //! - the titles are ordinary focusable controls: Enter or Space opens a menu
-//!   from the keyboard, with its first row the keyboard's target.
+//!   from the keyboard, with its first row the keyboard's target;
+//! - F10 opens the first menu, its first row the keyboard's target, and
+//!   closes it again; there are no Alt+letter mnemonics.
 
 use crate::layout::{self as engine, Child, Level, Stage};
 use crate::menu_parts::RowContour;
@@ -107,14 +109,20 @@ impl<R: Clone + PartialEq + 'static> MenuBar<R> {
                 let open = self.open.as_ref() == Some(root);
                 let (label, root, body) = (label.clone(), root.clone(), self.body);
                 engine::child(move |_| {
-                    title(
+                    let title = title(
                         id.clone(),
                         root.clone(),
                         label.clone(),
                         open,
                         switching && !open,
                         body,
-                    )
+                    );
+                    // F10 opens the first menu
+                    if index == 0 {
+                        crate::window::first_menu(root.clone(), title)
+                    } else {
+                        title
+                    }
                 })
             })
             .collect();
@@ -126,7 +134,9 @@ impl<R: Clone + PartialEq + 'static> MenuBar<R> {
 
     /// The bar in the window: its titles where they fit, else `collapsed`,
     /// the app's three-bar button opening one menu of all of them. Only as
-    /// wide as the form shown.
+    /// wide as the form shown. The three-bar button is declared with
+    /// [`first_menu`](crate::window::first_menu), as the first title is, so
+    /// that F10 opens the menu the bar shows first.
     pub fn view<'a, M: 'a>(self, collapsed: Child<'a, M>) -> Element<'a, M> {
         let forms = engine::forms(vec![
             (Level::Preferred, self.titles()),

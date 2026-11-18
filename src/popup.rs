@@ -21,7 +21,7 @@ use cosmic::{Element, Renderer, Theme, widget};
 #[path = "popup_anchor.rs"]
 mod anchor;
 pub use anchor::{Anchors, INFORMATION_DELAY};
-pub(crate) use anchor::{Ident, retained_source, source};
+pub(crate) use anchor::{Ident, declared_source, retained_source, source};
 
 #[path = "popup_focus.rs"]
 mod focus;
@@ -62,6 +62,8 @@ pub struct Panel<'a, Message> {
     parent_edges: bool,
     surface_insets: Padding,
     source: Option<Id>,
+    region: Option<Rectangle>,
+    lateral_only: bool,
     focus_first: bool,
     relative: bool,
     key: u64,
@@ -81,6 +83,8 @@ impl<'a, Message: 'a> Panel<'a, Message> {
             parent_edges: false,
             surface_insets: Padding::ZERO,
             source: None,
+            region: None,
+            lateral_only: false,
             focus_first: false,
             relative: false,
             key: 0,
@@ -133,6 +137,22 @@ impl<'a, Message: 'a> Panel<'a, Message> {
     /// geometry. An absent/hidden source is explicit NoFit, never stale bounds.
     pub fn source(mut self, id: impl Into<Id>) -> Self {
         self.source = Some(id.into());
+        self
+    }
+    /// Anchor at `region` of the [`source`](Self::source), given relative
+    /// to its top-left corner: the pointer's point for a context menu, the
+    /// focused control for one opened from the keyboard. The region
+    /// follows the source; once it is out of view the panel has no fit.
+    pub fn source_region(mut self, region: Rectangle) -> Self {
+        self.region = Some(region);
+        self
+    }
+    /// A level opened by the pointer resting on its row: it shows as a card
+    /// of its own beside its parent or not at all, never as an inline
+    /// expansion, which opens only explicitly (Juliet, 12 Nov 2026). With
+    /// no room beside, the chain reports no fit at its depth.
+    pub fn lateral_only(mut self) -> Self {
+        self.lateral_only = true;
         self
     }
     /// Move focus to the first opted-in target when this panel session opens.
@@ -526,6 +546,18 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
         if keys && !shell.is_event_captured() && !native_escape {
             self.anchors.information_key(event, after.as_ref(), shell);
         }
+        // F10 opens the window's first top menu, as on the desktop; an
+        // input that takes F10 itself (a terminal) has it first
+        if keys
+            && !shell.is_event_captured()
+            && is_first_menu_key(event)
+            && self
+                .window
+                .as_ref()
+                .is_some_and(crate::window::Binding::open_first_menu)
+        {
+            shell.capture_event();
+        }
         self.anchors.update_timer(event, shell);
         if let Some(window) = &self.window {
             window.flush(shell);
@@ -618,6 +650,9 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let _window = self.enter();
         let (base, panel_trees) = tree.children.split_first_mut().expect("host base tree");
+        if let Some(window) = &self.window {
+            window.begin();
+        }
         self.anchors.begin(
             self.panels
                 .iter()
@@ -768,10 +803,18 @@ impl<'a, Message: Clone + 'a> overlay::Overlay<Message, Theme, Renderer>
         // Each rejected detached boundary is permanent for this negotiation,
         // so at most one retry per logical level is possible.
         let mut rejected_detached = vec![false; self.panels.len()];
+        // No card embeds a level opened by hover
+        let lateral_only = self.panels.iter().position(|panel| panel.lateral_only);
         loop {
             let selection = choose_attached_chain(
                 self.panels.len(),
-                |index| self.panels[index].embedded.len() + 1,
+                |index| {
+                    let span = self.panels[index].embedded.len() + 1;
+                    match lateral_only {
+                        Some(level) if index < level => span.min(level - index),
+                        _ => span,
+                    }
+                },
                 |prefix, index, span| {
                     if rejected_detached[index] {
                         return Err(ChainFailure::NoFit(NoFit { attempted: 0 }));
@@ -1322,6 +1365,10 @@ impl<'a, Message: Clone + 'a> Chain<'_, 'a, Message> {
                 self.anchors.trigger_at(
                     point,
                     self.panels.first().and_then(|panel| panel.source.as_ref()),
+                    matches!(
+                        event,
+                        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+                    ),
                 )
             }) {
                 if let Some(message) = self.dismiss {
@@ -1448,6 +1495,17 @@ impl<'a, Message: Clone + 'a> Chain<'_, 'a, Message> {
     }
 }
 
+fn is_first_menu_key(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(keyboard::key::Named::F10),
+            modifiers,
+            ..
+        }) if modifiers.is_empty()
+    )
+}
+
 fn resolved_attachment<Message>(
     panel: &Panel<'_, Message>,
     previous: Option<&ChainCard>,
@@ -1460,7 +1518,10 @@ fn resolved_attachment<Message>(
         attachment.surface_insets = panel.surface_insets;
     }
     if let Some(source) = &panel.source {
-        attachment.anchor = anchors.visible(source)?;
+        attachment.anchor = match panel.region {
+            Some(region) => anchors.visible_region(source, region)?,
+            None => anchors.visible(source)?,
+        };
         if panel.parent_edges
             && let Some(parent) = previous
         {
@@ -1485,6 +1546,12 @@ pub(crate) struct FocusProbe {
     pub(crate) focused: Option<Id>,
     pub(crate) ids: Vec<Id>,
     focused_bounds: Option<Rectangle>,
+}
+impl FocusProbe {
+    /// The focused control's bounds, in its layout's coordinates
+    pub(crate) fn focused_bounds(&self) -> Option<Rectangle> {
+        self.focused_bounds
+    }
 }
 impl Operation for FocusProbe {
     fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {

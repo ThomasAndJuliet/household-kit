@@ -101,6 +101,7 @@ fn panels(window: &WindowUi<Root>) -> Vec<Panel<'_, Ev>> {
                 Side::Below,
                 Alignment::StartBounded,
             )])
+            .hover(request.on_hover_path(), request.hover_level())
             .panels(
                 source(root),
                 request.path().to_vec(),
@@ -117,16 +118,19 @@ fn panels(window: &WindowUi<Root>) -> Vec<Panel<'_, Ev>> {
 fn view<'w>(window: &'w WindowUi<Root>) -> Element<'w, Ev> {
     let open = window.chain().map(|chain| *chain.root());
     let collapsed = crate::layout::child(|_| {
-        crate::window::trigger(
-            "bar-all",
+        crate::window::first_menu(
             Root::All,
-            crate::popup::focus_target(
+            crate::window::trigger(
                 "bar-all",
-                native::button(native::space().width(32).height(32))
-                    .padding(0)
-                    .on_press(Toggle),
-            )
-            .on_activate(Toggle),
+                Root::All,
+                crate::popup::focus_target(
+                    "bar-all",
+                    native::button(native::space().width(32).height(32))
+                        .padding(0)
+                        .on_press(Toggle),
+                )
+                .on_activate(Toggle),
+            ),
         )
     });
     let bar = MenuBar::new(
@@ -252,6 +256,24 @@ impl App {
             mouse::Button::Left,
         ))]);
         self.frame();
+    }
+
+    /// The pointer at `at`, resting there longer than a submenu's delay
+    fn rest(&mut self, at: Point) {
+        self.point(at);
+        self.send(&[Event::Window(native_window::Event::RedrawRequested(
+            Instant::now() + crate::menu_surface::SUBMENU_DELAY * 2,
+        ))]);
+        self.frame();
+    }
+
+    fn row(&self, menu: Root, label: &str) -> Rectangle {
+        self.visible(&crate::menu_surface::row_id(
+            &format!("{menu:?}"),
+            &[],
+            row_key(label, label == "Recent", 0),
+        ))
+        .unwrap_or_else(|| panic!("{label} is shown"))
     }
 
     fn named(&mut self, key: keyboard::key::Named) {
@@ -472,4 +494,104 @@ fn where_the_titles_do_not_fit_one_three_bar_menu_holds_them_all() {
     let mut wide = App::new(WIDE);
     assert!(wide.visible(&Id::new("bar-all")).is_none());
     wide.frame();
+}
+
+#[test]
+fn resting_on_a_submenus_row_opens_it_beside_the_menu_and_resting_elsewhere_closes_it() {
+    let mut app = App::new(WIDE);
+    app.click_at(app.title(0).center());
+    let recent = app.row(Root::File, "Recent");
+    // Passing over it opens nothing (no redraw: under load a frame can
+    // come later than the delay)
+    app.cursor = mouse::Cursor::Available(recent.center());
+    app.send(&[Event::Mouse(mouse::Event::CursorMoved {
+        position: recent.center(),
+    })]);
+    assert!(app.window.chain().unwrap().path().is_empty(), "not at once");
+    app.rest(recent.center());
+    assert_eq!(
+        app.window.chain().unwrap().path(),
+        [row_key("Recent", true, 0)],
+        "after the delay its submenu opens"
+    );
+    let surfaces = app.surfaces();
+    assert_eq!(surfaces.len(), 2, "beside the menu: {surfaces:?}");
+    assert!(
+        surfaces[1].x > surfaces[0].x + surfaces[0].width / 2.0,
+        "a card of its own, beside: {surfaces:?}"
+    );
+    // A click on the row it opened keeps it open
+    app.click_at(recent.center());
+    assert_eq!(app.window.chain().unwrap().path().len(), 1);
+    assert!(app.app.is_empty());
+    // Resting on another row of the menu closes it again
+    app.rest(app.row(Root::File, "New").center());
+    assert!(app.window.chain().unwrap().path().is_empty());
+    assert_eq!(app.surfaces().len(), 1);
+    assert!(app.app.is_empty(), "resting activates nothing");
+}
+
+#[test]
+fn resting_never_opens_a_submenu_inline_where_there_is_no_room_beside() {
+    let mut app = App::new(110.0);
+    let all = app.visible(&Id::new("bar-all")).unwrap();
+    app.click_at(all.center());
+    assert_eq!(app.open(), Some(Root::All));
+    let file = app
+        .visible(&crate::menu_surface::row_id(
+            "All",
+            &[],
+            row_key("File", true, 0),
+        ))
+        .expect("File's row");
+    app.rest(file.center());
+    assert_eq!(app.open(), Some(Root::All), "the menu stays open");
+    assert!(
+        app.window.chain().unwrap().path().is_empty(),
+        "and its submenu, with no room beside, does not open inline"
+    );
+    assert_eq!(app.surfaces().len(), 1);
+    // A click does expand it inline
+    app.click_at(file.center());
+    assert_eq!(
+        app.window.chain().unwrap().path(),
+        [row_key("File", true, 0)]
+    );
+    assert_eq!(app.surfaces().len(), 1, "inline, in the same card");
+    // And resting on another row leaves the inline expansion alone
+    let help = app
+        .visible(&crate::menu_surface::row_id(
+            "All",
+            &[],
+            row_key("Help", true, 0),
+        ))
+        .expect("Help's row");
+    app.rest(help.center());
+    assert_eq!(
+        app.window.chain().unwrap().path(),
+        [row_key("File", true, 0)],
+        "an inline expansion closes only explicitly"
+    );
+}
+
+#[test]
+fn f10_opens_the_first_menu_from_the_keyboard_and_closes_it() {
+    let mut app = App::new(WIDE);
+    app.named(keyboard::key::Named::F10);
+    assert_eq!(app.open(), Some(Root::File));
+    let chain = app.window.chain().unwrap();
+    assert_eq!(chain.entry(), Entry::Keyboard);
+    let target = app.focused();
+    assert!(
+        target
+            .as_ref()
+            .is_some_and(|id| format!("{id:?}").contains("File:menu")),
+        "its first row is the keyboard's target: {target:?}"
+    );
+    app.named(keyboard::key::Named::F10);
+    assert_eq!(app.open(), None, "F10 again closes it");
+    // Where the titles do not fit, the three-bar menu is the first
+    let mut narrow = App::new(110.0);
+    narrow.named(keyboard::key::Named::F10);
+    assert_eq!(narrow.open(), Some(Root::All));
 }

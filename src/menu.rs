@@ -309,7 +309,11 @@ pub fn measured_width(content: &str, size: f32, font: Font) -> f32 {
 }
 
 impl<M: Clone + 'static> Menu<M> {
-    pub fn trees(self, style: MenuStyle<M>) -> Vec<widget::menu::Tree<M>> {
+    /// The menu as libcosmic's own menu rows. Only a text box's menu
+    /// ([`crate::text_menu`]) still opens as libcosmic's popup, until the
+    /// editors move (package 2); every other menu is a window's chain
+    /// ([`crate::window::menu_surface`]).
+    pub(crate) fn trees(self, style: MenuStyle<M>) -> Vec<widget::menu::Tree<M>> {
         let marks = has_marks(&self.rows);
         let order = ordered(&self.rows);
         let mut rows: Vec<_> = self.rows.into_iter().map(Some).collect();
@@ -392,8 +396,9 @@ fn item_element<M: Clone + 'static>(
         button = button.selected(true).class(selected_menu_item());
     }
     match item.disabled_reason {
-        // A row of libcosmic's own menu, which hands its rows no viewport
-        // and may be a native popup outside any window owner
+        // A row of a text box's menu, libcosmic's popup outside any window
+        // owner: the one menu whose greyed rows still say why in the native
+        // tooltip, until editor menus move to the window (package 2)
         Some(reason) => crate::native_tooltip(
             button,
             (style.body)(reason),

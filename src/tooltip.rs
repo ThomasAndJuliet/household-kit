@@ -116,12 +116,13 @@ pub fn tooltip_at<'a, M: 'a>(
     adapt(content.into(), tip, position, Some(x), hidden)
 }
 
-/// A libcosmic tooltip, for the sites the window's information cannot yet
-/// serve: a row of libcosmic's own menu (which gives its rows no viewport
-/// and may be a native popup outside any window owner; these go with the
-/// menus' migration), and compact tabs' label, whose place is the pointer's
-/// (`Position::FollowCursor`). `hidden` leaves the same tree with no tip.
-pub fn native_tooltip<'a, M: 'a>(
+/// A libcosmic tooltip, for the two sites the window's information cannot
+/// yet serve, both in this crate: a greyed row of a text box's menu,
+/// libcosmic's popup outside any window owner (until editor menus move,
+/// package 2), and compact tabs' label, whose place is the pointer's
+/// (`Position::FollowCursor`; the shared tab strip, Stage 6). `hidden`
+/// leaves the same tree with no tip.
+pub(crate) fn native_tooltip<'a, M: 'a>(
     content: impl Into<Element<'a, M>>,
     tip: impl Into<Element<'a, M>>,
     position: Position,

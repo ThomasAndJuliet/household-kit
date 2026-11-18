@@ -56,16 +56,20 @@ enum Internal<R> {
     Toggle {
         root: R,
         entry: Entry,
+        declared: Option<Declared>,
     },
     /// Open `root` unless it is the one open: a menu bar's neighbour, by
     /// the pointer moving onto its title or by Left and Right
     Open {
         root: R,
         entry: Entry,
+        declared: Option<Declared>,
     },
     Path {
         session: u64,
         path: Vec<usize>,
+        /// The pointer resting on a submenu's row opened its last level
+        hover: bool,
     },
     Expand {
         session: u64,
@@ -86,6 +90,8 @@ enum Internal<R> {
         session: u64,
         depth: usize,
     },
+    /// A declared menu changed while open: build its panels again
+    Refresh,
 }
 
 /// What a mounted window publishes: its own actions, separate from the app's
@@ -106,6 +112,10 @@ struct Session<R> {
     path: Vec<usize>,
     expanded: BTreeSet<usize>,
     entry: Entry,
+    /// The declaration that opened it, for a declared root
+    declared: Option<Declared>,
+    /// The level the pointer's resting opened, if the last one is
+    hover: Option<usize>,
 }
 
 /// One actual native window's interaction state: its registry of sources,
@@ -137,20 +147,42 @@ impl<R: Clone + PartialEq + Debug + 'static> WindowUi<R> {
     /// session is ignored, so a late action cannot close or steer a newer one.
     pub fn apply(&mut self, action: WindowAction<R>) {
         match action.0 {
-            Internal::Toggle { root, entry } => {
-                if self.chain.as_ref().is_some_and(|chain| chain.root == root) {
+            Internal::Toggle {
+                root,
+                entry,
+                declared,
+            } => {
+                let same = self.chain.as_ref().is_some_and(|chain| {
+                    chain.root == root
+                        || declared.as_ref().is_some_and(|declared| {
+                            chain
+                                .declared
+                                .as_ref()
+                                .is_some_and(|open| open.source == declared.source)
+                        })
+                });
+                if same {
                     self.chain = None;
                 } else {
-                    self.open(root, entry);
+                    self.open_declared(root, entry, declared);
                 }
             }
-            Internal::Open { root, entry } => {
+            Internal::Open {
+                root,
+                entry,
+                declared,
+            } => {
                 if self.chain.as_ref().is_none_or(|chain| chain.root != root) {
-                    self.open(root, entry);
+                    self.open_declared(root, entry, declared);
                 }
             }
-            Internal::Path { session, path } => {
+            Internal::Path {
+                session,
+                path,
+                hover,
+            } => {
                 if let Some(chain) = self.session(session) {
+                    chain.hover = hover.then_some(path.len());
                     chain.path = path;
                 }
             }
@@ -170,7 +202,21 @@ impl<R: Clone + PartialEq + Debug + 'static> WindowUi<R> {
                         self.chain = None;
                     } else {
                         chain.path.truncate(keep - 1);
+                        chain.hover = chain.hover.filter(|level| *level <= chain.path.len());
                     }
+                }
+            }
+            // A level the pointer opened that has no room beside its parent
+            // is not shown inline instead: it closes, and the rest stays
+            Internal::NoFit { session, depth }
+                if depth > 0
+                    && self.chain.as_ref().is_some_and(|chain| {
+                        chain.session == session && chain.hover == Some(depth)
+                    }) =>
+            {
+                if let Some(chain) = self.session(session) {
+                    chain.path.truncate(depth - 1);
+                    chain.hover = None;
                 }
             }
             // A stale source (NoFit) closes the session rather than showing
@@ -182,6 +228,8 @@ impl<R: Clone + PartialEq + Debug + 'static> WindowUi<R> {
                     self.chain = None;
                 }
             }
+            // Nothing to change: the app's next view builds the panels anew
+            Internal::Refresh => {}
         }
     }
 
@@ -192,6 +240,10 @@ impl<R: Clone + PartialEq + Debug + 'static> WindowUi<R> {
     /// Open `root`'s chain, replacing whatever chain is open: an app's own
     /// shortcut for a menu, for example.
     pub fn open(&mut self, root: R, entry: Entry) {
+        self.open_declared(root, entry, None);
+    }
+
+    fn open_declared(&mut self, root: R, entry: Entry, declared: Option<Declared>) {
         let session = self.next_session;
         self.next_session += 1;
         self.chain = Some(Session {
@@ -200,6 +252,8 @@ impl<R: Clone + PartialEq + Debug + 'static> WindowUi<R> {
             path: Vec::new(),
             expanded: BTreeSet::new(),
             entry,
+            declared,
+            hover: None,
         });
     }
 
@@ -216,6 +270,9 @@ impl<R: Clone + PartialEq + Debug + 'static> WindowUi<R> {
             path: &chain.path,
             expanded: &chain.expanded,
             entry: chain.entry,
+            declared: chain.declared.as_ref(),
+            hover: chain.hover,
+            slot: &self.context.declared,
         })
     }
 
@@ -240,6 +297,21 @@ impl<R: Clone + PartialEq + Debug + 'static> WindowUi<R> {
         provided: Vec<Panel<'a, UiEvent<R, M>>>,
     ) -> Mount<'a, R, M> {
         let session = self.chain.as_ref().map(|chain| chain.session);
+        // The declaration a declared root's source refreshes while it is open
+        {
+            let mut slot = self.context.declared.borrow_mut();
+            let open = self
+                .chain
+                .as_ref()
+                .and_then(|chain| chain.declared.as_ref())
+                .map(|declared| declared.source.clone());
+            if open != slot.open {
+                *slot = Slot {
+                    open,
+                    ..Slot::default()
+                };
+            }
+        }
         debug_assert!(
             session.is_some() || provided.is_empty(),
             "panels provided for a window with no open chain"
@@ -267,6 +339,7 @@ impl<R: Clone + PartialEq + Debug + 'static> WindowUi<R> {
                 },
             ),
             activation: Some((event(Internal::Activated { session }), is_application)),
+            refresh: event(Internal::Refresh),
             missing_chain: missing,
             keyboard_open: self
                 .chain
@@ -299,6 +372,9 @@ pub struct ChainRequest<'w, R> {
     path: &'w [usize],
     expanded: &'w BTreeSet<usize>,
     entry: Entry,
+    declared: Option<&'w Declared>,
+    hover: Option<usize>,
+    slot: &'w Rc<RefCell<Slot>>,
 }
 
 impl<'w, R: 'static> ChainRequest<'w, R> {
@@ -316,16 +392,58 @@ impl<'w, R: 'static> ChainRequest<'w, R> {
     pub fn entry(&self) -> Entry {
         self.entry
     }
+    /// The declaration of a declared root ([`context_menu`], [`menu_button`]):
+    /// its source and where it was asked for.
+    pub fn declared(&self) -> Option<&'w Declared> {
+        self.declared
+    }
+    /// What the open declared root's source declares now, as the app gave
+    /// it: refreshed by the source on every traversal while it is open, so
+    /// never a copy taken when it opened. None when the source is gone, or
+    /// declared another type.
+    pub fn declaration<T: 'static>(&self) -> Option<Rc<T>> {
+        let mut slot = self.slot.borrow_mut();
+        let payload = slot.payload.clone()?.downcast::<T>().ok()?;
+        slot.served = slot.revision;
+        Some(payload)
+    }
     /// The message a row sends to change the open submenus' path, for
     /// `MenuSurface::panels`.
     pub fn on_path<M>(&self) -> impl Fn(Vec<usize>) -> UiEvent<R, M> + Clone + 'static {
         let session = self.session;
-        move |path| UiEvent::Internal(WindowAction(Internal::Path { session, path }))
+        move |path| {
+            UiEvent::Internal(WindowAction(Internal::Path {
+                session,
+                path,
+                hover: false,
+            }))
+        }
+    }
+    /// The message the pointer resting on a submenu's row sends to open it
+    /// beside its parent ([`MenuSurface::hover`](crate::menu_surface::MenuSurface::hover)).
+    pub fn on_hover_path<M>(&self) -> impl Fn(Vec<usize>) -> UiEvent<R, M> + Clone + 'static {
+        let session = self.session;
+        move |path| {
+            UiEvent::Internal(WindowAction(Internal::Path {
+                session,
+                path,
+                hover: true,
+            }))
+        }
+    }
+    /// The panel index of the open level the pointer's resting opened, if
+    /// the last level is one.
+    pub fn hover_level(&self) -> Option<usize> {
+        self.hover
     }
     /// The message that opens `root`'s chain in place of this one, as a
     /// menu bar's Left and Right open its neighbours ([`Panel::lateral`]).
     pub fn open<M>(&self, root: R, entry: Entry) -> UiEvent<R, M> {
-        UiEvent::Internal(WindowAction(Internal::Open { root, entry }))
+        UiEvent::Internal(WindowAction(Internal::Open {
+            root,
+            entry,
+            declared: None,
+        }))
     }
     /// The message that expands or collapses the disclosure `row`; it is
     /// session state, gone when the chain closes.
@@ -378,6 +496,28 @@ pub(crate) type Activation<Message> = (Message, fn(&Message) -> bool);
 pub(crate) struct Context {
     anchors: Anchors,
     queue: Queue,
+    declared: Rc<RefCell<Slot>>,
+    /// What F10 opens: the first of the window's menu bar's menus, as the
+    /// first menu bar traversed declares it
+    first_menu: Rc<RefCell<Option<FirstMenu>>>,
+}
+
+/// What F10 queues: the opening of the window's first top menu
+type FirstMenu = Rc<dyn Fn() -> Box<dyn Any>>;
+
+/// The declaration of the open declared root, as its source last gave it
+#[derive(Default)]
+pub(crate) struct Slot {
+    /// The open declared root's source
+    open: Option<Id>,
+    payload: Option<Rc<dyn Any>>,
+    /// The target it had when it opened
+    target: Option<u64>,
+    revision: Option<u64>,
+    /// The revision the app last built panels from
+    served: Option<u64>,
+    /// The source declared something else than the panels show
+    stale: bool,
 }
 
 thread_local! {
@@ -406,7 +546,11 @@ fn current() -> Option<Context> {
 
 /// Open `root` in the current window unless it is the one open
 pub(crate) fn queue_open<R: 'static>(root: R, entry: Entry) {
-    queue(Internal::Open { root, entry });
+    queue(Internal::Open {
+        root,
+        entry,
+        declared: None,
+    });
 }
 
 fn queue<R: 'static>(action: Internal<R>) {
@@ -465,6 +609,8 @@ pub(crate) struct Binding<'a, Message> {
     /// Published before the first activation a chain row publishes in one
     /// event, and which messages are activations
     pub(crate) activation: Option<Activation<Message>>,
+    /// Published when the open declared root's declaration changed
+    refresh: Message,
     /// Published while the window has a chain open but no panels for it
     pub(crate) missing_chain: Option<Message>,
     /// The open chain was entered from the keyboard
@@ -475,9 +621,35 @@ impl<'a, Message: 'a> Binding<'a, Message> {
     pub(crate) fn enter(&self) -> Scope {
         self.context.enter()
     }
-    /// Publish what deep widgets queued during this event, in order.
-    pub(crate) fn flush(&self, shell: &mut Shell<'_, Message>) {
+    /// Publish what deep widgets queued during this event, in order, and
+    /// ask for the panels again if the open declared menu changed.
+    pub(crate) fn flush(&self, shell: &mut Shell<'_, Message>)
+    where
+        Message: Clone,
+    {
         flush(&self.context, self.publish.as_ref(), shell);
+        let stale = std::mem::take(&mut self.context.declared.borrow_mut().stale);
+        if stale {
+            shell.publish(self.refresh.clone());
+        }
+    }
+    /// A traversal of the window begins: the menu bars declare F10's menu
+    /// anew.
+    pub(crate) fn begin(&self) {
+        self.context.first_menu.borrow_mut().take();
+    }
+    /// F10: open the window's first top menu with its first row the
+    /// keyboard's target, or close it when it is the one open. False when
+    /// the window has no menu bar.
+    pub(crate) fn open_first_menu(&self) -> bool {
+        let opener = self.context.first_menu.borrow().clone();
+        match opener {
+            Some(opener) => {
+                self.context.queue.borrow_mut().push(opener());
+                true
+            }
+            None => false,
+        }
     }
     /// Keep the window current for every method of the root's overlay.
     pub(crate) fn scope_overlay<'b>(
@@ -634,7 +806,13 @@ pub fn trigger<'a, M: 'a, R: Clone + 'static>(
     content: impl Into<Element<'a, Toggle>>,
 ) -> Element<'a, M> {
     let opener = Element::new(Opener {
-        root,
+        on_toggle: Rc::new(move |entry| {
+            queue(Internal::Toggle {
+                root: root.clone(),
+                entry,
+                declared: None,
+            });
+        }),
         content: content.into(),
     });
     crate::popup::source(Owner::Window, id.into(), opener, true, None)
@@ -719,12 +897,15 @@ fn entry_of(event: &Event) -> Entry {
     }
 }
 
-struct Opener<'a, R> {
-    root: R,
-    content: Element<'a, Toggle>,
+/// What a trigger's toggle does: queue the opening of its root
+type OnToggle = Rc<dyn Fn(Entry)>;
+
+pub(super) struct Opener<'a> {
+    pub(super) on_toggle: OnToggle,
+    pub(super) content: Element<'a, Toggle>,
 }
 
-impl<'a, M, R: Clone + 'static> Widget<M, Theme, Renderer> for Opener<'a, R> {
+impl<'a, M> Widget<M, Theme, Renderer> for Opener<'a> {
     forward_widget!(M, Theme, Renderer; children, diff, size, layout, draw, operate, mouse_interaction, drag_destinations);
     fn update(
         &mut self,
@@ -752,10 +933,7 @@ impl<'a, M, R: Clone + 'static> Widget<M, Theme, Renderer> for Opener<'a, R> {
         forward_status(&local, shell);
         drop(local);
         if !toggles.is_empty() {
-            queue(Internal::Toggle {
-                root: self.root.clone(),
-                entry: entry_of(event),
-            });
+            (self.on_toggle)(entry_of(event));
         }
     }
     fn overlay<'b>(
@@ -775,7 +953,7 @@ impl<'a, M, R: Clone + 'static> Widget<M, Theme, Renderer> for Opener<'a, R> {
         )?;
         Some(overlay::Element::new(Box::new(Intercepted {
             inner,
-            root: self.root.clone(),
+            on_toggle: self.on_toggle.clone(),
         })))
     }
     #[cfg(feature = "a11y")]
@@ -793,12 +971,12 @@ impl<'a, M, R: Clone + 'static> Widget<M, Theme, Renderer> for Opener<'a, R> {
 
 /// A trigger content's overlay (its information, say), turning its toggles
 /// into the window's.
-struct Intercepted<'b, R> {
+struct Intercepted<'b> {
     inner: overlay::Element<'b, Toggle, Theme, Renderer>,
-    root: R,
+    on_toggle: OnToggle,
 }
 
-impl<M, R: Clone + 'static> overlay::Overlay<M, Theme, Renderer> for Intercepted<'_, R> {
+impl<M> overlay::Overlay<M, Theme, Renderer> for Intercepted<'_> {
     fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
         self.inner.as_overlay_mut().layout(renderer, bounds)
     }
@@ -836,10 +1014,7 @@ impl<M, R: Clone + 'static> overlay::Overlay<M, Theme, Renderer> for Intercepted
         forward_status(&local, shell);
         drop(local);
         if !toggles.is_empty() {
-            queue(Internal::Toggle {
-                root: self.root.clone(),
-                entry: entry_of(event),
-            });
+            (self.on_toggle)(entry_of(event));
         }
     }
     fn mouse_interaction(
@@ -860,7 +1035,7 @@ impl<M, R: Clone + 'static> overlay::Overlay<M, Theme, Renderer> for Intercepted
         let nested = self.inner.as_overlay_mut().overlay(layout, renderer)?;
         Some(overlay::Element::new(Box::new(Intercepted {
             inner: nested,
-            root: self.root.clone(),
+            on_toggle: self.on_toggle.clone(),
         })))
     }
     fn index(&self) -> f32 {
@@ -868,6 +1043,14 @@ impl<M, R: Clone + 'static> overlay::Overlay<M, Theme, Renderer> for Intercepted
     }
 }
 
+#[path = "window_declared.rs"]
+mod declared;
+pub use declared::{Declaration, Declared, Invocation, context_menu, first_menu, menu_button};
+
 #[cfg(test)]
 #[path = "window_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "window_declared_tests.rs"]
+mod declared_tests;

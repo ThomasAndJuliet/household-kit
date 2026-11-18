@@ -21,6 +21,12 @@ use std::rc::Rc;
 
 const PADDING: f32 = 4.0;
 
+/// How long the pointer rests on a submenu's row before its submenu opens
+/// beside the menu, as desktop menus do (GTK's default menu popup delay):
+/// long enough that crossing rows on the way to an open submenu does not
+/// switch it.
+pub const SUBMENU_DELAY: std::time::Duration = std::time::Duration::from_millis(225);
+
 /// A stable key within a menu: inserting a differently named row does not move
 /// an open submenu to a different item. Repeated labels use occurrence order.
 pub fn row_key(label: &str, folder: bool, occurrence: usize) -> usize {
@@ -61,6 +67,24 @@ pub struct MenuSurface<M> {
     choice_body: Option<fn(String) -> Element<'static, M>>,
     emphasized_body: Option<fn(String) -> Element<'static, M>>,
     preferred_width: Option<f32>,
+    root_region: Option<Rectangle>,
+    hover: Option<Hover<M>>,
+}
+
+/// Opening submenus beside their menu by the pointer's resting on a row
+struct Hover<M> {
+    on_path: Rc<dyn Fn(Vec<usize>) -> M>,
+    /// The panel index of the open level the pointer's resting opened
+    level: Option<usize>,
+}
+
+impl<M> Clone for Hover<M> {
+    fn clone(&self) -> Self {
+        Self {
+            on_path: self.on_path.clone(),
+            level: self.level,
+        }
+    }
 }
 
 impl<M: Clone + 'static> MenuSurface<M> {
@@ -92,7 +116,38 @@ impl<M: Clone + 'static> MenuSurface<M> {
             choice_body: None,
             emphasized_body: None,
             preferred_width: None,
+            root_region: None,
+            hover: None,
         }
+    }
+
+    /// Anchor the root panel at `region` of its source, relative to the
+    /// source's top-left corner: a context menu at the pointer, or at the
+    /// focused control when a key opened it.
+    pub fn root_region(mut self, region: Option<Rectangle>) -> Self {
+        self.root_region = region;
+        self
+    }
+
+    /// Submenus open beside their menu when the pointer rests on their row
+    /// for [`SUBMENU_DELAY`], with `on_path` (the window's
+    /// [`ChainRequest::on_hover_path`](crate::window::ChainRequest::on_hover_path));
+    /// resting on another row of that menu closes them again. Never in a
+    /// menu that shows a submenu inline: an inline expansion opens and
+    /// closes only explicitly (Juliet, 12 Nov 2026). `level` is the panel
+    /// index of the level this opened, if the open path's last is one: it
+    /// is shown beside its parent or not at all, and a click on its row
+    /// keeps it open.
+    pub fn hover(
+        mut self,
+        on_path: impl Fn(Vec<usize>) -> M + 'static,
+        level: Option<usize>,
+    ) -> Self {
+        self.hover = Some(Hover {
+            on_path: Rc::new(on_path),
+            level,
+        });
+        self
     }
 
     /// Menus currently support their ordinary concise presentation only.
@@ -154,6 +209,7 @@ impl<M: Clone + 'static> MenuSurface<M> {
             choice_body: self.choice_body,
             emphasized_body: self.emphasized_body,
             preferred_width: self.preferred_width,
+            hover: self.hover.clone(),
         };
         let mut definitions = vec![(content.clone(), source, self.candidates)];
         let mut stale = None;
@@ -209,6 +265,19 @@ impl<M: Clone + 'static> MenuSurface<M> {
         if let Some(stale) = stale {
             panels.push(stale);
         }
+        if let Some(region) = self.root_region
+            && !panels.is_empty()
+        {
+            let root = panels.remove(0).source_region(region);
+            panels.insert(0, root);
+        }
+        if let Some(level) = self.hover.as_ref().and_then(|hover| hover.level)
+            && level > 0
+            && level < panels.len()
+        {
+            let opened = panels.remove(level).lateral_only();
+            panels.insert(level, opened);
+        }
         panels
     }
 }
@@ -227,9 +296,25 @@ struct Content<M> {
     choice_body: Option<fn(String) -> Element<'static, M>>,
     emphasized_body: Option<fn(String) -> Element<'static, M>>,
     preferred_width: Option<f32>,
+    hover: Option<Hover<M>>,
 }
 
 impl<M: Clone + 'static> Content<M> {
+    /// What activating submenu row `path`, open or not, does: open it, or
+    /// close it; but one the pointer's resting opened stays open, as the
+    /// click that usually follows the resting means to open it
+    fn folder_toggle(&self, path: &[usize]) -> M {
+        let open = self.open.starts_with(path);
+        let rested = self
+            .hover
+            .as_ref()
+            .is_some_and(|hover| hover.level == Some(path.len()) && self.open.len() == path.len());
+        if open && !rested {
+            (self.on_path)(self.path.clone())
+        } else {
+            (self.on_path)(path.to_vec())
+        }
+    }
     fn panel<'a>(&self, source: Id, candidates: Vec<AnchorCandidate>) -> Panel<'a, M> {
         let keys = keys(&self.menu);
         let targets = crate::menu::ordered(self.menu.rows())
@@ -250,11 +335,7 @@ impl<M: Clone + 'static> Content<M> {
                         let mut path = self.path.clone();
                         path.push(keys[at]);
                         let open = (self.on_path)(path.clone());
-                        let toggle = if self.open.starts_with(&path) {
-                            (self.on_path)(self.path.clone())
-                        } else {
-                            open.clone()
-                        };
+                        let toggle = self.folder_toggle(&path);
                         Some(FocusTarget::new(id).activate(toggle).open(open))
                     }
                     _ => None,
@@ -503,7 +584,7 @@ impl<M: Clone + 'static> Content<M> {
                     let mut path = self.path.clone();
                     path.push(keys[at]);
                     let expanded = self.open.starts_with(&path);
-                    let toggle = if expanded { self.path.clone() } else { path };
+                    let toggle = self.folder_toggle(&path);
                     (
                         None,
                         None,
@@ -517,7 +598,7 @@ impl<M: Clone + 'static> Content<M> {
                             .size(crate::menu::ICON_SIZE as u16)
                             .into(),
                         ),
-                        Some((self.on_path)(toggle)),
+                        Some(toggle),
                         None,
                         true,
                         false,
@@ -632,6 +713,13 @@ impl<M: Clone + 'static> Content<M> {
                 row
             };
             let row = crate::popup::source(self.owner.clone(), id, row, folder, None);
+            let row = match self.resting(embedded, &rows[at], keys[at]) {
+                Some(message) => Element::new(Resting {
+                    content: row,
+                    message,
+                }),
+                None => row,
+            };
             if inline && let Row::Folder(_, submenu) = &rows[at] {
                 let mut child = self.clone();
                 child.menu = submenu.clone();
@@ -650,6 +738,129 @@ impl<M: Clone + 'static> Content<M> {
             widget::column(groups.into_iter().flatten()).into()
         } else {
             menu_parts::groups(groups, || widget::divider::horizontal::light().into())
+        }
+    }
+}
+
+impl<M: Clone + 'static> Content<M> {
+    /// What the pointer resting on `row` (key `key`) of this menu does:
+    /// open its submenu beside the menu, or close the one open beside it;
+    /// nothing in a menu showing a submenu inline, or on the row whose
+    /// submenu is open
+    fn resting(&self, embedded: usize, row: &Row<M>, key: usize) -> Option<M> {
+        let hover = self.hover.as_ref()?;
+        if embedded > 0 {
+            return None;
+        }
+        let depth = self.path.len();
+        let branch = self.open.get(depth).copied();
+        match row {
+            Row::Folder(_, _) if branch != Some(key) => {
+                let mut path = self.path.clone();
+                path.push(key);
+                Some((hover.on_path)(path))
+            }
+            Row::Item(_) if branch.is_some() => Some((self.on_path)(self.path.clone())),
+            _ => None,
+        }
+    }
+}
+
+/// A menu row that publishes `message` once the pointer has rested on it
+/// for [`SUBMENU_DELAY`]; leaving it first cancels that
+struct Resting<'a, M> {
+    content: Element<'a, M>,
+    message: M,
+}
+
+#[derive(Default)]
+struct RestingState {
+    since: Option<std::time::Instant>,
+    done: bool,
+}
+
+mod resting {
+    use super::{Resting, RestingState, SUBMENU_DELAY};
+    use cosmic::iced::advanced::widget::{Operation, Tree, tree};
+    use cosmic::iced::advanced::{
+        Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer,
+    };
+    use cosmic::iced::{Event, Length, Rectangle, Size, Vector};
+    use cosmic::{Renderer, Theme};
+
+    impl<M: Clone> Widget<M, Theme, Renderer> for Resting<'_, M> {
+        forward_widget!(M, Theme, Renderer; children, diff, size, layout, draw, operate, mouse_interaction, drag_destinations, a11y_nodes);
+        fn tag(&self) -> tree::Tag {
+            tree::Tag::of::<RestingState>()
+        }
+        fn state(&self) -> tree::State {
+            tree::State::new(RestingState::default())
+        }
+        fn update(
+            &mut self,
+            tree: &mut Tree,
+            event: &Event,
+            layout: Layout<'_>,
+            cursor: mouse::Cursor,
+            renderer: &Renderer,
+            clipboard: &mut dyn Clipboard,
+            shell: &mut Shell<'_, M>,
+            viewport: &Rectangle,
+        ) {
+            self.content.as_widget_mut().update(
+                &mut tree.children[0],
+                event,
+                layout,
+                cursor,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
+            let state = tree.state.downcast_mut::<RestingState>();
+            let over = cursor.is_over(layout.bounds());
+            match event {
+                Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                    if !over {
+                        *state = RestingState::default();
+                    } else if state.since.is_none() {
+                        let now = std::time::Instant::now();
+                        state.since = Some(now);
+                        shell.request_redraw_at(now + SUBMENU_DELAY);
+                    }
+                }
+                Event::Mouse(mouse::Event::CursorLeft) => *state = RestingState::default(),
+                Event::Window(cosmic::iced::window::Event::RedrawRequested(now)) => {
+                    if let Some(since) = state.since
+                        && over
+                        && !state.done
+                    {
+                        if *now >= since + SUBMENU_DELAY {
+                            state.done = true;
+                            shell.publish(self.message.clone());
+                        } else {
+                            shell.request_redraw_at(since + SUBMENU_DELAY);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn overlay<'b>(
+            &'b mut self,
+            tree: &'b mut Tree,
+            layout: Layout<'b>,
+            renderer: &Renderer,
+            viewport: &Rectangle,
+            translation: Vector,
+        ) -> Option<overlay::Element<'b, M, Theme, Renderer>> {
+            self.content.as_widget_mut().overlay(
+                &mut tree.children[0],
+                layout,
+                renderer,
+                viewport,
+                translation,
+            )
         }
     }
 }
@@ -1074,6 +1285,7 @@ mod presentation_tests {
             choice_body: Some(semibold),
             emphasized_body: Some(semibold),
             preferred_width: None,
+            hover: None,
         };
         let (side, side_labels) = paint(content.rows_view(0, None, false));
         let reference = menu_parts::action_row_with(

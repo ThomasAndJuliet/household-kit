@@ -85,7 +85,11 @@ impl SourceKey {
 #[derive(Clone, Copy)]
 struct Source {
     bounds: Rectangle,
+    /// The source's whole bounds before clipping, for a region within it
+    full: Rectangle,
     trigger: bool,
+    /// A right press on it opens a menu of its own (a context menu)
+    context: bool,
     /// What the source draws within `bounds`, when its traversal says so
     content: Option<Rectangle>,
 }
@@ -202,6 +206,31 @@ impl Anchors {
             .visible
             .get(&SourceKey::of(id))
             .map(|source| source.bounds)
+    }
+    /// `region`, given relative to the source's top-left corner, where it
+    /// is visible: a context menu's pointer or focused control. None when
+    /// that part of the source is clipped out of view.
+    pub fn visible_region(&self, id: &Id, region: Rectangle) -> Option<Rectangle> {
+        let registry = self.0.borrow();
+        let source = registry.visible.get(&SourceKey::of(id))?;
+        let region = Rectangle {
+            x: source.full.x + region.x,
+            y: source.full.y + region.y,
+            ..region
+        };
+        // A point region has no area of its own: it must lie in view
+        let inside = |r: &Rectangle| {
+            r.x >= source.bounds.x
+                && r.y >= source.bounds.y
+                && r.x <= source.bounds.x + source.bounds.width
+                && r.y <= source.bounds.y + source.bounds.height
+        };
+        if region.width <= 1.0 && region.height <= 1.0 {
+            return inside(&region).then_some(region);
+        }
+        region
+            .intersection(&source.bounds)
+            .filter(|visible| visible.width > 0.0 && visible.height > 0.0)
     }
     /// Where an information card attaches: the visible content the source
     /// draws (its text), clipped to the source's visible region, or that
@@ -470,8 +499,25 @@ impl Anchors {
             .get(&SourceKey::of(source))
             .is_some_and(|source| source.trigger)
     }
-    pub(crate) fn trigger_at(&self, point: cosmic::iced::Point, excluded: Option<&Id>) -> bool {
+    /// Whether a press at `point` is on another root's trigger, so that it
+    /// switches roots in one press. A right press (`context`) also counts a
+    /// context menu's source, the open root's own included: right-clicking
+    /// again opens the menu where the pointer is now.
+    pub(crate) fn trigger_at(
+        &self,
+        point: cosmic::iced::Point,
+        excluded: Option<&Id>,
+        context: bool,
+    ) -> bool {
         let registry = self.0.borrow();
+        if context
+            && registry
+                .visible
+                .values()
+                .any(|source| source.context && source.bounds.contains(point))
+        {
+            return true;
+        }
         let excluded = excluded.map(SourceKey::of);
         // Closing the already-open root consumes its press. Otherwise its
         // native pressed state could survive the close rebuild and reopen the
@@ -489,28 +535,28 @@ impl Anchors {
     }
     #[cfg(test)]
     fn record(&self, id: Id, bounds: Rectangle, viewport: Rectangle, trigger: bool) {
-        self.record_content(id, bounds, viewport, trigger, None);
+        self.record_content(id, bounds, viewport, (trigger, false), None);
     }
     fn record_content(
         &self,
         id: Id,
         bounds: Rectangle,
         viewport: Rectangle,
-        trigger: bool,
+        (trigger, context): (bool, bool),
         content: Option<Rectangle>,
     ) {
         self.0.borrow_mut().present.insert(SourceKey::of(&id));
+        let full_bounds = bounds;
         if let Some(bounds) = bounds
             .intersection(&viewport)
             .filter(|bounds| bounds.width > 0.0 && bounds.height > 0.0)
         {
             let mut registry = self.0.borrow_mut();
             let key = SourceKey::of(&id);
-            let trigger = trigger
-                || registry
-                    .visible
-                    .get(&key)
-                    .is_some_and(|source| source.trigger);
+            let earlier = registry.visible.get(&key);
+            let trigger = trigger || earlier.is_some_and(|source| source.trigger);
+            let context = context || earlier.is_some_and(|source| source.context);
+            let full = full_bounds;
             let content = content
                 .and_then(|content| content.intersection(&bounds))
                 .filter(|content| content.width > 0.0 && content.height > 0.0);
@@ -518,7 +564,9 @@ impl Anchors {
                 key,
                 Source {
                     bounds,
+                    full,
                     trigger,
+                    context,
                     content,
                 },
             );
@@ -563,6 +611,9 @@ impl Ident {
     pub(crate) fn get(&self) -> Id {
         self.0.borrow().clone()
     }
+    pub(crate) fn set(&self, id: Id) {
+        *self.0.borrow_mut() = id;
+    }
 }
 
 /// Register `content` as source `id` of the registry `owner` resolves to.
@@ -580,7 +631,28 @@ pub(crate) fn source<'a, Message: 'a>(
         content,
         owner,
         trigger,
+        context: false,
         information,
+    })
+}
+
+/// A source whose identity `id` its declaring widget sets before each
+/// traversal (a declared menu's), a click `trigger` or a `context` menu's.
+pub(crate) fn declared_source<'a, Message: 'a>(
+    id: Ident,
+    content: Element<'a, Message>,
+    trigger: bool,
+    context: bool,
+) -> Element<'a, Message> {
+    Element::new(SourceWidget {
+        id,
+        retained: None,
+        at: None,
+        content,
+        owner: Owner::Window,
+        trigger,
+        context,
+        information: None,
     })
 }
 
@@ -602,6 +674,7 @@ pub(crate) fn retained_source<'a, Message: 'a>(
         content,
         owner,
         trigger: false,
+        context: false,
         information: None,
     })
 }
@@ -620,6 +693,7 @@ struct SourceWidget<'a, Message> {
     content: Element<'a, Message>,
     owner: Owner,
     trigger: bool,
+    context: bool,
     information: Option<(crate::layout::SourceId, u64)>,
 }
 impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Message> {
@@ -702,7 +776,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Mess
             id.clone(),
             bounds,
             *viewport,
-            self.trigger,
+            (self.trigger, self.context),
             content.flatten(),
         );
         if let Some((source, revision)) = self.information {
@@ -769,7 +843,7 @@ mod registry_tests {
         // Source/hover wrappers may register the same name independently.
         anchors.record(Id::new("source"), bounds, window, false);
         assert!(
-            anchors.trigger_at(Point::new(30.0, 40.0), None),
+            anchors.trigger_at(Point::new(30.0, 40.0), None, false),
             "duplicate named source registration preserves its trigger marker"
         );
         let first = Id::unique();
