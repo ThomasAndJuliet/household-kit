@@ -405,10 +405,11 @@ pub fn keyboard_target(id: &Id) {
     }
 }
 
-/// Whose registry a declaration uses: the current window's, or explicit
-/// anchors (temporary adapter A0, below).
+/// Whose registry a declaration uses: the current window's. The host tests
+/// also name one explicitly.
 #[derive(Clone)]
 pub(crate) enum Owner {
+    #[cfg(test)]
     Anchors(Anchors),
     Window,
 }
@@ -417,6 +418,7 @@ impl Owner {
     /// Resolve during a traversal method, never at construction.
     pub(crate) fn resolve(&self) -> Option<Anchors> {
         match self {
+            #[cfg(test)]
             Self::Anchors(anchors) => Some(anchors.clone()),
             Self::Window => {
                 let context = current();

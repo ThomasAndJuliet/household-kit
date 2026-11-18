@@ -8,7 +8,9 @@ use crate::layout::{
 };
 use crate::menu::{Menu, MenuMark, MenuStyle, Row};
 use crate::menu_parts::{self, RowContour, RowSlots, TooltipChoice};
-use crate::popup::{Anchors, FocusTarget, Panel};
+#[cfg(test)]
+use crate::popup::Anchors;
+use crate::popup::{FocusTarget, Panel};
 use crate::window::Owner;
 use cosmic::iced::advanced::widget::Id;
 use cosmic::iced::{Length, Rectangle, Size};
@@ -62,12 +64,15 @@ pub struct MenuSurface<M> {
 }
 
 impl<M: Clone + 'static> MenuSurface<M> {
-    /// Temporary adapter A0 (explicit anchors), kept while its one caller,
-    /// Terminal's `menu_builder.rs` `shared_panels` (the composer's menus),
-    /// still passes a per-tab registry; deleted in step 2 of the window owner,
-    /// when the composer moves to the window root. New code uses
+    /// With an explicit registry, for the host tests; windows use
     /// [`crate::window::menu_surface`].
-    pub fn new(menu: Menu<M>, style: MenuStyle<M>, anchors: Anchors, namespace: String) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(
+        menu: Menu<M>,
+        style: MenuStyle<M>,
+        anchors: Anchors,
+        namespace: String,
+    ) -> Self {
         Self::owned(menu, style, Owner::Anchors(anchors), namespace)
     }
 

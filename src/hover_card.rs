@@ -103,12 +103,10 @@ fn surface_box<'a, Message: 'a>(
 
 /// Attach a single prepared box, measuring the common surface together with it.
 ///
-/// Temporary adapter A0 (explicit anchors), kept while its one caller, the
-/// Terminal composer (`thread/view.rs` composer hovers and `menu_builder.rs`
-/// `shared_panels`), still owns a per-tab registry; deleted in step 2 of the
-/// window owner, when the composer moves to the window root. New code uses
-/// the window's own [`crate::window::hover_box`].
-pub fn hover_box<'a, Message: 'a>(
+/// With an explicit registry, for the host tests; windows use
+/// [`crate::window::hover_box`].
+#[cfg(test)]
+pub(crate) fn hover_box<'a, Message: 'a>(
     anchors: Anchors,
     source: impl Into<Id>,
     target: impl Into<Element<'a, Message>>,
@@ -153,12 +151,10 @@ pub(crate) fn hover_box_owned<'a, Message: 'a>(
 /// verified commit. Contents, conditions and ordering remain caller policy.
 /// An empty/hidden box can deliberately omit the hover.
 ///
-/// Temporary adapter A0 (explicit anchors), kept while its one caller, the
-/// Terminal composer (`thread/view.rs` composer hovers and `menu_builder.rs`
-/// `shared_panels`), still owns a per-tab registry; deleted in step 2 of the
-/// window owner, when the composer moves to the window root. New code uses
-/// the window's own [`crate::window::hover_box_with_report`].
-pub fn hover_box_with_report<'a, Message: 'a>(
+/// With an explicit registry, for the host tests; windows use
+/// [`crate::window::hover_box_with_report`].
+#[cfg(test)]
+pub(crate) fn hover_box_with_report<'a, Message: 'a>(
     anchors: Anchors,
     source: impl Into<Id>,
     target: impl Into<Element<'a, Message>>,
@@ -187,12 +183,10 @@ pub(crate) fn hover_with_report_owned<'a, Message: 'a>(
 /// Wrap any target, including a disabled control. The source ID must remain
 /// stable across view rebuilds. The caller supplies every allowed direction.
 ///
-/// Temporary adapter A0 (explicit anchors), kept while its one caller, the
-/// Terminal composer (`thread/view.rs` composer hovers and `menu_builder.rs`
-/// `shared_panels`), still owns a per-tab registry; deleted in step 2 of the
-/// window owner, when the composer moves to the window root. New code uses
-/// the window's own [`crate::window::hover`].
-pub fn hover<'a, Message: 'a>(
+/// With an explicit registry, for the host tests; windows use
+/// [`crate::window::hover`].
+#[cfg(test)]
+pub(crate) fn hover<'a, Message: 'a>(
     anchors: Anchors,
     source: impl Into<Id>,
     target: impl Into<Element<'a, Message>>,

@@ -107,12 +107,10 @@ impl Anchors {
     }
     /// Register arbitrary content as a source for menus or informational hover.
     ///
-    /// Explicit-registry form: temporary adapter A0, like
-    /// `hover_card::hover(anchors, ..)`. Callers: the Terminal composer
-    /// (`thread/view.rs`) and this crate's own host tests. Leaves the public
-    /// interface in step 2 of the window owner, when the composer moves to the
-    /// window root; window code uses [`crate::window::anchor`].
-    pub fn anchor<'a, Message: 'a>(
+    /// With an explicit registry, for the host tests; windows use
+    /// [`crate::window::anchor`].
+    #[cfg(test)]
+    pub(crate) fn anchor<'a, Message: 'a>(
         &self,
         id: impl Into<Id>,
         content: impl Into<Element<'a, Message>>,
@@ -123,18 +121,17 @@ impl Anchors {
     /// reach their native children, allowing a single press to switch menus.
     /// Give a focusable trigger child the same native ID for focus restoration.
     ///
-    /// Explicit-registry form: temporary adapter A0, like
-    /// `hover_card::hover(anchors, ..)`. Callers: the Terminal composer
-    /// (`thread/view.rs`) and this crate's own host tests. Leaves the public
-    /// interface in step 2 of the window owner, when the composer moves to the
-    /// window root; window code uses [`crate::window::trigger`].
-    pub fn trigger<'a, Message: 'a>(
+    /// With an explicit registry, for the host tests; windows use
+    /// [`crate::window::trigger`].
+    #[cfg(test)]
+    pub(crate) fn trigger<'a, Message: 'a>(
         &self,
         id: impl Into<Id>,
         content: impl Into<Element<'a, Message>>,
     ) -> Element<'a, Message> {
         self.wrap(id.into(), content.into(), true)
     }
+    #[cfg(test)]
     fn wrap<'a, Message: 'a>(
         &self,
         id: Id,
@@ -147,12 +144,10 @@ impl Anchors {
     /// The revision must identify the prepared content used by the caller.
     /// Wrap this in `trigger` too when it opens a menu.
     ///
-    /// Explicit-registry form: temporary adapter A0, like
-    /// `hover_card::hover(anchors, ..)`. Callers: the Terminal composer
-    /// (`thread/view.rs`) and this crate's own host tests. Leaves the public
-    /// interface in step 2 of the window owner, when the composer moves to the
-    /// window root; window code uses [`crate::window::reported_anchor`].
-    pub fn reported_anchor<'a, Message: 'a>(
+    /// With an explicit registry, for the host tests; windows use
+    /// [`crate::window::reported_anchor`].
+    #[cfg(test)]
+    pub(crate) fn reported_anchor<'a, Message: 'a>(
         &self,
         id: impl Into<Id>,
         source: crate::layout::SourceId,
@@ -275,7 +270,8 @@ impl Anchors {
     pub(crate) fn hover_is_owner(&self, id: &Id) -> bool {
         self.hovered().as_ref() == Some(id)
     }
-    pub(crate) fn information_visible(&self, id: &Id) -> bool {
+    /// The source's information is shown: it owns the hover and its delay has passed.
+    pub fn information_visible(&self, id: &Id) -> bool {
         self.hover_is_owner(id) && self.0.borrow().opened
     }
     pub(crate) fn register_information(&self, source: &Id, focus: impl IntoIterator<Item = Id>) {

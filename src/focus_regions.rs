@@ -22,19 +22,6 @@ impl Group {
     }
 }
 
-/// Temporary adapter A0 (explicit anchors), kept while its one caller, the
-/// Terminal composer (`thread/view.rs`), still owns a per-tab registry;
-/// deleted in step 2 of the window owner, when the composer moves to the
-/// window root. New code uses [`crate::window::focus_regions`].
-pub fn regions<'a, M: Clone + 'a>(
-    content: impl Into<Element<'a, M>>,
-    editor: Id,
-    groups: Vec<Group>,
-    anchors: crate::popup::Anchors,
-) -> Element<'a, M> {
-    regions_owned(content.into(), editor, groups, Owner::Anchors(anchors))
-}
-
 pub(crate) fn regions_owned<'a, M: Clone + 'a>(
     content: Element<'a, M>,
     editor: Id,
