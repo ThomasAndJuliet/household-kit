@@ -457,6 +457,9 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
         viewport: &Rectangle,
     ) {
         let _window = self.enter();
+        if let Some(window) = &self.window {
+            window.begin_event();
+        }
         if self.panels.is_empty()
             && let Some(missing) = self.window.as_ref().and_then(|w| w.missing_chain.as_ref())
         {

@@ -497,6 +497,9 @@ pub(crate) struct Context {
     anchors: Anchors,
     queue: Queue,
     declared: Rc<RefCell<Slot>>,
+    /// A right press a menu target inside marked in this event, which
+    /// the nearest enclosing context menu opens for
+    claimed: Rc<std::cell::Cell<bool>>,
     /// What F10 opens: the first of the window's menu bar's menus, as the
     /// first menu bar traversed declares it
     first_menu: Rc<RefCell<Option<FirstMenu>>>,
@@ -560,6 +563,29 @@ fn queue<R: 'static>(action: Internal<R>) {
     }
 }
 
+/// Mark this right press as one a context menu opens for, though the
+/// marking widget takes it: a target inside a larger surface that tells the
+/// app what was right-clicked (and keeps the press from the selection under
+/// it), whose surrounding menu then shows that thing's actions. The nearest
+/// enclosing [`context_menu`] or [`context_root`] opens; a menu inside
+/// that opened itself has already taken the press. False outside a window
+/// root, or when another target inside took this press first.
+pub fn claim_right_press() -> bool {
+    match current() {
+        Some(context) if !context.claimed.get() => {
+            context.claimed.set(true);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Whether a target inside claimed this right press: consumed, so that
+/// only the nearest enclosing menu opens for it
+pub(crate) fn take_right_press_claim() -> bool {
+    current().is_some_and(|context| context.claimed.replace(false))
+}
+
 /// A deliberate keyboard navigation moved the keyboard's target to `id`:
 /// its information follows after the usual delay. Lists and other widgets
 /// with their own keyboard target call this when they move it; outside a
@@ -620,6 +646,10 @@ pub(crate) struct Binding<'a, Message> {
 impl<'a, Message: 'a> Binding<'a, Message> {
     pub(crate) fn enter(&self) -> Scope {
         self.context.enter()
+    }
+    /// An event begins: no right press is claimed yet
+    pub(crate) fn begin_event(&self) {
+        self.context.claimed.set(false);
     }
     /// Publish what deep widgets queued during this event, in order, and
     /// ask for the panels again if the open declared menu changed.
@@ -1045,7 +1075,9 @@ impl<M> overlay::Overlay<M, Theme, Renderer> for Intercepted<'_> {
 
 #[path = "window_declared.rs"]
 mod declared;
-pub use declared::{Declaration, Declared, Invocation, context_menu, first_menu, menu_button};
+pub use declared::{
+    Declaration, Declared, Invocation, context_menu, context_root, first_menu, menu_button,
+};
 
 #[cfg(test)]
 #[path = "window_tests.rs"]

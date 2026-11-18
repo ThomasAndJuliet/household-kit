@@ -155,6 +155,26 @@ where
     })
 }
 
+/// `content` as the source `source` of a context menu the app provides: a
+/// right press nothing inside took, or the Menu key or Shift+F10 while a
+/// control inside has the focus, opens `root` of that [`Invocation`] (the
+/// pointer's point, the focused control), if it gives one. For a source
+/// whose target the app knows only from its own state at that moment (the
+/// tab under the pointer in a tab bar): the root captures it, and the
+/// menu keeps to it whatever the state becomes.
+pub fn context_root<'a, M: 'a, R: Clone + 'static>(
+    source: impl Into<Id>,
+    root: impl Fn(Invocation) -> Option<R> + 'a,
+    content: impl Into<Element<'a, M>>,
+) -> Element<'a, M> {
+    let ident = Ident::new(source.into());
+    let inner = crate::popup::declared_source(ident, content.into(), false, true);
+    Element::new(Rooted {
+        root: Box::new(root),
+        inner,
+    })
+}
+
 /// Declare `root` the window's first top menu, the one F10 opens, unless a
 /// menu bar traversed before has: the first title of a
 /// [`MenuBar`](crate::menu_bar::MenuBar) is, and so must be the three-bar
@@ -208,6 +228,204 @@ impl<M, R: From<Declared> + Clone + 'static, T: Declaration> Declarer<'_, M, R, 
             entry: invocation.entry,
             declared: Some(declared),
         });
+    }
+}
+
+/// Where a right press or a menu key on `layout` asks for a context menu,
+/// once what lies inside (`inner`) had first refusal; None for any other
+/// event
+fn context_invocation<M>(
+    inner: &mut Element<'_, M>,
+    tree: &mut Tree,
+    event: &Event,
+    layout: Layout<'_>,
+    cursor: mouse::Cursor,
+    renderer: &Renderer,
+) -> Option<Invocation> {
+    let bounds = layout.bounds();
+    match event {
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+            cursor.position_over(bounds).map(|at| Invocation {
+                region: Some(Rectangle::new(
+                    cosmic::iced::Point::new(at.x - bounds.x, at.y - bounds.y),
+                    Size::new(1.0, 1.0),
+                )),
+                entry: Entry::Pointer,
+            })
+        }
+        _ if asks_for_menu(event) => {
+            let mut probe = FocusProbe::default();
+            inner
+                .as_widget_mut()
+                .operate(tree, layout, renderer, &mut probe);
+            probe.focused_bounds().map(|focused| Invocation {
+                region: Some(Rectangle {
+                    x: focused.x - bounds.x,
+                    y: focused.y - bounds.y,
+                    ..focused
+                }),
+                entry: Entry::Keyboard,
+            })
+        }
+        _ => None,
+    }
+}
+
+struct Rooted<'a, M, R> {
+    root: Box<dyn Fn(Invocation) -> Option<R> + 'a>,
+    inner: Element<'a, M>,
+}
+
+impl<M, R: Clone + 'static> Widget<M, Theme, Renderer> for Rooted<'_, M, R> {
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.inner)]
+    }
+    fn diff(&mut self, tree: &mut Tree) {
+        tree.diff_children(std::slice::from_mut(&mut self.inner));
+    }
+    fn size(&self) -> Size<Length> {
+        self.inner.as_widget().size()
+    }
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.inner
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.inner.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        self.inner
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, M>,
+        viewport: &Rectangle,
+    ) {
+        self.inner.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+        if shell.is_event_captured() && !super::take_right_press_claim() {
+            return;
+        }
+        let Some(invocation) = context_invocation(
+            &mut self.inner,
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+        ) else {
+            return;
+        };
+        if let Some(root) = (self.root)(invocation) {
+            queue(Internal::Open {
+                root,
+                entry: invocation.entry,
+                declared: None,
+            });
+            shell.capture_event();
+        }
+    }
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.inner.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, M, Theme, Renderer>> {
+        self.inner.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+    fn drag_destinations(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        dnd_rectangles: &mut cosmic::iced::advanced::clipboard::DndDestinationRectangles,
+    ) {
+        self.inner.as_widget().drag_destinations(
+            &tree.children[0],
+            layout,
+            renderer,
+            dnd_rectangles,
+        );
+    }
+    #[cfg(feature = "a11y")]
+    fn a11y_nodes(
+        &self,
+        layout: Layout<'_>,
+        tree: &Tree,
+        cursor: mouse::Cursor,
+    ) -> iced_accessibility::A11yTree {
+        self.inner
+            .as_widget()
+            .a11y_nodes(layout, &tree.children[0], cursor)
     }
 }
 
@@ -331,40 +549,19 @@ impl<M, R: From<Declared> + Clone + 'static, T: Declaration> Widget<M, Theme, Re
             viewport,
         );
         // What lies inside has first refusal: a row's own menu, a text
-        // box's, an editor's keys
-        if !self.context || shell.is_event_captured() {
+        // box's, an editor's keys; but a press a target inside claimed is
+        // this menu's
+        if !self.context || (shell.is_event_captured() && !super::take_right_press_claim()) {
             return;
         }
-        let bounds = layout.bounds();
-        let invocation = match event {
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-                cursor.position_over(bounds).map(|at| Invocation {
-                    region: Some(Rectangle::new(
-                        cosmic::iced::Point::new(at.x - bounds.x, at.y - bounds.y),
-                        Size::new(1.0, 1.0),
-                    )),
-                    entry: Entry::Pointer,
-                })
-            }
-            _ if asks_for_menu(event) => {
-                let mut probe = FocusProbe::default();
-                self.inner.as_widget_mut().operate(
-                    &mut tree.children[0],
-                    layout,
-                    renderer,
-                    &mut probe,
-                );
-                probe.focused_bounds().map(|focused| Invocation {
-                    region: Some(Rectangle {
-                        x: focused.x - bounds.x,
-                        y: focused.y - bounds.y,
-                        ..focused
-                    }),
-                    entry: Entry::Keyboard,
-                })
-            }
-            _ => None,
-        };
+        let invocation = context_invocation(
+            &mut self.inner,
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+        );
         if let Some(invocation) = invocation {
             self.open(invocation);
             shell.capture_event();

@@ -129,6 +129,9 @@ fn row<'a>(rows: &Rows, name: &'static str) -> Element<'a, Message> {
     };
     let content = native::row(vec![
         native::text(name).size(14).width(Length::Fill).into(),
+        Element::new(Claimer {
+            content: native::space().width(40).height(20).into(),
+        }),
         crate::popup::focus_target(
             format!("button-{name}"),
             native::button(native::space().width(30).height(20)).padding(0),
@@ -158,14 +161,52 @@ fn view<'w>(window: &'w WindowUi<Root>, rows: &Rows) -> Element<'w, Ev> {
         .on_activate(Toggle),
     );
     let (first, second) = if rows.swapped { ("B", "A") } else { ("A", "B") };
+    // An area whose menu the app provides, of whatever its state says
+    let picked = crate::window::context_root(
+        "picked",
+        |invocation: Invocation| (invocation.entry == Entry::Pointer).then_some(Root::Other),
+        native::space().width(300).height(40),
+    );
     let content: Element<'w, Message> = native::column(vec![
         other,
         row(rows, first),
         row(rows, second),
-        native::space().height(300).into(),
+        picked,
+        native::space().height(260).into(),
     ])
     .into();
     window.mount(content, panels(window)).into()
+}
+
+/// A marker that takes a right press for its surface's menu, telling the
+/// app what was right-clicked (as a conversation's items do)
+struct Claimer<'a> {
+    content: Element<'a, Message>,
+}
+
+impl Widget<Message, Theme, Renderer> for Claimer<'_> {
+    forward_widget!(Message, Theme, Renderer; children, diff, size, layout, draw, operate, mouse_interaction, overlay);
+    fn update(
+        &mut self,
+        _tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &Renderer,
+        _clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        _viewport: &Rectangle,
+    ) {
+        if matches!(
+            event,
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+        ) && cursor.is_over(layout.bounds())
+        {
+            shell.publish(Message::Chose("marked".into()));
+            shell.capture_event();
+            crate::window::claim_right_press();
+        }
+    }
 }
 
 struct App {
@@ -443,4 +484,37 @@ fn an_open_menu_shows_what_its_source_declares_now() {
     let _ = app.menu_row("Copy all");
     app.press(app.menu_row("Copy all").center(), mouse::Button::Left);
     assert_eq!(app.app, [Message::Chose("Copy all A".into())]);
+}
+
+#[test]
+fn a_press_a_marker_inside_takes_still_opens_the_surrounding_menu() {
+    let mut app = App::new(Rows::default());
+    let b = row_bounds(&app, "B");
+    // The marker sits after the row's name, before its button
+    let marker = Point::new(b.x + 300.0 - 30.0 - 20.0, b.y + 10.0);
+    app.press(marker, mouse::Button::Right);
+    assert!(
+        app.app.contains(&Message::Chose("marked".into())),
+        "the marker told the app"
+    );
+    assert_eq!(
+        app.declared().map(|declared| declared.source().clone()),
+        Some(Id::new("row-B")),
+        "and the row's menu opened for it"
+    );
+}
+
+#[test]
+fn a_provided_context_root_opens_what_the_app_says_at_the_pointer() {
+    let mut app = App::new(Rows::default());
+    let picked = app.visible(&Id::new("picked")).expect("the area");
+    app.press(picked.center(), mouse::Button::Right);
+    assert_eq!(
+        app.window.chain().map(|chain| chain.root().clone()),
+        Some(Root::Other)
+    );
+    assert_eq!(
+        app.window.chain().map(|chain| chain.entry()),
+        Some(Entry::Pointer)
+    );
 }
