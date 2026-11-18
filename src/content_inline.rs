@@ -37,17 +37,50 @@ const EPSILON: f32 = 0.01;
 /// Inline content in a text role: see the [module](super) documentation
 #[derive(Clone, Debug)]
 pub struct InlineText<'a> {
-    content: &'a InlineContent,
+    content: Held<'a>,
     role: TextRole,
     lines: Lines,
     width: Length,
     source: Option<(SourceId, u64)>,
 }
 
+/// The content a box sets: borrowed from its owner, or shared with it
+#[derive(Clone, Debug)]
+enum Held<'a> {
+    Borrowed(&'a InlineContent),
+    Shared(std::rc::Rc<InlineContent>),
+}
+
+impl std::ops::Deref for Held<'_> {
+    type Target = InlineContent;
+    fn deref(&self) -> &InlineContent {
+        match self {
+            Held::Borrowed(content) => content,
+            Held::Shared(content) => content,
+        }
+    }
+}
+
+/// [`inline_text`] for content the box shares with its owner, which keeps it
+/// parsed for as long as its source is unchanged (a tab's title, parsed
+/// once per revision, drawn from every view)
+pub fn inline_text_shared(
+    content: std::rc::Rc<InlineContent>,
+    role: TextRole,
+) -> InlineText<'static> {
+    InlineText {
+        content: Held::Shared(content),
+        role,
+        lines: Lines::One,
+        width: Length::Shrink,
+        source: None,
+    }
+}
+
 /// `content` set in `role`, on one line
 pub fn inline_text(content: &InlineContent, role: TextRole) -> InlineText<'_> {
     InlineText {
-        content,
+        content: Held::Borrowed(content),
         role,
         lines: Lines::One,
         width: Length::Shrink,

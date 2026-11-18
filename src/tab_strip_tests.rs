@@ -293,6 +293,33 @@ impl App {
         }
     }
 
+    /// Run an operation (a focus, say) on the window's current tree
+    fn operate(&mut self, operation: &mut dyn cosmic::iced::advanced::widget::Operation) {
+        let root = view(&self.window, &self.model);
+        let cache = self.cache.take().unwrap_or_default();
+        let mut ui = UserInterface::build(root, self.size, cache, &mut self.renderer);
+        ui.operate(&self.renderer, operation);
+        self.cache = Some(ui.into_cache());
+        self.frame();
+    }
+
+    fn press_key(&mut self, key: cosmic::iced::keyboard::Key) {
+        use cosmic::iced::keyboard;
+        let event = Event::Keyboard(keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: keyboard::key::Physical::Unidentified(
+                keyboard::key::NativeCode::Unidentified,
+            ),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: None,
+            repeat: false,
+        });
+        self.send(&[event]);
+        self.frame();
+    }
+
     fn frame_at(&mut self, at: Instant) {
         for _ in 0..2 {
             self.send(&[Event::Window(native_window::Event::RedrawRequested(at))]);
@@ -660,4 +687,117 @@ fn closing_through_the_close_control_publishes_the_close() {
         Some(TabId(0)),
         "unselected: selection kept"
     );
+}
+
+#[test]
+fn tabs_keep_the_tab_bars_measures_equal_widths_and_no_maximum() {
+    // COSMIC's tab bar (libcosmic `tab_bar`, as Terminal sets it up): the
+    // tabs share the width equally and fill it, 32 high, with no maximum:
+    // two tabs in 900 pixels are 450 each
+    let two = App::new(2, 900.0);
+    let (a, b) = (two.tab(0).unwrap(), two.tab(1).unwrap());
+    assert!((a.width - 450.0).abs() < 0.5 && (b.width - 450.0).abs() < 0.5);
+    assert!((a.height - 32.0).abs() < 0.5, "{a:?}");
+    assert!((b.x - (a.x + a.width)).abs() < 0.5, "no space between tabs");
+    let four = App::new(4, 900.0);
+    assert!((four.tab(3).unwrap().width - 225.0).abs() < 0.5);
+}
+
+#[test]
+fn the_wheel_scrolls_an_overflowing_strip_without_selecting() {
+    let mut app = App::new(12, NARROW);
+    let selected = app.model.selected();
+    let first = app.tab(0).unwrap();
+    let over = app.title_point(1);
+    app.point(over);
+    app.send(&[Event::Mouse(mouse::Event::WheelScrolled {
+        delta: mouse::ScrollDelta::Lines { x: 0.0, y: -2.0 },
+    })]);
+    app.frame();
+    let moved = app.tab(0);
+    assert!(
+        moved.is_none_or(|b| b.x < first.x - 1.0),
+        "the strip scrolled sideways: {first:?} then {moved:?}"
+    );
+    assert_eq!(app.model.selected(), selected, "scrolling selects nothing");
+    // The other way brings it back, to the start and no further
+    for _ in 0..4 {
+        app.send(&[Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 5.0 },
+        })]);
+    }
+    app.frame();
+    assert_eq!(app.tab(0), Some(first));
+    // A strip that fits does not scroll
+    let mut fits = App::new(3, 900.0);
+    let before = fits.tab(0);
+    fits.point(fits.title_point(1));
+    fits.send(&[Event::Mouse(mouse::Event::WheelScrolled {
+        delta: mouse::ScrollDelta::Lines { x: 0.0, y: -3.0 },
+    })]);
+    fits.frame();
+    assert_eq!(fits.tab(0), before);
+}
+
+#[test]
+fn left_and_right_move_focus_between_tabs_and_enter_or_space_select() {
+    use cosmic::iced::advanced::widget::operation::focusable;
+    use cosmic::iced::keyboard::key::Named;
+    let mut app = App::new(5, 900.0);
+    app.operate(&mut focusable::focus::<()>(
+        TabStrip::<Message, Root>::tab_id(NS, TabId(1)),
+    ));
+    app.press_key(cosmic::iced::keyboard::Key::Named(Named::ArrowRight));
+    app.press_key(cosmic::iced::keyboard::Key::Named(Named::ArrowRight));
+    app.press_key(cosmic::iced::keyboard::Key::Named(Named::Enter));
+    assert_eq!(
+        app.model.selected(),
+        Some(TabId(3)),
+        "Right twice from tab 1 focuses tab 3; Enter selects it"
+    );
+    app.press_key(cosmic::iced::keyboard::Key::Named(Named::ArrowLeft));
+    app.press_key(cosmic::iced::keyboard::Key::Character(" ".into()));
+    assert_eq!(app.model.selected(), Some(TabId(2)));
+    assert_eq!(app.model.order().len(), 5, "no reordering by keys");
+}
+
+#[test]
+fn a_hidden_tab_is_not_a_keyboard_stop() {
+    use cosmic::iced::advanced::widget::operation::focusable;
+    use cosmic::iced::keyboard::key::Named;
+    let mut app = App::new(12, NARROW);
+    // Focus the last tab in view and step right: it stays on the tabs in view
+    let last = (0..12)
+        .rev()
+        .find(|&i| app.fully_visible(i))
+        .expect("some tab in view");
+    app.operate(&mut focusable::focus::<()>(
+        TabStrip::<Message, Root>::tab_id(NS, TabId(last)),
+    ));
+    app.press_key(cosmic::iced::keyboard::Key::Named(Named::ArrowRight));
+    app.press_key(cosmic::iced::keyboard::Key::Named(Named::ArrowRight));
+    app.press_key(cosmic::iced::keyboard::Key::Named(Named::ArrowRight));
+    app.press_key(cosmic::iced::keyboard::Key::Named(Named::Enter));
+    let chosen = app.model.selected().unwrap().0;
+    assert!(
+        app.tab(chosen).is_some(),
+        "the selected tab is one in view: {chosen}"
+    );
+}
+
+#[test]
+fn an_apps_own_changes_are_taken_and_only_a_selection_that_moved_is_shown() {
+    let mut model = TabStripModel::new(ids(6), Some(TabId(0)));
+    // What the strip itself selected asks nothing more
+    model.select_visible(TabId(2));
+    let before = model.seq;
+    model.sync(ids(6), Some(TabId(2)));
+    assert_eq!(model.seq, before, "no request");
+    // A selection made elsewhere is shown
+    model.sync(ids(6), Some(TabId(5)));
+    assert_eq!(model.seq, before + 1);
+    // A tab gone: the order is the app's, the selection kept in it or none
+    model.sync(vec![TabId(0), TabId(1)], Some(TabId(5)));
+    assert_eq!(model.order(), &[TabId(0), TabId(1)]);
+    assert_eq!(model.selected(), None);
 }

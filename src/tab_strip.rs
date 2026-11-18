@@ -21,9 +21,20 @@
 //! - a tab's one information card shows at the normal delay, anchored to the
 //!   tab: the action explanation, then the preview.
 //!
+//! Tabs have COSMIC's tab bar's measures (libcosmic's `tab_bar`, as
+//! Terminal sets it up): they share the strip's width equally, each as wide
+//! as the strip is divided by the tabs, never narrower than the seven
+//! characters and the tab's other contents need ([`MINIMUM_TITLE_CHARS`]),
+//! with twelve pixels before the icon and after the title (eight after a
+//! close control) and four between parts. COSMIC's tab bar has no maximum
+//! width: the 250 pixels it is built with is only the measure of a tab
+//! given its natural width, which a bar filling its width never uses.
+//!
 //! The title is a box the app supplies ([`Tab::title`], a layout
 //! [`Child`]); the strip only gives it room, and the box reports any
-//! truncation. Dragging a tab reorders it among the visible tabs; dragging
+//! truncation. The mouse wheel over an overflowing strip scrolls it
+//! sideways without selecting; Left and Right move the keyboard focus
+//! among the tabs in view, Enter and Space select. Dragging a tab reorders it among the visible tabs; dragging
 //! beyond them is not designed yet and does nothing.
 
 use crate::layout::{self as engine, AnchorCandidate, Child, Level};
@@ -39,11 +50,21 @@ use std::rc::Rc;
 
 /// The least a title is given, in characters' worth of the UI font
 pub const MINIMUM_TITLE_CHARS: f32 = 7.0;
-/// The most a title is given before it must truncate itself, in characters
-pub const DEFAULT_TITLE_CAP_CHARS: f32 = 22.0;
+/// The space before a tab's content, and after it where it has no close
+/// control: COSMIC's tab bar `space_s`
+const TAB_INSET: f32 = 12.0;
+/// A tab's close control's distance from the tab's end (libcosmic's tab bar)
+const CLOSE_INSET: f32 = 8.0;
+/// Between a tab's icon, title and close control (COSMIC's `space_xxs`)
+const TAB_GAP: f32 = 4.0;
+const ICON_SIZE: f32 = 16.0;
+/// A tab's height in COSMIC's tab bar, unless the app says otherwise
+const TAB_HEIGHT: f32 = 32.0;
 /// Pointer travel before a press on a tab is a drag
 const DRAG_THRESHOLD: f32 = 4.0;
 const UNDERLINE: f32 = 2.0;
+/// How far one notch of a wheel scrolls the strip
+const WHEEL_LINE: f32 = 48.0;
 
 /// A tab's identity, the app's and stable across reordering
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -207,6 +228,23 @@ impl TabStripModel {
         Some(tab)
     }
 
+    /// Take the order and selection an app keeps itself (its own tab model),
+    /// for one that changes them where the strip cannot see. A selection
+    /// that moved is shown in full, as keyboard stepping shows it; one the
+    /// strip itself made ([`Self::select_visible`], [`Self::choose_hidden`])
+    /// has already moved nothing and asks nothing more. The strip is
+    /// not otherwise moved: a closed tab's gap is filled from the end.
+    pub fn sync(&mut self, order: Vec<TabId>, selected: Option<TabId>) {
+        self.order = order;
+        let selected = selected.filter(|id| self.order.contains(id));
+        if selected != self.selected {
+            self.selected = selected;
+            if let Some(tab) = selected {
+                self.ask(Wanted::Reveal, tab);
+            }
+        }
+    }
+
     /// Add a tab at `index` (the end if beyond it). A selected new tab is
     /// shown in full.
     pub fn insert(&mut self, index: usize, tab: TabId, select: bool) {
@@ -280,7 +318,8 @@ pub struct Tab<'a, M> {
     /// The title box, built for `emphasised` (selected or hovered; the
     /// app's semibold). The strip gives it room: at least seven characters.
     pub title: Rc<dyn Fn(bool) -> Child<'a, M> + 'a>,
-    pub icon: Option<widget::icon::Handle>,
+    /// The tab's icon, 16 pixels as the app makes it (its colours its own)
+    pub icon: Option<widget::icon::Icon>,
     /// The selected underline's colour (the tab's identity), else the accent
     pub identity: Option<Color>,
     /// What pressing the tab does, for its information card
@@ -296,13 +335,14 @@ type Decorate<'a, M> = Rc<dyn Fn(TabId, Element<'a, M>) -> Element<'a, M> + 'a>;
 /// The strip. Build one each view.
 pub struct TabStrip<'a, M, R> {
     namespace: String,
-    model: &'a TabStripModel,
+    model: TabStripModel,
     tabs: Vec<Tab<'a, M>>,
     roots: (R, R),
     on_reorder: Option<Rc<dyn Fn(TabId, usize) -> M + 'a>>,
     decorate: Option<Decorate<'a, M>>,
     title_size: f32,
-    title_cap_chars: f32,
+    height: f32,
+    editor: Option<Id>,
 }
 
 impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
@@ -311,7 +351,7 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
     /// `namespace`.
     pub fn new(
         namespace: impl Into<String>,
-        model: &'a TabStripModel,
+        model: &TabStripModel,
         tabs: Vec<Tab<'a, M>>,
         left: R,
         right: R,
@@ -324,13 +364,14 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
         );
         Self {
             namespace: namespace.into(),
-            model,
+            model: model.clone(),
             tabs,
             roots: (left, right),
             on_reorder: None,
             decorate: None,
             title_size: 14.0,
-            title_cap_chars: DEFAULT_TITLE_CAP_CHARS,
+            height: TAB_HEIGHT,
+            editor: None,
         }
     }
 
@@ -369,13 +410,25 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
         self
     }
 
+    /// The control F6 moves to from the tabs (and back from): the content
+    /// the tabs are for. Without one, F6 has nowhere to go from the tabs.
+    pub fn editor(mut self, editor: Id) -> Self {
+        self.editor = Some(editor);
+        self
+    }
+
+    /// The tabs' height (32, as COSMIC's tab bar has it, by default)
+    pub fn tab_height(mut self, height: f32) -> Self {
+        assert!(height.is_finite() && height > 0.0);
+        self.height = height;
+        self
+    }
+
     pub fn view(self) -> Element<'a, M> {
         let ns = self.namespace.clone();
         let ch = crate::menu::measured_width("0", self.title_size, cosmic::font::default());
-        let (minimum, cap) = (
-            ch * MINIMUM_TITLE_CHARS,
-            (ch * self.title_cap_chars).max(ch * MINIMUM_TITLE_CHARS),
-        );
+        let minimum = ch * MINIMUM_TITLE_CHARS;
+        let mut minimums = Vec::new();
         let selected_id = self.model.selected;
         let mut ids = Vec::new();
         let mut selects = Vec::new();
@@ -388,30 +441,44 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
                 normal: (tab.title)(false).view(Level::Preferred),
                 strong: (tab.title)(true).view(Level::Preferred),
                 minimum,
-                cap,
                 selected,
                 hovered: hovered.clone(),
             };
             let mut parts: Vec<Element<'a, M>> = Vec::new();
+            let (mut least, mut end) = (TAB_INSET + minimum, TAB_INSET);
             if let Some(icon) = tab.icon {
-                parts.push(widget::icon::icon(icon).size(16).into());
+                parts.push(icon.into());
+                least += ICON_SIZE + TAB_GAP;
             }
             parts.push(Element::new(title));
             if let Some(close) = tab.on_close {
                 parts.push(
                     widget::button::icon(widget::icon::from_name("window-close-symbolic").handle())
-                        .icon_size(12)
-                        .padding(2)
+                        .icon_size(ICON_SIZE as u16)
+                        .padding(0)
                         .on_press(close)
                         .into(),
                 );
+                least += ICON_SIZE + TAB_GAP;
+                end = CLOSE_INSET;
             }
+            least += end;
+            minimums.push(least);
             let body = widget::container(
                 widget::row::with_children(parts)
-                    .spacing(6)
+                    .spacing(TAB_GAP)
+                    .width(Length::Fill)
                     .align_y(cosmic::iced::Alignment::Center),
             )
-            .padding(Padding::from([6.0, 10.0]));
+            .width(Length::Fill)
+            .height(self.height)
+            .align_y(cosmic::iced::alignment::Vertical::Center)
+            .padding(Padding {
+                top: 0.0,
+                bottom: 0.0,
+                left: TAB_INSET,
+                right: end,
+            });
             let wash = Wash {
                 content: body.into(),
                 selected,
@@ -470,16 +537,31 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
         let (right_on, right_off) = on_button(Overflow::Right, self.roots.1);
         let count = elements.len();
         elements.extend([left_on, left_off, right_on, right_off]);
-        Element::new(Strip {
+        let focus_ids: Vec<Id> = ids.iter().map(|tab| Self::tab_id(&ns, *tab)).collect();
+        let editor = self
+            .editor
+            .unwrap_or_else(|| Id::new(format!("{ns}:tab-strip-editor")));
+        let strip = Element::new(Strip {
             children: elements,
             count,
-            ids,
+            minimums,
+            ids: ids.clone(),
             selects,
             selected: selected_id.and_then(|id| self.model.order.iter().position(|o| *o == id)),
             request: self.model.request,
             shown: self.model.shown.clone(),
             on_reorder: self.on_reorder,
-        })
+        });
+        // Left and Right among the tabs in view, as the shared focus regions
+        // have them
+        crate::window::focus_regions(
+            strip,
+            editor,
+            vec![crate::focus_regions::Group::new(
+                crate::list_navigation::Axis::Horizontal,
+                focus_ids,
+            )],
+        )
     }
 }
 
@@ -489,6 +571,8 @@ struct Strip<'a, M> {
     /// The tabs, then left-on, left-off, right-on, right-off
     children: Vec<Element<'a, M>>,
     count: usize,
+    /// The least width each tab is given
+    minimums: Vec<f32>,
     ids: Vec<TabId>,
     selects: Vec<M>,
     selected: Option<usize>,
@@ -569,13 +653,26 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Strip<'_, M> {
     ) -> layout::Node {
         let available = limits.max().width;
         let loose = layout::Limits::new(Size::ZERO, Size::new(f32::INFINITY, limits.max().height));
+        // The tabs share the width equally, none narrower than it needs
+        let least = self.minimums.iter().copied().fold(0.0_f32, f32::max);
+        let count = self.count.max(1) as f32;
+        let shared = if available.is_finite() {
+            available / count
+        } else {
+            0.0
+        };
+        let tab_width = shared.max(least);
+        let exact = layout::Limits::new(
+            Size::new(tab_width, 0.0),
+            Size::new(tab_width, limits.max().height),
+        );
         let mut nodes = Vec::new();
         let mut spans = Vec::new();
         let (mut start, mut height) = (0.0_f32, 0.0_f32);
         for (index, child) in self.children.iter_mut().enumerate().take(self.count) {
             let node = child
                 .as_widget_mut()
-                .layout(&mut tree.children[index], renderer, &loose);
+                .layout(&mut tree.children[index], renderer, &exact);
             spans.push((start, node.size().width));
             start += node.size().width;
             height = height.max(node.size().height);
@@ -593,7 +690,7 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Strip<'_, M> {
         }
         let button = button_nodes[0].size().width;
         height = height.max(button_nodes[0].size().height);
-        let overflow = available.is_finite() && total > available;
+        let overflow = available.is_finite() && total > available + 0.5;
         let (lane_start, lane_width) = if overflow {
             (button, (available - 2.0 * button).max(0.0))
         } else {
@@ -667,14 +764,22 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Strip<'_, M> {
         operation: &mut dyn Operation,
     ) {
         operation.container(None, layout.bounds());
+        let state = tree.state.downcast_ref::<State>();
+        // Only the tabs in view, whole or in part, can be reached by key
+        let (hidden_left, hidden_right) = self.hidden_counts(state);
+        let overflowing = self.overflowing(state);
+        let count = self.count;
         operation.traverse(&mut |operation| {
-            for ((child, tree), layout) in self
+            for (index, ((child, tree), layout)) in self
                 .children
                 .iter_mut()
                 .zip(&mut tree.children)
                 .zip(layout.children())
+                .enumerate()
             {
-                if layout.bounds().width > 0.0 {
+                let hidden =
+                    overflowing && index < count && (index < hidden_left || index >= hidden_right);
+                if layout.bounds().width > 0.0 && !hidden {
                     child
                         .as_widget_mut()
                         .operate(tree, layout, renderer, operation);
@@ -726,6 +831,39 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Strip<'_, M> {
             );
         }
         let state = tree.state.downcast_mut::<State>();
+        if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
+            && overflowing
+            && !shell.is_event_captured()
+            && cursor.is_over(bounds)
+        {
+            // The wheel scrolls the strip sideways, selecting nothing
+            let (x, y) = match *delta {
+                mouse::ScrollDelta::Lines { x, y } => (x * WHEEL_LINE, y * WHEEL_LINE),
+                mouse::ScrollDelta::Pixels { x, y } => (x, y),
+            };
+            let total = state
+                .spans
+                .last()
+                .map_or(0.0, |(start, width)| start + width);
+            let moved = geometry::clamp(state.offset - (x + y), total, state.lane.1);
+            if (moved - state.offset).abs() > f32::EPSILON {
+                state.offset = moved;
+                shell.invalidate_layout();
+                shell.request_redraw();
+            }
+            shell.capture_event();
+            return;
+        }
+        if matches!(
+            event,
+            Event::Dnd(cosmic::iced::clipboard::dnd::DndEvent::Source(
+                cosmic::iced::clipboard::dnd::SourceEvent::Finished
+                    | cosmic::iced::clipboard::dnd::SourceEvent::Cancelled
+            ))
+        ) {
+            // A drag the app lifted out of the strip has ended
+            state.press = None;
+        }
         let over = |state: &State, at: Point| {
             if !clipped.contains(at) {
                 return None;
@@ -1035,14 +1173,14 @@ impl<M> Widget<M, Theme, Renderer> for Wash<'_, M> {
     }
 }
 
-/// A title's room: its box laid out between the minimum and the cap, in both
-/// weights, wide enough for the emphasised one so that hovering never
-/// reflows the strip. The selected or hovered tab shows the emphasised box.
+/// A title's room: all that its tab gives it, and never less than the
+/// minimum. Its box is laid out in both weights at that width, so that
+/// hovering never reflows the strip; the selected or hovered tab shows the
+/// emphasised one.
 struct Emphasis<'a, M> {
     normal: Element<'a, M>,
     strong: Element<'a, M>,
     minimum: f32,
-    cap: f32,
     selected: bool,
     hovered: Rc<Cell<bool>>,
 }
@@ -1061,7 +1199,7 @@ impl<M> Widget<M, Theme, Renderer> for Emphasis<'_, M> {
         tree.diff_children(&mut [&mut self.normal, &mut self.strong]);
     }
     fn size(&self) -> Size<Length> {
-        Size::new(Length::Shrink, Length::Shrink)
+        Size::new(Length::Fill, Length::Shrink)
     }
     fn layout(
         &mut self,
@@ -1069,15 +1207,17 @@ impl<M> Widget<M, Theme, Renderer> for Emphasis<'_, M> {
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let limits = limits
-            .max_width(self.cap.min(limits.max().width))
-            .min_width(self.minimum);
+        let offered = limits.max().width;
+        let width = if offered.is_finite() {
+            offered.max(self.minimum)
+        } else {
+            self.minimum
+        };
+        let exact = layout::Limits::new(Size::new(width, 0.0), Size::new(width, f32::INFINITY));
         let strong = self
             .strong
             .as_widget_mut()
-            .layout(&mut tree.children[1], renderer, &limits);
-        let width = strong.size().width.max(self.minimum);
-        let exact = layout::Limits::new(Size::new(width, 0.0), Size::new(width, f32::INFINITY));
+            .layout(&mut tree.children[1], renderer, &exact);
         let normal = self
             .normal
             .as_widget_mut()

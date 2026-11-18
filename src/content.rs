@@ -60,7 +60,7 @@ mod formula_box;
 mod inline_box;
 
 pub use formula_box::{Formula, FormulaMetrics, display_formula, formula};
-pub use inline_box::{InlineMetrics, InlineText, LineMetrics, inline_text};
+pub use inline_box::{InlineMetrics, InlineText, LineMetrics, inline_text, inline_text_shared};
 
 /// The information a shortened inline text loses, in its source reports
 /// (`layout::Child::report_information`): its full text belongs in the
@@ -75,6 +75,8 @@ pub enum TextRole {
     /// Ordinary interface text: a tab's title, a list row's title
     #[default]
     Body,
+    /// Body text in semibold: a selected or hovered tab's title
+    BodyEmphasis,
     /// Body text in bold, as `cosmic::widget::text::heading`
     Heading,
     Caption,
@@ -95,6 +97,7 @@ impl TextRole {
     pub(crate) fn typography(self) -> Type {
         let (size, line, font) = match self {
             TextRole::Body => (14.0, 21.0, cosmic::font::default()),
+            TextRole::BodyEmphasis => (14.0, 21.0, cosmic::font::semibold()),
             TextRole::Heading => (14.0, 21.0, cosmic::font::bold()),
             TextRole::Caption => (12.0, 17.0, cosmic::font::default()),
             TextRole::CaptionHeading => (12.0, 17.0, cosmic::font::semibold()),
