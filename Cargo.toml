@@ -13,3 +13,28 @@ repository = "https://github.com/ThomasAndJuliet/household-kit"
 
 [workspace.dependencies]
 tokio = { version = "1", default-features = false }
+
+# For this workspace's own build only (the widgets' tests, Clippy and CI): the
+# household libcosmic fork at a fixed revision. Cargo reads [patch] only
+# from the workspace being built, so an app that depends on household-widgets
+# never sees this one: its own [patch] on pop-os/libcosmic (every household
+# app has it) chooses the libcosmic this crate is built with, and there is
+# one libcosmic in its lock. Move this pin when the apps move, so that CI
+# here builds against what they use.
+[patch."https://github.com/pop-os/libcosmic.git"]
+libcosmic = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+cosmic-config = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+cosmic-config-derive = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+cosmic-theme = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_core = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_debug = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_futures = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_graphics = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_program = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_renderer = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_runtime = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_tiny_skia = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_wgpu = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_widget = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_accessibility = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
