@@ -468,13 +468,12 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
                         .icon_size(ICON_SIZE as u16)
                         .padding(0)
                         .on_press(close);
-                if selected {
-                    // The selected tab's control is in its colour, as its
-                    // title and line are
+                {
+                    // The control is in its tab's content colour, as its
+                    // icon is
                     let colour = line_colour;
                     let style = move |theme: &Theme| {
-                        let colour = colour
-                            .unwrap_or_else(|| Color::from(theme.cosmic().accent_text_color()));
+                        let colour = content_colour(theme, selected, colour);
                         widget::button::Style {
                             icon_color: Some(colour),
                             text_color: Some(colour),
@@ -1094,6 +1093,16 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Strip<'_, M> {
 
 // --- A tab's parts ----------------------------------------------------------
 
+/// What a tab's icon and close control are drawn in: its colour for the
+/// selected tab, the container's text for the others, as COSMIC's tab bar
+fn content_colour(theme: &Theme, selected: bool, identity: Option<Color>) -> Color {
+    if selected {
+        identity.unwrap_or_else(|| Color::from(theme.cosmic().accent_text_color()))
+    } else {
+        Color::from(theme.current_container().component.on)
+    }
+}
+
 /// A tab's wash and underline around its content. Hover washes replace each
 /// other: only the tab under the pointer has one, and it is the same wash
 /// selected or not. The selected tab has its identity-coloured underline.
@@ -1209,11 +1218,17 @@ impl<M> Widget<M, Theme, Renderer> for Wash<'_, M> {
                 },
             );
         }
+        let colour = content_colour(theme, self.selected, self.line);
+        let style = renderer::Style {
+            icon_color: colour,
+            text_color: colour,
+            ..*style
+        };
         self.content.as_widget().draw(
             &tree.children[0],
             renderer,
             theme,
-            style,
+            &style,
             layout,
             cursor,
             viewport,
@@ -1270,7 +1285,9 @@ impl<M> Widget<M, Theme, Renderer> for Emphasis<'_, M> {
             .normal
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, &exact);
-        let height = strong.size().height.max(normal.size().height);
+        // An even height, its text at the top: centred in a tab, it sits as
+        // libcosmic's tab bar sets a title, whole pixels from the top
+        let height = (strong.size().height.max(normal.size().height) / 2.0).ceil() * 2.0;
         layout::Node::with_children(Size::new(width, height), vec![normal, strong])
     }
     fn operate(
