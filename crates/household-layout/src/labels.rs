@@ -28,7 +28,7 @@ use crate::geometry::{Point, Rect, Size};
 use crate::identity::Id;
 use crate::kinds::{Kind, Role};
 use crate::level::Level;
-use crate::record::{Finding, Ink, Judgement, Occupant, Record};
+use crate::record::{Finding, Ink, Judgement, Occupant, Record, Revision};
 use crate::rules::{Preference, Rules, Sizes};
 
 /// Which side of its anchor a thing is placed on.
@@ -417,6 +417,17 @@ pub struct Placed {
     pub pattern: usize,
     pub preference: Preference,
     pub labels: Vec<PlacedLabel>,
+    /// The record's revision when the set was judged: [`enter_set`] enters
+    /// the set only into a record still at it.
+    pub judged_at: Revision,
+}
+
+/// A judged set was not entered because the record changed after it was
+/// judged (semantics C9); judge it again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stale {
+    pub judged_at: Revision,
+    pub now: Revision,
 }
 
 /// Judges a set: the first pattern every member can take at `level` in
@@ -454,8 +465,18 @@ pub fn judge_set(
 }
 
 /// Enters a judged set's labels in the record, in the members' order.
-pub fn enter_set(record: &mut Record, placed: &Placed) {
+/// Fails, entering nothing, if the record has changed since the set was
+/// judged: two sets judged against one record cannot both be entered
+/// (semantics C9).
+pub fn enter_set(record: &mut Record, placed: &Placed) -> Result<(), Stale> {
+    if record.revision() != placed.judged_at {
+        return Err(Stale {
+            judged_at: placed.judged_at,
+            now: record.revision(),
+        });
+    }
     record.enter_all(placed.labels.iter().map(|label| label.occupant.clone()));
+    Ok(())
 }
 
 /// Judges a set and enters what it places: [`judge_set`], then
@@ -467,7 +488,7 @@ pub fn place_set(
     level: Level,
 ) -> Result<Placed, NoPattern> {
     let placed = judge_set(record, set, region, level)?;
-    enter_set(record, &placed);
+    enter_set(record, &placed).expect("judged against this record a moment ago");
     Ok(placed)
 }
 
@@ -589,6 +610,7 @@ fn judge_pattern(
         pattern: index,
         preference,
         labels,
+        judged_at: record.revision(),
     })
 }
 
@@ -697,11 +719,14 @@ mod tests {
     /// line along their feet.
     fn chart(tops: &[f64]) -> Record {
         let mut r = bars(tops);
-        r.enter(Occupant::new(
-            Id::new("zero"),
-            Kind::ValueLine,
-            Ink::segment(Point::new(0.0, BASELINE), Point::new(200.0, BASELINE), 1.0),
-        ));
+        r.enter(
+            Occupant::new(
+                Id::new("zero"),
+                Kind::ValueLine,
+                Ink::segment(Point::new(0.0, BASELINE), Point::new(200.0, BASELINE), 1.0),
+            )
+            .with_role(Role::zero_line()),
+        );
         r
     }
 
@@ -916,12 +941,23 @@ mod tests {
         set
     }
 
+    /// A line across the plot; a value line is a gridline unless it is
+    /// given another role with [`line_across`].
     fn gridline(r: &mut Record, name: &str, kind: Kind, y: f64) {
-        r.enter(Occupant::new(
+        let role = (kind == Kind::ValueLine).then(Role::gridline);
+        line_across(r, name, kind, role, y);
+    }
+
+    fn line_across(r: &mut Record, name: &str, kind: Kind, role: Option<Role>, y: f64) {
+        let line = Occupant::new(
             Id::new(name),
             kind,
             Ink::segment(Point::new(0.0, y), Point::new(200.0, y), 1.0),
-        ));
+        );
+        r.enter(match role {
+            Some(role) => line.with_role(role),
+            None => line,
+        });
     }
 
     #[test]
@@ -969,6 +1005,56 @@ mod tests {
                 ..
             } if member.as_str() == "b0/value" && on.as_str() == "series"
         ));
+    }
+
+    #[test]
+    fn a_label_inside_its_bar_is_judged_against_a_comparison_line_across_the_bar() {
+        // Second review, item 5: only gridlines and the zero line are
+        // beneath the bars. A comparison line at 110 crosses b0 (top 100)
+        // where the inside label stands, and is drawn over it.
+        let mut r = chart(&[100.0, 60.0, 120.0]);
+        line_across(
+            &mut r,
+            "target",
+            Kind::ValueLine,
+            Some(Role::comparison()),
+            110.0,
+        );
+        let failure = judge_set(&r, &inside_only(3), PLOT, Level::Preferred).unwrap_err();
+        assert!(matches!(
+            &failure.stopped[0],
+            Stopped {
+                member,
+                reason: Reason::Rejected(Finding::Meets {
+                    against: Against::Occupant(on),
+                    verdict: Verdict::Never,
+                    ..
+                }),
+                ..
+            } if member.as_str() == "b0/value" && on.as_str() == "target"
+        ));
+        // The same line as a gridline is covered by the bar and accepted.
+        let mut r = chart(&[100.0, 60.0, 120.0]);
+        gridline(&mut r, "target", Kind::ValueLine, 110.0);
+        assert!(judge_set(&r, &inside_only(3), PLOT, Level::Preferred).is_ok());
+    }
+
+    #[test]
+    fn a_set_judged_before_the_record_changed_cannot_be_entered() {
+        // Second review, item 8, C9: two sets judged against one record
+        // and both entered overlapped with no finding. Here both are the
+        // same set, judged at the same revision.
+        let mut r = chart(&[100.0, 60.0, 120.0]);
+        let first = judge_set(&r, &value_labels(3), PLOT, Level::Preferred).unwrap();
+        let second = judge_set(&r, &value_labels(3), PLOT, Level::Preferred).unwrap();
+        assert_eq!(first.judged_at, r.revision());
+        enter_set(&mut r, &first).unwrap();
+        let after_first = r.occupants().len();
+        let err = enter_set(&mut r, &second).unwrap_err();
+        assert_eq!(err.judged_at, second.judged_at);
+        assert_ne!(err.now, err.judged_at);
+        // Nothing was entered by the failed attempt.
+        assert_eq!(r.occupants().len(), after_first);
     }
 
     /// Notes beyond the end of b0 (top 100) cross a gridline at 90; beside
@@ -1116,7 +1202,7 @@ mod tests {
         assert_eq!(r.occupants(), &before[..]);
         // Entering is the separate step, and place_set does both.
         let mut entered = r.clone();
-        enter_set(&mut entered, &judged);
+        enter_set(&mut entered, &judged).unwrap();
         let mut placed_into = r.clone();
         let placed = place_set(&mut placed_into, &value_labels(3), PLOT, Level::Preferred).unwrap();
         assert_eq!(placed, judged);

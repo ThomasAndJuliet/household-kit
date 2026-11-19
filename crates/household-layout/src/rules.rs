@@ -19,7 +19,9 @@ pub struct Rules {
     pub covering: Covering,
     /// Which kinds are drawn beneath which (semantics C5). A candidate
     /// standing on a thing drawn above a line does not meet that line where
-    /// the thing covers it.
+    /// the thing covers it. By default only gridlines and the zero line
+    /// (value lines with those roles) are beneath data marks; a comparison
+    /// or event line is drawn over a bar and is judged.
     pub drawing_order: Vec<Beneath>,
     /// The level from which a distance below its ideal is accepted
     /// (semantics A7). Compositions take the same value for their gaps.
@@ -31,10 +33,16 @@ impl Default for Rules {
         Self {
             distances: Distances::default(),
             covering: Covering::default(),
-            drawing_order: vec![Beneath::new(
-                Match::kinds(Kind::ValueLine),
-                Match::kinds(Kind::DataMark),
-            )],
+            drawing_order: vec![
+                Beneath::new(
+                    Match::kinds(Kind::ValueLine).with_role(Role::gridline()),
+                    Match::kinds(Kind::DataMark),
+                ),
+                Beneath::new(
+                    Match::kinds(Kind::ValueLine).with_role(Role::zero_line()),
+                    Match::kinds(Kind::DataMark),
+                ),
+            ],
             squeeze_from: Level::Strong,
         }
     }
@@ -437,8 +445,10 @@ pub struct CoveringRow {
     pub ownership: Ownership,
     pub verdict: Verdict,
     /// Whether the verdict holds also where the placed thing comes within
-    /// the distance without meeting, in place of the distance findings
-    /// ("along or close to a data line").
+    /// the distance without meeting, in place of the ideal's findings
+    /// ("along or close to a data line"). It applies between the least
+    /// distance and the ideal; below the least distance the pair is
+    /// rejected as any other (semantics C8).
     pub near: bool,
 }
 
@@ -812,7 +822,15 @@ mod tests {
     fn the_default_rules_draw_value_lines_beneath_data_marks_and_squeeze_from_strong() {
         let rules = Rules::default();
         assert_eq!(rules.squeeze_from, Level::Strong);
-        assert!(rules.drawn_beneath((Kind::ValueLine, None), (Kind::DataMark, None)));
+        let beneath = |role: Option<Role>| {
+            rules.drawn_beneath((Kind::ValueLine, role.as_ref()), (Kind::DataMark, None))
+        };
+        assert!(beneath(Some(Role::gridline())));
+        assert!(beneath(Some(Role::zero_line())));
+        // A comparison or event line is drawn over a bar (C5).
+        assert!(!beneath(Some(Role::comparison())));
+        assert!(!beneath(Some(Role::new("event"))));
+        assert!(!beneath(None));
         assert!(!rules.drawn_beneath((Kind::DataLine, None), (Kind::DataMark, None)));
         assert!(!rules.drawn_beneath((Kind::DataMark, None), (Kind::ValueLine, None)));
         let near: Vec<_> = rules
