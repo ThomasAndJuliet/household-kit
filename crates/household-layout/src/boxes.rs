@@ -311,6 +311,21 @@ pub enum Reason {
     ArrangementTaken { arrangement: Id },
     /// Nothing more could be ordered up and the composition does not fit.
     NoFit { short: Vec<Shortfall> },
+    /// A reason of the box's own, which the crate does not interpret: a
+    /// leaf or a caller's box records what it decided (a label set's
+    /// outcome, say) in its node. `kind` names the sort of reason, for a
+    /// program to select by; `detail` says what happened.
+    Own { kind: String, detail: String },
+}
+
+impl Reason {
+    /// A reason of the box's own.
+    pub fn own(kind: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self::Own {
+            kind: kind.into(),
+            detail: detail.into(),
+        }
+    }
 }
 
 /// What a parent's queries showed about a child.

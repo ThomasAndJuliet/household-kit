@@ -153,31 +153,45 @@ fn short_in(direction: Direction, answer: &Answer) -> bool {
         .any(|short| short.direction == direction)
 }
 
-/// Space between children: a range from a least to an ideal length along
-/// its composition, and nothing across. Every ideal distance is kept
-/// below the level it is squeezed from; from that level a gap may be
-/// squeezed to its least (design §5: Strong is "flagged squeezing below
-/// an ideal"). The level is the rules' value, Strong unless given.
+/// Space between children along its composition, and nothing across, with
+/// three lengths: a relaxed length, which it prefers (the stylesheet's
+/// recommendation); an ideal, the compact distance; and a least. It gives
+/// room from relaxed down to its ideal at any level, sharing the shortage
+/// by weight like any other child; that is not a change of form and is
+/// never recorded as one. Below the level it is squeezed from it keeps
+/// its ideal; from that level it may be squeezed to its least (design §5:
+/// Strong is "flagged squeezing below an ideal"). The level is the rules'
+/// value, Strong unless given.
 #[derive(Clone, Debug)]
 pub struct Gap {
     id: Id,
     direction: Direction,
     least: f64,
     ideal: f64,
+    relaxed: f64,
     squeezed_from: Level,
     accepts: Accepts,
 }
 
 impl Gap {
+    /// A gap whose relaxed length is its ideal.
     pub fn new(id: Id, direction: Direction, least: f64, ideal: f64) -> Self {
         Self {
             id,
             direction,
             least,
             ideal,
+            relaxed: ideal,
             squeezed_from: Level::Strong,
             accepts: Accepts::ordinary(),
         }
+    }
+
+    /// The length this gap prefers, from which it gives room down to its
+    /// ideal at any level; never below the ideal.
+    pub fn relaxed(mut self, relaxed: f64) -> Self {
+        self.relaxed = relaxed.max(self.ideal);
+        self
     }
 
     /// The level from which this gap may go below its ideal.
@@ -204,7 +218,7 @@ impl<C> LayoutBox<C> for Gap {
         };
         Ok(Answer::of(
             &self.id,
-            size_in(self.direction, self.ideal, 0.0),
+            size_in(self.direction, self.relaxed, 0.0),
             size_in(self.direction, least, 0.0),
             space,
         ))
@@ -309,6 +323,7 @@ struct GapAt {
     index: usize,
     least: f64,
     ideal: f64,
+    relaxed: f64,
 }
 
 /// A row, a column or a list of immediate children.
@@ -434,8 +449,16 @@ impl<C: 'static> Stack<C> {
     }
 
     /// A gap from `least` to `ideal` along this composition, as the next
+    /// child, whose relaxed length is its ideal. It is named by the
+    /// children it separates.
+    pub fn gap(self, least: f64, ideal: f64) -> Self {
+        self.relaxed_gap(least, ideal, ideal)
+    }
+
+    /// A gap that prefers `relaxed` and gives room down to `ideal` at any
+    /// level, and down to `least` from the squeeze level, as the next
     /// child. It is named by the children it separates.
-    pub fn gap(mut self, least: f64, ideal: f64) -> Self {
+    pub fn relaxed_gap(mut self, least: f64, ideal: f64, relaxed: f64) -> Self {
         let index = self.members.len();
         let placeholder: Child<C> =
             Rc::new(Gap::new(self.id.child("gap"), self.direction, least, ideal));
@@ -444,6 +467,7 @@ impl<C: 'static> Stack<C> {
             index,
             least,
             ideal,
+            relaxed: relaxed.max(ideal),
         });
         self.name_gaps();
         self.changed()
@@ -490,6 +514,7 @@ impl<C: 'static> Stack<C> {
                 format!("gap[{before}|{after}]#{count}")
             };
             let made = Gap::new(self.id.child(name), self.direction, gap.least, gap.ideal)
+                .relaxed(gap.relaxed)
                 .squeezed_from(self.squeezed_from);
             self.members[gap.index].child = Rc::new(made);
         }
@@ -627,8 +652,22 @@ impl<C> Stack<C> {
             .map(|i| self.ask(i, levels[i], own, whole))
             .collect::<Result<Vec<_>, _>>()?;
         let available = d.length(space);
-        let preferred: Vec<f64> = full.iter().map(|answer| preferred_in(d, answer)).collect();
-        let floors: Vec<f64> = (0..n).map(|i| self.floor(i, &full[i])).collect();
+        // A gap's relaxed length is for the content as given: once any child
+        // has changed form, a gap takes no more than its ideal, so that a
+        // gap never lengthens as the room shrinks.
+        let compacted = levels.iter().any(|level| *level > Level::Preferred);
+        let preferred: Vec<f64> = (0..n)
+            .map(|i| {
+                let preferred = preferred_in(d, &full[i]);
+                match self.gaps.iter().find(|gap| gap.index == i) {
+                    Some(gap) if compacted => preferred.min(gap.ideal),
+                    _ => preferred,
+                }
+            })
+            .collect();
+        let floors: Vec<f64> = (0..n)
+            .map(|i| self.floor(i, &full[i]).min(preferred[i]))
+            .collect();
         let (mut lengths, along_short) = if available.is_finite() {
             let capacities: Vec<Capacity> = (0..n)
                 .map(|i| {
@@ -663,7 +702,11 @@ impl<C> Stack<C> {
         }
         let asked_at: Vec<Size> = (0..n)
             .map(|i| {
-                if along_short.is_none() && (lengths[i] - preferred[i]).abs() > FIT_EPSILON {
+                // Asked at its room whenever the room is not what it would
+                // take of itself with unlimited room along.
+                if along_short.is_none()
+                    && (lengths[i] - preferred_in(d, &full[i])).abs() > FIT_EPSILON
+                {
                     self.room(space, lengths[i])
                 } else {
                     whole
@@ -2754,6 +2797,111 @@ mod tests {
         assert_eq!(mark.bounds, Rect::new(0.0, 36.0, 30.0, 10.0));
         assert_eq!(mark.content.as_deref(), Some("mark"));
         assert!(plan.find(&Id::new("column/gap[text|mark]")).is_some());
+    }
+
+    /// A title 30 high (15 from Mild), a gap relaxed at 24 with an ideal of
+    /// 12 and a least of 4, and a plot from 200 high down to 150.
+    fn titled_column() -> Stack<String> {
+        let tall =
+            |preferred: f64, least: f64| (Size::new(100.0, preferred), Size::new(100.0, least));
+        let (title, short) = (tall(30.0, 30.0), tall(15.0, 15.0));
+        let plot = tall(200.0, 150.0);
+        Stack::column(Id::new("chart"))
+            .child(Rc::new(Forms {
+                id: Id::new("title"),
+                forms: vec![
+                    (Level::Preferred, title.0, title.1),
+                    (Level::Mild, short.0, short.1),
+                ],
+                accepts: Accepts::ordinary(),
+            }))
+            .relaxed_gap(4.0, 12.0, 24.0)
+            .child(Rc::new(Forms {
+                id: Id::new("plot"),
+                forms: vec![(Level::Preferred, plot.0, plot.1)],
+                accepts: Accepts::ordinary(),
+            }))
+    }
+
+    #[test]
+    fn a_gap_gives_from_relaxed_to_ideal_by_sharing_and_never_lengthens_as_room_shrinks() {
+        let gap = |plan: &Node<String>| bounds_of(plan, "chart/gap[title|plot]").height;
+        // With room it takes its relaxed 24.
+        let roomy = lay_out(&titled_column(), &all_permitted(), Size::new(100.0, 300.0)).unwrap();
+        assert_eq!(gap(&roomy), 24.0);
+        // Giving room down to its ideal is the shortage being shared, not a
+        // change of form: nothing is ordered up and the gap stays Preferred.
+        let shared = lay_out(&titled_column(), &all_permitted(), Size::new(100.0, 240.0)).unwrap();
+        assert!(gap(&shared) > 12.0 && gap(&shared) < 24.0);
+        assert_eq!(level_of(&shared, "chart/gap[title|plot]"), Level::Preferred);
+        assert!(shared.reasons.is_empty());
+        // As the room shrinks step by step, the gap never gets longer: once
+        // the title is abbreviated, the gap keeps no more than its ideal.
+        let mut last = f64::INFINITY;
+        let mut height = 260.0;
+        while height >= 169.0 {
+            let plan = lay_out(&titled_column(), &all_permitted(), Size::new(100.0, height))
+                .unwrap_or_else(|refusal| panic!("{height}: {refusal:?}"));
+            assert!(
+                gap(&plan) <= last + 1e-9,
+                "{height}: {} after {last}",
+                gap(&plan)
+            );
+            last = gap(&plan);
+            height -= 1.0;
+        }
+        let compact = lay_out(&titled_column(), &all_permitted(), Size::new(100.0, 190.0)).unwrap();
+        assert_eq!(level_of(&compact, "title"), Level::Mild);
+        assert_eq!(gap(&compact), 12.0);
+        // Below 177 it is squeezed towards its least, flagged at Strong.
+        let squeezed =
+            lay_out(&titled_column(), &all_permitted(), Size::new(100.0, 170.0)).unwrap();
+        assert_eq!(level_of(&squeezed, "chart/gap[title|plot]"), Level::Strong);
+        assert!(gap(&squeezed) < 12.0);
+    }
+
+    /// A leaf that records a reason of its own.
+    struct Reasoned;
+
+    impl LayoutBox<String> for Reasoned {
+        fn id(&self) -> &Id {
+            static ID: std::sync::OnceLock<Id> = std::sync::OnceLock::new();
+            ID.get_or_init(|| Id::new("labels"))
+        }
+        fn accepts(&self) -> &Accepts {
+            static ACCEPTS: std::sync::OnceLock<Accepts> = std::sync::OnceLock::new();
+            ACCEPTS.get_or_init(Accepts::ordinary)
+        }
+        fn measure(&self, _: &Resolved, space: Size) -> Result<Answer, Unsupported> {
+            let size = Size::new(10.0, 10.0);
+            Ok(Answer::of(self.id(), size, size, space))
+        }
+        fn arrange(
+            &self,
+            orders: &Resolved,
+            at: Point,
+            space: Size,
+        ) -> Result<Node<String>, Unsupported> {
+            let mut node = leaf_node(self.id(), orders, at, self.measure(orders, space)?);
+            node.reasons.push(Reason::own(
+                "label set",
+                "end labels placed beside the lines",
+            ));
+            Ok(node)
+        }
+    }
+
+    #[test]
+    fn a_box_can_put_its_own_reasons_in_its_node() {
+        let row = Stack::row(Id::new("row")).child(Rc::new(Reasoned));
+        let plan = lay_out(&row, &Order::NONE, Size::INFINITE).unwrap();
+        assert_eq!(
+            plan.find(&Id::new("labels")).unwrap().reasons,
+            vec![Reason::Own {
+                kind: "label set".to_owned(),
+                detail: "end labels placed beside the lines".to_owned()
+            }]
+        );
     }
 
     #[test]
