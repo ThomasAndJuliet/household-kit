@@ -1,0 +1,30 @@
+[package]
+name = "household-widgets"
+description = "The household apps' shared libcosmic widgets: what more than one app draws, in one place"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+publish = false
+repository = "https://github.com/ThomasAndJuliet/household-kit"
+
+# libcosmic, as an app depends on it (see the README). It names upstream's
+# URL with no branch or rev on purpose, as household-test's does: every app
+# already has `[patch."https://github.com/pop-os/libcosmic.git"]` pointing at
+# the household fork, and a patch replaces every dependency on that URL, so
+# this crate builds against the app's own libcosmic and the widget, theme
+# and renderer types are the app's. Naming the fork here instead would give
+# an app two libcosmics whose types do not match. The features are the least
+# these widgets need; the app's own are added to them.
+[features]
+a11y = ["libcosmic/a11y", "dep:iced_accessibility"]
+
+[dependencies]
+libcosmic = { git = "https://github.com/pop-os/libcosmic.git", default-features = false }
+iced_accessibility = { git = "https://github.com/pop-os/libcosmic.git", optional = true }
+# The colour maths (the muted accent, what goes on it), from this workspace;
+# an app that depends on household-widgets by git gets the kit at the same revision
+household-tones = { path = "../household-tones" }
+# Zeroing what a password box lets go of (PasswordBox), as the terminal
+# zeroes its secrets; MIT OR Apache-2.0
+zeroize = "1"
