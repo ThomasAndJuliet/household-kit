@@ -479,7 +479,10 @@ impl<M: Clone + 'static> Content<M> {
     fn view(&self, scrolling: bool, embedded: usize) -> Element<'static, M> {
         let body = self.rows_view(embedded, None, false);
         let inner: Element<'static, M> = if scrolling {
+            // The scrollbar takes its own column beside the rows: laid over
+            // them it covered the inline frame's right border
             let scroll: Element<'static, M> = widget::scrollable(body)
+                .spacing(0)
                 .id(Id::new(format!(
                     "{}:menu-scroll:{:?}",
                     self.namespace, self.path
@@ -721,7 +724,7 @@ impl<M: Clone + 'static> Content<M> {
                     text,
                     vec![Side::Right, Side::Left, Side::Above, Side::Below]
                         .into_iter()
-                        .map(|side| AnchorCandidate::new(side, Alignment::StartBounded).gap(4.0))
+                        .map(|side| AnchorCandidate::new(side, Alignment::CenterBounded))
                         .collect(),
                 )
             } else {

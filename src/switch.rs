@@ -6,9 +6,9 @@
 //! derived from that fill as from the accent, and the rest is libcosmic's.
 
 use cosmic::iced::Color;
+use cosmic::widget;
 use cosmic::widget::list::{self, ListButton};
 use cosmic::widget::settings::item::Item;
-use cosmic::widget::{self, Toggler};
 use cosmic::{Element, Theme, theme};
 use household_tones::{Srgb, muted_accent, on_muted};
 
@@ -29,10 +29,72 @@ pub fn muted_colours(theme: &Theme) -> (Color, Color) {
 }
 
 /// libcosmic's `widget::toggler` in the muted accent, for a switch with
-/// options: `toggler(on).label(label).spacing(8).on_toggle(message)`. Without
+/// options: `toggler(on).label(label).on_toggle(message)`. A label sits the
+/// theme's standard label-to-control gap (`space_xs`) from the switch, which
+/// libcosmic leaves to the caller; `.spacing(..)` departs from it. Without
 /// `on_toggle` it is disabled.
 pub fn toggler<'a, M>(on: bool) -> Toggler<'a, M> {
-    widget::toggler(on).class(theme::Toggler::accent(|t: &Theme| muted_colours(t).0))
+    Toggler {
+        inner: widget::toggler(on).class(theme::Toggler::accent(|t: &Theme| muted_colours(t).0)),
+    }
+}
+
+/// The household switch builder: libcosmic's own [`widget::Toggler`] with
+/// the label gap given. A switch without a label has no gap (libcosmic
+/// would still reserve one).
+pub struct Toggler<'a, M> {
+    inner: widget::Toggler<'a, M>,
+}
+
+impl<'a, M> Toggler<'a, M> {
+    /// The label, at the standard gap from the switch
+    pub fn label(mut self, label: impl Into<Option<String>>) -> Self {
+        let label = label.into();
+        if label.is_some() {
+            self.inner = self.inner.spacing(theme::spacing().space_xs);
+        }
+        self.inner = self.inner.label(label);
+        self
+    }
+    /// A gap other than the standard one
+    pub fn spacing(mut self, spacing: impl Into<cosmic::iced::Pixels>) -> Self {
+        self.inner = self.inner.spacing(spacing);
+        self
+    }
+    pub fn on_toggle(mut self, on_toggle: impl Fn(bool) -> M + 'a) -> Self {
+        self.inner = self.inner.on_toggle(on_toggle);
+        self
+    }
+    pub fn on_toggle_maybe(mut self, on_toggle: Option<impl Fn(bool) -> M + 'a>) -> Self {
+        self.inner = self.inner.on_toggle_maybe(on_toggle);
+        self
+    }
+    pub fn width(mut self, width: impl Into<cosmic::iced::Length>) -> Self {
+        self.inner = self.inner.width(width);
+        self
+    }
+    pub fn size(mut self, size: impl Into<cosmic::iced::Pixels>) -> Self {
+        self.inner = self.inner.size(size);
+        self
+    }
+    pub fn text_size(mut self, size: impl Into<cosmic::iced::Pixels>) -> Self {
+        self.inner = self.inner.text_size(size);
+        self
+    }
+    pub fn font(mut self, font: impl Into<cosmic::font::Font>) -> Self {
+        self.inner = self.inner.font(font);
+        self
+    }
+    /// libcosmic's toggler, for anything not forwarded here
+    pub fn into_inner(self) -> widget::Toggler<'a, M> {
+        self.inner
+    }
+}
+
+impl<'a, M: 'static> From<Toggler<'a, M>> for Element<'a, M> {
+    fn from(toggler: Toggler<'a, M>) -> Self {
+        toggler.inner.into()
+    }
 }
 
 /// A switch in the muted accent. A click publishes `message` with the new

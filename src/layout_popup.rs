@@ -23,6 +23,10 @@ pub enum Alignment {
     /// Prefer the source's start, bounded by the entire offered region. This
     /// equation participates in measurement and never changes the primary side.
     StartBounded,
+    /// Centred on the source along the attached side, shifted only as far as
+    /// needed to stay inside the entire offered region. Information cards
+    /// use this and no gap: flush with the control.
+    CenterBounded,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -514,7 +518,7 @@ fn offer(window: Rectangle, anchor: Rectangle, candidate: AnchorCandidate) -> Op
             let center = (a_start + a_end) / 2.0;
             2.0 * (center - w_start).min(w_end - center)
         }
-        Alignment::StartBounded => w_end - w_start,
+        Alignment::StartBounded | Alignment::CenterBounded => w_end - w_start,
     };
     let main = match candidate.side {
         Side::Below => window.y + window.height - anchor.y - anchor.height - candidate.gap,
@@ -537,6 +541,9 @@ fn origin(window: Rectangle, anchor: Rectangle, candidate: AnchorCandidate, size
             Alignment::StartBounded => start
                 .max(region_start)
                 .min(region_start + region_length - actual),
+            Alignment::CenterBounded => (start + (length - actual) / 2.0)
+                .min(region_start + region_length - actual)
+                .max(region_start),
         }
     };
     match candidate.side {

@@ -45,10 +45,9 @@ impl<'a, M: 'a> Tip<'a, M> {
 }
 
 /// Where a tooltip may sit about its source: the named side first, then the
-/// opposite one, centred on the source; where it cannot be centred (a source
-/// near the window's edge), kept inside the window from the source's start.
+/// opposite one, flush with the source and centred on it, moved inward only
+/// as far as the window requires.
 fn candidates(position: Position) -> Vec<AnchorCandidate> {
-    let gap = theme::active().cosmic().spacing.space_xxs as f32;
     let sides = match position {
         Position::Top => [Side::Above, Side::Below],
         Position::Left => [Side::Left, Side::Right],
@@ -58,10 +57,7 @@ fn candidates(position: Position) -> Vec<AnchorCandidate> {
     };
     sides
         .into_iter()
-        .flat_map(|side| {
-            [Alignment::Center, Alignment::StartBounded]
-                .map(|alignment| AnchorCandidate::new(side, alignment).gap(gap))
-        })
+        .map(|side| AnchorCandidate::new(side, Alignment::CenterBounded))
         .collect()
 }
 
