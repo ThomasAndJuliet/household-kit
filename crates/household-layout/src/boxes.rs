@@ -102,7 +102,12 @@ impl Answer {
         let short = [Direction::Across, Direction::Down]
             .into_iter()
             .filter_map(|direction| {
-                Shortfall::of(part, direction, direction.length(least), direction.length(space))
+                Shortfall::of(
+                    part,
+                    direction,
+                    direction.length(least),
+                    direction.length(space),
+                )
             })
             .collect();
         Self {
@@ -279,13 +284,12 @@ pub enum Reason {
     },
     /// Nothing more could be ordered up, so the flexible child `child`
     /// was given less than it prefers.
-    FlexibleSqueezed {
-        child: Id,
-        preferred: f64,
-        got: f64,
-    },
+    FlexibleSqueezed { child: Id, preferred: f64, got: f64 },
     /// An arrangement was tried from Preferred and did not fit.
-    ArrangementRejected { arrangement: Id, short: Vec<Shortfall> },
+    ArrangementRejected {
+        arrangement: Id,
+        short: Vec<Shortfall>,
+    },
     /// The first arrangement that fits.
     ArrangementTaken { arrangement: Id },
     /// Nothing more could be ordered up and the composition does not fit.
@@ -366,8 +370,14 @@ mod tests {
                 has: 50.0
             }]
         );
-        assert_eq!(answer.taken_size(Size::new(70.0, 30.0)), Size::new(70.0, 20.0));
-        assert_eq!(answer.taken_size(Size::new(50.0, 30.0)), Size::new(60.0, 20.0));
+        assert_eq!(
+            answer.taken_size(Size::new(70.0, 30.0)),
+            Size::new(70.0, 20.0)
+        );
+        assert_eq!(
+            answer.taken_size(Size::new(50.0, 30.0)),
+            Size::new(60.0, 20.0)
+        );
     }
 
     #[test]

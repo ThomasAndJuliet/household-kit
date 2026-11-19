@@ -205,7 +205,12 @@ impl Accepts {
     /// parent's order, then the family's default (for the level,
     /// [`Level::Preferred`]). A presentation not in the list is
     /// [`Unsupported`], naming `part`.
-    pub fn resolve(&self, part: &Id, maker: &Order, parent: &Order) -> Result<Resolved, Unsupported> {
+    pub fn resolve(
+        &self,
+        part: &Id,
+        maker: &Order,
+        parent: &Order,
+    ) -> Result<Resolved, Unsupported> {
         let mut added = self.default.added.clone();
         for (kind, value) in parent.added.iter().chain(&maker.added) {
             added.insert(kind.clone(), value.clone());
@@ -263,7 +268,10 @@ mod tests {
             .with_prominence(Prominence::Normal)
             .with_detail(Detail::Verbose);
         assert_eq!(
-            accepts.resolve(&part(), &maker, &parent).unwrap().presentation,
+            accepts
+                .resolve(&part(), &maker, &parent)
+                .unwrap()
+                .presentation,
             Presentation::new(Prominence::Normal, Detail::Verbose)
         );
         assert_eq!(
@@ -274,7 +282,9 @@ mod tests {
             Presentation::new(Prominence::Emphasised, Detail::Concise)
         );
         assert_eq!(
-            accepts.resolve(&part(), &Order::NONE, &Order::NONE).unwrap(),
+            accepts
+                .resolve(&part(), &Order::NONE, &Order::NONE)
+                .unwrap(),
             Resolved::default()
         );
         // A family can have a different ordinary presentation in either
@@ -283,7 +293,11 @@ mod tests {
         let accepts = Accepts::new(verbose.clone(), vec![verbose, Presentation::default()]);
         assert_eq!(
             accepts
-                .resolve(&part(), &Order::NONE.with_detail(Detail::Concise), &Order::NONE)
+                .resolve(
+                    &part(),
+                    &Order::NONE.with_detail(Detail::Concise),
+                    &Order::NONE
+                )
                 .unwrap()
                 .presentation,
             Presentation::default()
@@ -295,7 +309,10 @@ mod tests {
         let accepts = Accepts::ordinary();
         let parent = Order::NONE.with_level(Level::Strong);
         assert_eq!(
-            accepts.resolve(&part(), &Order::NONE, &parent).unwrap().level,
+            accepts
+                .resolve(&part(), &Order::NONE, &parent)
+                .unwrap()
+                .level,
             Level::Strong
         );
         let pinned = Order::NONE.with_level(Level::Preferred);
@@ -319,12 +336,18 @@ mod tests {
         );
         let group = Order::NONE.with("direction", "turned");
         assert_eq!(
-            accepts.resolve(&part(), &Order::NONE, &group).unwrap().presentation,
+            accepts
+                .resolve(&part(), &Order::NONE, &group)
+                .unwrap()
+                .presentation,
             turned
         );
         let maker = Order::NONE.with("direction", "upright");
         assert_eq!(
-            accepts.resolve(&part(), &maker, &group).unwrap().presentation,
+            accepts
+                .resolve(&part(), &maker, &group)
+                .unwrap()
+                .presentation,
             upright
         );
         // A box that does not know the kind refuses it by name.

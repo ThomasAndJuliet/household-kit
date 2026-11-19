@@ -23,7 +23,10 @@ pub fn first_fitting(
         .take_while(|level| *level <= ceiling)
         .find(|level| {
             let size = measure(*level);
-            size.width.is_finite() && size.height.is_finite() && size.is_valid() && size.fits(available)
+            size.width.is_finite()
+                && size.height.is_finite()
+                && size.is_valid()
+                && size.fits(available)
         })
 }
 
@@ -92,7 +95,10 @@ pub fn allocate(available: f64, capacities: &[Capacity]) -> Result<Vec<f64>, All
             available,
         });
     }
-    let mut lengths: Vec<f64> = capacities.iter().map(|capacity| capacity.preferred).collect();
+    let mut lengths: Vec<f64> = capacities
+        .iter()
+        .map(|capacity| capacity.preferred)
+        .collect();
     let rates: Vec<f64> = capacities
         .iter()
         .map(|capacity| capacity.weight * (capacity.preferred - capacity.least))
@@ -187,8 +193,11 @@ mod tests {
                 available: 119.0
             })
         );
-        let weighted =
-            allocate(150.0, &[capacity(100.0, 0.0, 2.0), capacity(100.0, 0.0, 1.0)]).unwrap();
+        let weighted = allocate(
+            150.0,
+            &[capacity(100.0, 0.0, 2.0), capacity(100.0, 0.0, 1.0)],
+        )
+        .unwrap();
         assert!((weighted.iter().sum::<f64>() - 150.0).abs() < 0.001);
         assert!(((100.0 - weighted[0]) / (100.0 - weighted[1]) - 2.0).abs() < 0.001);
         assert_eq!(allocate(0.0, &[]), Ok(vec![]));
