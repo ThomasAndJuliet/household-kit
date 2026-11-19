@@ -884,6 +884,222 @@ mod tests {
         assert_eq!(ids, ["grid-50", "series"]);
     }
 
+    // ----- review findings 6, 7, 10 and the hard-coded squeeze level -----
+
+    fn row_name(r: &Record, row: CoveringRef) -> &str {
+        let CoveringRef::Row(i) = row else {
+            panic!("{row:?}")
+        };
+        &r.rules().covering.rows[i].name
+    }
+
+    fn bar(name: &str, rect: Rect) -> Occupant {
+        Occupant::new(id(name), Kind::DataMark, Ink::Rect(rect))
+    }
+
+    #[test]
+    fn a_scale_label_is_not_its_siblings_value_line() {
+        // Review 6: scale label "20" and gridline "40", both owned by the
+        // axis. They are siblings, not each other's own (C1).
+        let mut r = record();
+        r.enter(hline("grid-40", Kind::ValueLine, 50.0).owned_by(id("axis")));
+        let twenty = Occupant::new(
+            id("label-20"),
+            Kind::Number,
+            Ink::Rect(Rect::new(10.0, 44.5, 14.0, 11.0)),
+        )
+        .owned_by(id("axis"));
+        let (verdict, row) = verdict_on(&r, &twenty, "grid-40");
+        assert_eq!(verdict, Verdict::Never);
+        assert_eq!(row_name(&r, row), "a number in a value line not its own");
+        let line = r.get(&id("grid-40")).unwrap().clone();
+        assert_eq!(r.relation(&twenty, &line), Relation::Unrelated);
+        // The caller can declare siblings related; that sets the distance,
+        // not ownership.
+        r.declare(id("label-20"), id("grid-40"), Relation::Related);
+        assert_eq!(r.relation(&twenty, &line), Relation::Related);
+        assert_eq!(verdict_on(&r, &twenty, "grid-40").0, Verdict::Never);
+        // Owned by the line itself, it is that line's value.
+        let forty = Occupant {
+            owner: Some(id("grid-40")),
+            ..twenty
+        };
+        assert_eq!(
+            verdict_on(&r, &forty, "grid-40").0,
+            Verdict::AllowedWithHalo
+        );
+    }
+
+    #[test]
+    fn a_label_on_its_bar_does_not_meet_a_gridline_the_bar_covers() {
+        // Review 7, C5: the gridline at y = 50 is drawn beneath the bar.
+        let mut r = record();
+        r.enter(hline("grid", Kind::ValueLine, 50.0));
+        r.enter(bar("bar", Rect::new(100.0, 40.0, 20.0, 100.0)));
+        let value = |x: f64, y: f64| {
+            Occupant::new(id("v"), Kind::Number, Ink::Rect(Rect::new(x, y, 14.0, 11.0)))
+                .owned_by(id("bar"))
+        };
+        let inside = r.judge(&value(103.0, 45.0));
+        assert_eq!(inside.rejection_at(Level::Preferred), None);
+        assert_eq!(
+            inside.verdicts().collect::<Vec<_>>(),
+            [Verdict::AllowedInToggleInk]
+        );
+        // 1 px from the covered gridline: no distance either.
+        assert_eq!(
+            r.judge(&value(103.0, 51.0)).rejection_at(Level::Preferred),
+            None
+        );
+        // Hanging off the bar, it stands in the gridline where it shows.
+        let (verdict, row) = verdict_on(&r, &value(112.0, 45.0), "grid");
+        assert_eq!(verdict, Verdict::Never);
+        assert_eq!(row_name(&r, row), "a number in a value line not its own");
+        // A data line is not drawn beneath the bar: it stops the label.
+        r.enter(hline("series", Kind::DataLine, 48.0));
+        assert_eq!(verdict_on(&r, &value(103.0, 45.0), "series").0, Verdict::Never);
+        // The order of drawing is data: without it the gridline stops it too.
+        let mut r = record();
+        r.enter(hline("grid", Kind::ValueLine, 50.0));
+        r.enter(bar("bar", Rect::new(100.0, 40.0, 20.0, 100.0)));
+        r.rules_mut().drawing_order.clear();
+        assert_eq!(verdict_on(&r, &value(103.0, 45.0), "grid").0, Verdict::Never);
+    }
+
+    #[test]
+    fn squeezing_starts_at_the_level_the_rules_say() {
+        // Hard-coded in review: the squeeze level was fixed at Strong (A7).
+        let mut r = record();
+        r.enter(label("a", Rect::new(10.0, 10.0, 20.0, 11.0)));
+        let b = label("b", Rect::new(33.0, 10.0, 20.0, 11.0));
+        assert!(r.judge(&b).rejection_at(Level::Mild).is_some());
+        assert_eq!(r.rules().squeeze_from, Level::Strong);
+        r.rules_mut().squeeze_from = Level::Mild;
+        let j = r.judge(&b);
+        assert!(matches!(
+            j.findings[..],
+            [Finding::Squeezed {
+                allowed_from: Level::Mild,
+                ..
+            }]
+        ));
+        assert_eq!(j.rejection_at(Level::Mild), None);
+        assert!(j.rejection_at(Level::Preferred).is_some());
+    }
+
+    #[test]
+    fn a_swatch_and_its_name_one_word_space_apart_are_not_squeezed() {
+        // Hard-coded in review: the text-spacing family was never used (C6).
+        let metrics = TextMetrics {
+            letter_space: 0.5,
+            word_space: 3.0,
+            line_spacing: 13.0,
+        };
+        let mut r = record();
+        r.enter(Occupant::new(
+            id("swatch"),
+            Kind::Key,
+            Ink::Rect(Rect::new(10.0, 10.0, 8.0, 8.0)),
+        ));
+        let name = |x: f64| label("name", Rect::new(x, 8.5, 30.0, 11.0));
+        // Not joined: one word space is under the unrelated ideal.
+        assert_eq!(r.judge(&name(21.0)).squeezes().count(), 1);
+        r.join(id("swatch"), id("name"), TextGap::Attachment, metrics);
+        assert_eq!(r.judge(&name(21.0)).findings, []);
+        assert_eq!(r.judge(&name(40.0)).findings, []);
+        assert_eq!(
+            r.judge(&name(20.0)).findings,
+            [Finding::BelowLeast {
+                against: Against::Occupant(id("swatch")),
+                gap: 2.0,
+                least: 3.0,
+                row: DistanceRow::Text(TextGap::Attachment),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_meant_to_meet_row_waives_the_distance() {
+        // Review 10, C7: a connector ending 1 px from its own text.
+        let mut r = record();
+        r.enter(label("comment", Rect::new(100.0, 100.0, 40.0, 11.0)));
+        let arrow = |owner: &str| {
+            Occupant::new(
+                id("arrow"),
+                Kind::Connector,
+                Ink::segment(Point::new(50.0, 50.0), Point::new(99.0, 105.0), 0.0),
+            )
+            .owned_by(id(owner))
+        };
+        assert_eq!(r.judge(&arrow("comment")).findings, []);
+        assert!(matches!(
+            r.judge(&arrow("other")).rejection_at(Level::AllPermitted),
+            Some(Finding::BelowLeast { .. })
+        ));
+    }
+
+    #[test]
+    fn the_default_connector_rows_follow_the_design() {
+        // Review 10, C8.
+        let mut r = record();
+        r.enter(hline("grid", Kind::ValueLine, 50.0));
+        r.enter(hline("series", Kind::DataLine, 120.0));
+        r.enter(bar("target", Rect::new(200.0, 150.0, 20.0, 100.0)));
+        r.enter(bar("other", Rect::new(150.0, 150.0, 20.0, 100.0)));
+        let connector = |from: Point, to: Point| {
+            Occupant::new(id("leader"), Kind::Connector, Ink::segment(from, to, 1.0))
+        };
+        // May cross a gridline.
+        let across = connector(Point::new(20.0, 30.0), Point::new(20.0, 70.0));
+        let (verdict, row) = verdict_on(&r, &across, "grid");
+        assert_eq!(verdict, Verdict::Allowed);
+        assert_eq!(row_name(&r, row), "a connector across a gridline");
+        assert_eq!(r.judge(&across).rejection_at(Level::Preferred), None);
+        // Close to a data line: less preferred, never rejected.
+        let close = connector(Point::new(20.0, 117.0), Point::new(100.0, 117.0));
+        let j = r.judge(&close);
+        assert_eq!(j.rejection_at(Level::Preferred), None);
+        assert_eq!(j.preference(), Preference::LessPreferred);
+        assert!(matches!(
+            j.findings[..],
+            [Finding::Near {
+                verdict: Verdict::LessPreferred,
+                ..
+            }]
+        ));
+        let crossing = connector(Point::new(20.0, 100.0), Point::new(20.0, 140.0));
+        assert_eq!(r.judge(&crossing).preference(), Preference::LessPreferred);
+        // Its own target does not reject it; another data mark does.
+        let to_target =
+            connector(Point::new(210.0, 135.0), Point::new(210.0, 155.0)).owned_by(id("target"));
+        let j = r.judge(&to_target);
+        assert_eq!(j.rejection_at(Level::Preferred), None);
+        assert_eq!(j.verdicts().collect::<Vec<_>>(), [Verdict::MeantToMeet]);
+        let through = connector(Point::new(140.0, 160.0), Point::new(210.0, 160.0))
+            .owned_by(id("target"));
+        let (verdict, row) = verdict_on(&r, &through, "other");
+        assert_eq!(verdict, Verdict::Never);
+        assert_eq!(
+            row_name(&r, row),
+            "a connector through a data mark not its target"
+        );
+    }
+
+    #[test]
+    fn judging_with_pending_occupants_counts_them_and_enters_nothing() {
+        let r = record();
+        let a = label("a", Rect::new(10.0, 10.0, 20.0, 11.0));
+        let b = label("b", Rect::new(20.0, 10.0, 20.0, 11.0));
+        assert_eq!(r.judge(&b).findings, []);
+        assert_eq!(
+            r.judge_with(&b, std::slice::from_ref(&a))
+                .verdicts()
+                .collect::<Vec<_>>(),
+            [Verdict::Never]
+        );
+        assert!(r.occupants().is_empty());
+    }
+
     #[test]
     fn ink_gaps_count_line_widths() {
         let line = Ink::segment(Point::new(0.0, 0.0), Point::new(10.0, 0.0), 2.0);
