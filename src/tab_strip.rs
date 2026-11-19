@@ -55,8 +55,9 @@ const CLOSE_INSET: f32 = 8.0;
 const ICON_SIZE: f32 = 16.0;
 /// A tab's height in COSMIC's tab bar, unless the app says otherwise
 const TAB_HEIGHT: f32 = 32.0;
-/// Pointer travel before a press on a tab is a drag
-const DRAG_THRESHOLD: f32 = 4.0;
+/// Pointer travel before a press on a tab is a drag: the 25 pixels Terminal
+/// gave libcosmic's tab bar
+const DRAG_THRESHOLD: f32 = 25.0;
 /// The selected tab's line, and the thin line under the others, as COSMIC's
 /// tab bar draws them (its `active_width` of 4 and 1)
 const UNDERLINE: f32 = 4.0;
@@ -462,13 +463,32 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
             }
             parts.push(Element::new(title));
             if let Some(close) = tab.on_close {
-                parts.push(
+                let mut button =
                     widget::button::icon(widget::icon::from_name("window-close-symbolic").handle())
                         .icon_size(ICON_SIZE as u16)
                         .padding(0)
-                        .on_press(close)
-                        .into(),
-                );
+                        .on_press(close);
+                if selected {
+                    // The selected tab's control is in its colour, as its
+                    // title and line are
+                    let colour = line_colour;
+                    let style = move |theme: &Theme| {
+                        let colour = colour
+                            .unwrap_or_else(|| Color::from(theme.cosmic().accent_text_color()));
+                        widget::button::Style {
+                            icon_color: Some(colour),
+                            text_color: Some(colour),
+                            ..widget::button::Style::new()
+                        }
+                    };
+                    button = button.class(cosmic::theme::Button::Custom {
+                        active: Box::new(move |_, theme| style(theme)),
+                        disabled: Box::new(move |theme| style(theme)),
+                        hovered: Box::new(move |_, theme| style(theme)),
+                        pressed: Box::new(move |_, theme| style(theme)),
+                    });
+                }
+                parts.push(button.into());
                 least += ICON_SIZE + gap;
                 end = CLOSE_INSET;
             }
@@ -478,6 +498,7 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
                 widget::row::with_children(parts)
                     .spacing(gap)
                     .width(Length::Fill)
+                    .height(self.height)
                     .align_y(cosmic::iced::Alignment::Center),
             )
             .width(Length::Fill)
@@ -900,7 +921,7 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Strip<'_, M> {
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 if let Some(press) = &mut state.press
                     && !press.dragging
-                    && (position.x - press.origin.x).abs() >= DRAG_THRESHOLD
+                    && position.distance(press.origin) >= DRAG_THRESHOLD
                 {
                     press.dragging = self.on_reorder.is_some();
                 }
@@ -1147,43 +1168,10 @@ impl<M> Widget<M, Theme, Renderer> for Wash<'_, M> {
         let bounds = layout.bounds();
         let over = cursor.is_over(bounds);
         self.hovered.set(over);
-        // COSMIC's tab bar's washes: the neutral at a fifth for the selected
-        // tab; the hovered tab's, a third of it again over the selected's
-        // (the same fill whether selected or not), top corners rounded
-        let cosmic = theme.cosmic();
-        let radius = cosmic.corner_radii.radius_s;
-        let corners = cosmic::iced::border::Radius::from([radius[0], radius[1], 0.0, 0.0]);
-        let neutral = Color::from(cosmic.palette.neutral_5);
-        for (shown, alpha) in [
-            (self.selected, 0.2),
-            (over, if self.selected { 0.125 } else { 0.3 }),
-        ] {
-            if shown {
-                renderer.fill_quad(
-                    renderer::Quad {
-                        bounds,
-                        border: Border {
-                            radius: corners,
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                    Color {
-                        a: alpha,
-                        ..neutral
-                    },
-                );
-            }
-        }
-        self.content.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            style,
-            layout,
-            cursor,
-            viewport,
-        );
+        // As COSMIC's tab bar draws a tab: its line first, under the wash;
+        // the wash (a fifth of the neutral for the selected tab, a third for
+        // the hovered one, which replaces the selected's rather than adding
+        // to it), top corners rounded; then its content
         let thick = if self.selected { UNDERLINE } else { THIN_LINE };
         renderer.fill_quad(
             renderer::Quad {
@@ -1195,6 +1183,40 @@ impl<M> Widget<M, Theme, Renderer> for Wash<'_, M> {
             },
             self.line
                 .unwrap_or_else(|| Color::from(theme.cosmic().accent_text_color())),
+        );
+        let cosmic = theme.cosmic();
+        let radius = cosmic.corner_radii.radius_s;
+        let corners = cosmic::iced::border::Radius::from([radius[0], radius[1], 0.0, 0.0]);
+        let neutral = Color::from(cosmic.palette.neutral_5);
+        let alpha = if over {
+            Some(0.3)
+        } else {
+            self.selected.then_some(0.2)
+        };
+        if let Some(alpha) = alpha {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds,
+                    border: Border {
+                        radius: corners,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Color {
+                    a: alpha,
+                    ..neutral
+                },
+            );
+        }
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
         );
     }
 }
