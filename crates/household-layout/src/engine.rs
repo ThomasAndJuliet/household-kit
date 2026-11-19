@@ -53,12 +53,21 @@
 //!
 //! # Stages
 //!
-//! The caller's policy is a short ordered list of [`Stage`]s, each one
-//! level and one tree, for example: a row at `Preferred`; a row at `Mild`;
-//! a wrap at `Mild`; a wrap at `Strong`. [`choose_stage`] tries them in
-//! order and takes the first that fits. Putting the wrap before the `Mild`
-//! row would make the layout change before the boxes compact; the order
-//! is the caller's statement of which it prefers.
+//! A component states its own choices as a short ordered list of
+//! [`Stage`]s, each one level and one tree, and [`choose_stage`] tries
+//! them in order and takes the first that fits. The list is the simple
+//! way to say what this component cares about most when room runs short,
+//! and that can differ from one component to another: one toolbar may
+//! rather wrap onto a second line than lose its button labels, while
+//! another may rather keep to one line. Each parent writes its own list
+//! for its own priorities.
+//!
+//! For example: a row at `Preferred`; a row at `Mild`; a wrap at `Mild`;
+//! a wrap at `Strong`. That list compacts before it rearranges. Putting
+//! the wrap at `Preferred` before the row at `Mild` would rearrange first
+//! and keep the full buttons longer. Both are only examples of orders a
+//! list can express: the engine itself has no built-in preference between
+//! rearranging and compacting, and follows whichever order it is given.
 //!
 //! A stage fits when its whole tree can be laid out within the available
 //! width and height: every child at least its useful minimum wide, every
