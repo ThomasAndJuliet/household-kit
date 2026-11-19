@@ -7,9 +7,13 @@
 //! prominence, detail, and kinds a family of boxes adds (a chart's
 //! direction is the first; this crate does not know what a chart is).
 //!
-//! Each kind resolves on its own, as household-widgets'
+//! Each kind but the level resolves on its own, as household-widgets'
 //! `PresentationFamily::resolve` does: the maker's request for that kind,
-//! then the parent's order for that child, then the family's default. A
+//! then the parent's order for that child, then the family's default. The
+//! level is a ceiling, and a maker can only lower it for its own box: the
+//! resolved level is the lower of the parent's order and the maker's cap
+//! (the apps' instance exception, "a primary action can retain its label
+//! throughout"). Every order resolves to a value usable as a key. A
 //! box says which combinations it accepts. An order it does not accept is
 //! an explicit [`Unsupported`] error: it never silently selects another
 //! form, and it is not the same as not fitting. Orders resolve before
@@ -66,7 +70,7 @@ impl Presentation {
 /// A request for some kinds and not others: what a box's maker asks of
 /// it, or what a parent orders of one child. A kind left `None` (or a
 /// family kind left out) falls through to the next source.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Order {
     pub level: Option<Level>,
     pub prominence: Option<Prominence>,
@@ -122,6 +126,11 @@ impl From<&Presentation> for Order {
 pub struct Resolved {
     pub level: Level,
     pub presentation: Presentation,
+    /// What was ordered: the kinds the maker or the parent asked for, with
+    /// the resolved level. A kind that resolved to the family's default is
+    /// not here. A list passes exactly this to each member, so that a
+    /// member's own family default still applies to what was not ordered.
+    pub ordered: Order,
 }
 
 impl From<&Resolved> for Order {
@@ -201,9 +210,11 @@ impl Accepts {
         &self.supported
     }
 
-    /// Resolve each kind separately: the maker's request, then the
-    /// parent's order, then the family's default (for the level,
-    /// [`Level::Preferred`]). A presentation not in the list is
+    /// Resolve each kind separately. The level is the lower of the
+    /// parent's order (no order is [`Level::Preferred`]) and the maker's
+    /// cap: a maker can lower its own ceiling, never raise it. Every other
+    /// kind is the maker's request, then the parent's order, then the
+    /// family's default. A presentation not in the list is
     /// [`Unsupported`], naming `part`.
     pub fn resolve(
         &self,
@@ -211,19 +222,26 @@ impl Accepts {
         maker: &Order,
         parent: &Order,
     ) -> Result<Resolved, Unsupported> {
+        let level = parent
+            .level
+            .unwrap_or_default()
+            .min(maker.level.unwrap_or(Level::AllPermitted));
+        let mut ordered = Order {
+            level: Some(level),
+            prominence: maker.prominence.or(parent.prominence),
+            detail: maker.detail.or(parent.detail),
+            added: parent.added.clone(),
+        };
+        for (kind, value) in &maker.added {
+            ordered.added.insert(kind.clone(), value.clone());
+        }
         let mut added = self.default.added.clone();
-        for (kind, value) in parent.added.iter().chain(&maker.added) {
+        for (kind, value) in &ordered.added {
             added.insert(kind.clone(), value.clone());
         }
         let requested = Presentation {
-            prominence: maker
-                .prominence
-                .or(parent.prominence)
-                .unwrap_or(self.default.prominence),
-            detail: maker
-                .detail
-                .or(parent.detail)
-                .unwrap_or(self.default.detail),
+            prominence: ordered.prominence.unwrap_or(self.default.prominence),
+            detail: ordered.detail.unwrap_or(self.default.detail),
             added,
         };
         if !self.supported.contains(&requested) {
@@ -233,8 +251,9 @@ impl Accepts {
             });
         }
         Ok(Resolved {
-            level: maker.level.or(parent.level).unwrap_or_default(),
+            level,
             presentation: requested,
+            ordered,
         })
     }
 }
@@ -281,12 +300,11 @@ mod tests {
                 .presentation,
             Presentation::new(Prominence::Emphasised, Detail::Concise)
         );
-        assert_eq!(
-            accepts
-                .resolve(&part(), &Order::NONE, &Order::NONE)
-                .unwrap(),
-            Resolved::default()
-        );
+        let unordered = accepts
+            .resolve(&part(), &Order::NONE, &Order::NONE)
+            .unwrap();
+        assert_eq!(unordered.presentation, Presentation::default());
+        assert_eq!(unordered.level, Level::Preferred);
         // A family can have a different ordinary presentation in either
         // kind, and an explicit request overrides it.
         let verbose = Presentation::new(Prominence::Normal, Detail::Verbose);
@@ -305,21 +323,44 @@ mod tests {
     }
 
     #[test]
-    fn the_level_resolves_like_every_other_kind() {
+    fn a_maker_can_lower_its_ceiling_and_never_raise_it() {
         let accepts = Accepts::ordinary();
-        let parent = Order::NONE.with_level(Level::Strong);
+        let level =
+            |maker: Order, parent: Order| accepts.resolve(&part(), &maker, &parent).unwrap().level;
+        let strong = Order::NONE.with_level(Level::Strong);
+        assert_eq!(level(Order::NONE, strong.clone()), Level::Strong);
+        // A primary action that keeps its label throughout.
         assert_eq!(
-            accepts
-                .resolve(&part(), &Order::NONE, &parent)
-                .unwrap()
-                .level,
-            Level::Strong
-        );
-        let pinned = Order::NONE.with_level(Level::Preferred);
-        assert_eq!(
-            accepts.resolve(&part(), &pinned, &parent).unwrap().level,
+            level(Order::NONE.with_level(Level::Preferred), strong),
             Level::Preferred
         );
+        // The review's case: a maker asking AllPermitted under a Mild
+        // ceiling gets Mild.
+        let all = Order::NONE.with_level(Level::AllPermitted);
+        assert_eq!(
+            level(all.clone(), Order::NONE.with_level(Level::Mild)),
+            Level::Mild
+        );
+        // No order from above permits no compromise.
+        assert_eq!(level(all, Order::NONE), Level::Preferred);
+    }
+
+    #[test]
+    fn what_was_ordered_leaves_out_the_family_default() {
+        let accepts = every_pair();
+        let parent = Order::NONE
+            .with_detail(Detail::Verbose)
+            .with_level(Level::Mild);
+        let resolved = accepts.resolve(&part(), &Order::NONE, &parent).unwrap();
+        assert_eq!(resolved.ordered, parent);
+        assert_eq!(
+            resolved.presentation,
+            Presentation::new(Prominence::Normal, Detail::Verbose)
+        );
+        // Orders are keys.
+        let mut seen = std::collections::HashSet::new();
+        assert!(seen.insert(resolved.clone()));
+        assert!(!seen.insert(resolved));
     }
 
     #[test]
