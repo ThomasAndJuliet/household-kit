@@ -255,12 +255,6 @@
 
 use std::rc::Rc;
 
-/// Why an allocation or a plan failed: the engine's `AllocationError`.
-/// `InvalidInput` is a length that is not a finite, nonnegative number (or a
-/// minimum above its preferred); `NoFit { required, available }` says how
-/// much room was needed and how much there was.
-pub use crate::allocate::AllocationError;
-use crate::allocate::{Capacity, allocate};
 use crate::geometry::{FIT_EPSILON, Point, Size};
 use crate::identity::{Id, Source};
 /// The four levels of permitted compromise, in increasing order: the
@@ -291,6 +285,17 @@ pub fn first_fitting(
         })
 }
 
+/// Why an allocation or a plan failed: the engine's `AllocationError`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AllocationError {
+    /// A length that is not a finite, nonnegative number, or a minimum
+    /// above its preferred.
+    InvalidInput,
+    /// The minima and the protected preferred lengths together need
+    /// `required`, more than the `available` room.
+    NoFit { required: f64, available: f64 },
+}
+
 /// One child's claim on a shared length, for [`allocate_width`]: the
 /// engine's `WidthCapacity`. A column uses it for heights too.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -316,11 +321,73 @@ pub fn allocate_width(
     available: f64,
     capacities: &[WidthCapacity],
 ) -> Result<Vec<f64>, AllocationError> {
-    let capacities: Vec<_> = capacities
+    if !available.is_finite()
+        || available < 0.0
+        || capacities.iter().any(|capacity| {
+            !capacity.preferred.is_finite()
+                || !capacity.minimum.is_finite()
+                || !capacity.weight.is_finite()
+                || capacity.minimum < 0.0
+                || capacity.preferred < capacity.minimum
+                || capacity.weight < 0.0
+        })
+    {
+        return Err(AllocationError::InvalidInput);
+    }
+    let required: f64 = capacities
         .iter()
-        .map(|capacity| Capacity::new(capacity.preferred, capacity.minimum, capacity.weight))
+        .map(|capacity| {
+            if capacity.weight == 0.0 {
+                capacity.preferred
+            } else {
+                capacity.minimum
+            }
+        })
+        .sum();
+    if required > available + FIT_EPSILON {
+        return Err(AllocationError::NoFit {
+            required,
+            available,
+        });
+    }
+    let mut lengths: Vec<f64> = capacities
+        .iter()
+        .map(|capacity| capacity.preferred)
         .collect();
-    allocate(available, &capacities)
+    let rates: Vec<f64> = capacities
+        .iter()
+        .map(|capacity| capacity.weight * (capacity.preferred - capacity.minimum))
+        .collect();
+    let mut shortage = (lengths.iter().sum::<f64>() - available).max(0.0);
+    while shortage > 0.0 {
+        let total_rate: f64 = capacities
+            .iter()
+            .enumerate()
+            .filter(|(i, capacity)| lengths[*i] > capacity.minimum)
+            .map(|(i, _)| rates[i])
+            .sum();
+        if total_rate == 0.0 {
+            break;
+        }
+        let mut removed = 0.0;
+        let mut clamped = false;
+        for (i, capacity) in capacities.iter().enumerate() {
+            let room = lengths[i] - capacity.minimum;
+            if room <= 0.0 || rates[i] == 0.0 {
+                continue;
+            }
+            let share = shortage * rates[i] / total_rate;
+            let reduction = share.min(room);
+            lengths[i] -= reduction;
+            removed += reduction;
+            clamped |= share >= room;
+        }
+        if !clamped || removed == 0.0 {
+            break;
+        }
+        shortage = (shortage - removed).max(0.0);
+    }
+    Ok(lengths)
 }
 
 /// A child's preferred size and useful minimum at one exact level: the

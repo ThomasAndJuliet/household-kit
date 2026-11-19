@@ -15,11 +15,6 @@
 //! - [`geometry`]: points, sizes and rectangles, in `f64`.
 //! - [`identity`]: a box's stable identity and the input field it draws.
 //! - [`level`]: the four compaction levels.
-//! - [`order`]: what a parent orders of a child: a level, prominence,
-//!   detail, and kinds a family adds.
-//! - [`boxes`]: the box a parent sees: query, order, and the kept plan.
-//! - [`allocate`]: sharing a shortage between children.
-//! - [`compose`]: rows, columns and lists of boxes.
 //! - [`kinds`]: the kinds of thing that occupy space.
 //! - [`rules`]: the distance table and the covering table, as data.
 //! - [`record`]: the record of occupied space, and what it answers.
@@ -33,15 +28,11 @@
 //! identity on children and plan nodes, what failed at each stage when
 //! nothing fits, and a child's report of what its form does not show.
 
-pub mod allocate;
-pub mod boxes;
-pub mod compose;
 pub mod engine;
 pub mod geometry;
 pub mod identity;
 pub mod kinds;
 pub mod labels;
 pub mod level;
-pub mod order;
 pub mod record;
 pub mod rules;
