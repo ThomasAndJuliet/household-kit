@@ -9,21 +9,27 @@
 //! A set of labels (value labels, end labels, slice labels, empty-slot
 //! notes) takes one pattern for every member: "it is just really
 //! inconsistent to have some labels to the left and some to the right". A
-//! [`Pattern`] is one anchor, applied to each member's owner, so a mixed set
-//! cannot be expressed. The patterns are tried in the caller's order. If any
-//! member is rejected, the pattern is; the first pattern with no rejection is
-//! taken, and its labels enter the record. A pattern that some member can
-//! take only at a less preferred place, or last in order, waits behind every
-//! pattern that needs neither. A set with no pattern left says which member
-//! stopped each pattern and why, so that its owner can take its next form.
-//! Nothing is moved after it is placed.
+//! [`Pattern`] is one place, applied to each member's owner, so a mixed set
+//! cannot be expressed; a place can follow the data ("beyond the end"), so
+//! bars above and below zero share one pattern. The patterns are tried in
+//! the caller's order. If any member is rejected, the pattern is; the first
+//! pattern with no rejection is taken. A pattern that some member can take
+//! only with a halo it could have moved away from, at a less preferred
+//! place, or last in order, waits behind every pattern that needs none of
+//! these. A set with no pattern left says which member stopped each pattern
+//! and why, so that its owner can take its next form.
+//!
+//! Judging a set ([`judge_set`]) changes nothing; [`enter_set`] enters the
+//! result; [`place_set`] does both. [`room_needed`] says, before anything is
+//! placed, how much room a pattern needs beyond its owners. Nothing is moved
+//! after it is placed.
 
 use crate::geometry::{Point, Rect, Size};
 use crate::identity::Id;
 use crate::kinds::{Kind, Role};
 use crate::level::Level;
 use crate::record::{Finding, Ink, Judgement, Occupant, Record};
-use crate::rules::Preference;
+use crate::rules::{Preference, Rules, Sizes};
 
 /// Which side of its anchor a thing is placed on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -158,10 +164,96 @@ impl Attach {
     pub fn anchor(self, ink: Rect) -> Rect {
         match self {
             Self::Whole => ink,
-            Self::Edge(Side::Above) => Rect::new(ink.x, ink.y, ink.width, 0.0),
-            Self::Edge(Side::Below) => Rect::new(ink.x, ink.bottom(), ink.width, 0.0),
-            Self::Edge(Side::Left) => Rect::new(ink.x, ink.y, 0.0, ink.height),
-            Self::Edge(Side::Right) => Rect::new(ink.right(), ink.y, 0.0, ink.height),
+            Self::Edge(side) => edge(ink, side),
+        }
+    }
+}
+
+impl Side {
+    /// The side facing this one.
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::Below => Self::Above,
+            Self::Above => Self::Below,
+            Self::Right => Self::Left,
+            Self::Left => Self::Right,
+        }
+    }
+}
+
+/// One edge of a rectangle, as a line of no thickness.
+fn edge(ink: Rect, side: Side) -> Rect {
+    match side {
+        Side::Above => Rect::new(ink.x, ink.y, ink.width, 0.0),
+        Side::Below => Rect::new(ink.x, ink.bottom(), ink.width, 0.0),
+        Side::Left => Rect::new(ink.x, ink.y, 0.0, ink.height),
+        Side::Right => Rect::new(ink.right(), ink.y, 0.0, ink.height),
+    }
+}
+
+/// The end of a mark that points toward `end`: for an area, its edge on
+/// that side; for a line, the end point furthest that way, as wide as the
+/// line, so that a gap from the anchor is a gap from the line's ink.
+fn end_of(ink: &Ink, end: Side) -> Rect {
+    match *ink {
+        Ink::Rect(area) => edge(area, end),
+        Ink::Segment { from, to, width } => {
+            let further = |p: Point, q: Point| match end {
+                Side::Above => p.y <= q.y,
+                Side::Below => p.y >= q.y,
+                Side::Left => p.x <= q.x,
+                Side::Right => p.x >= q.x,
+            };
+            let point = if further(to, from) { to } else { from };
+            Rect::new(point.x, point.y, 0.0, 0.0).grown(width / 2.0)
+        }
+    }
+}
+
+/// Where a pattern puts each member's label, by an absolute side or by the
+/// way the member's mark points (semantics C4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Place {
+    /// On an absolute `side` of an anchor on the owner's ink. Anchored on
+    /// an edge with the opposite side, the label is inside the owner.
+    Beside { on: Attach, side: Side },
+    /// Beyond the end of the owner's mark, the way the member says it
+    /// points: above a bar above zero and below one below zero.
+    BeyondEnd,
+    /// Inside the owner, at the end its mark points to.
+    InsideEnd,
+}
+
+impl Place {
+    /// The anchor, the side and whether the label is inside the owner, for
+    /// a member whose mark's end points toward `end`. None for a place
+    /// relative to the end when the member does not say which way it
+    /// points.
+    fn resolve(self, owner: &Ink, end: Option<Side>) -> Option<(Rect, Side, Option<Side>)> {
+        match self {
+            Self::Beside { on, side } => {
+                let inside = matches!(on, Attach::Edge(e) if e == side.opposite());
+                Some((
+                    on.anchor(owner.bounds()),
+                    side,
+                    inside.then(|| side.opposite()),
+                ))
+            }
+            Self::BeyondEnd => end.map(|end| (end_of(owner, end), end, None)),
+            Self::InsideEnd => end.map(|end| (end_of(owner, end), end.opposite(), Some(end))),
+        }
+    }
+
+    /// The side a label goes on and whether it is inside its owner, without
+    /// the owner: for the room a pattern needs.
+    fn side_for(self, end: Option<Side>) -> Option<(Side, bool)> {
+        match self {
+            Self::Beside { on, side } => Some((
+                side,
+                matches!(on, Attach::Edge(e) if e == side.opposite()),
+            )),
+            Self::BeyondEnd => end.map(|end| (end, false)),
+            Self::InsideEnd => end.map(|end| (end.opposite(), true)),
         }
     }
 }
@@ -176,23 +268,49 @@ pub enum Gap {
     Length(f64),
 }
 
-/// One pattern for a whole set: the same anchor on every member's owner.
+impl Gap {
+    /// The gap in the units of `sizes`, by the distance table in `rules`.
+    pub fn resolve(self, rules: &Rules, sizes: &Sizes) -> f64 {
+        let spacing = &rules.distances.diagram;
+        match self {
+            Self::Least => spacing.least.resolve(sizes),
+            Self::Related => spacing.related.resolve(sizes),
+            Self::Unrelated => spacing.unrelated.resolve(sizes),
+            Self::Length(length) => length,
+        }
+    }
+}
+
+/// One pattern for a whole set: the same place on every member's owner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pattern {
     /// The pattern's name, for reports ("beyond the end", "inside").
     pub name: String,
-    pub on: Attach,
-    pub side: Side,
+    pub place: Place,
     pub alignment: Alignment,
     pub gap: Gap,
 }
 
 impl Pattern {
+    /// A pattern on an absolute side of an anchor on each owner.
     pub fn new(name: impl Into<String>, on: Attach, side: Side, alignment: Alignment) -> Self {
+        Self::at(name, Place::Beside { on, side }, alignment)
+    }
+
+    /// Beyond the end of each member's mark, the way it points.
+    pub fn beyond_end(name: impl Into<String>, alignment: Alignment) -> Self {
+        Self::at(name, Place::BeyondEnd, alignment)
+    }
+
+    /// Inside each owner, at the end its mark points to.
+    pub fn inside_end(name: impl Into<String>, alignment: Alignment) -> Self {
+        Self::at(name, Place::InsideEnd, alignment)
+    }
+
+    fn at(name: impl Into<String>, place: Place, alignment: Alignment) -> Self {
         Self {
             name: name.into(),
-            on,
-            side,
+            place,
             alignment,
             gap: Gap::Related,
         }
@@ -204,18 +322,33 @@ impl Pattern {
     }
 }
 
-/// One label of a set: its identity, its owner (already in the record) and
-/// its measured size.
+/// One label of a set: its identity, its owner (already in the record),
+/// its measured size, and which way its mark's end points, for patterns
+/// that follow the data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Member {
     pub id: Id,
     pub owner: Id,
     pub size: Size,
+    pub end: Option<Side>,
 }
 
 impl Member {
     pub fn new(id: Id, owner: Id, size: Size) -> Self {
-        Self { id, owner, size }
+        Self {
+            id,
+            owner,
+            size,
+            end: None,
+        }
+    }
+
+    /// This member with its mark's end pointing toward `end`: above for a
+    /// bar above zero, below for one below, right for a line read left to
+    /// right.
+    pub fn pointing(mut self, end: Side) -> Self {
+        self.end = Some(end);
+        self
     }
 }
 
@@ -235,8 +368,15 @@ pub struct LabelSet {
 pub enum Reason {
     /// The member's owner is not in the record.
     OwnerNotRecorded,
+    /// The pattern follows the data and the member does not say which way
+    /// its mark's end points.
+    NoEnd,
     /// The region offers less room than the label needs, or none.
     NoRoom { offered: Option<Size> },
+    /// The pattern puts the label inside its owner and it does not lie
+    /// within `within`: the owner's ink less the least distance from every
+    /// edge but the one it is anchored on (semantics C2).
+    NotInside { label: Rect, within: Rect },
     /// The record's finding that rejects the place.
     Rejected(Finding),
 }
@@ -263,12 +403,15 @@ pub struct NoPattern {
 pub struct PlacedLabel {
     pub id: Id,
     pub rect: Rect,
+    /// What enters the record: the label with its kind, owner and role.
+    pub occupant: Occupant,
     /// What the record found: the verdicts the caller acts on (a halo, the
     /// toggle's ink) and any flagged squeezing.
     pub judgement: Judgement,
 }
 
-/// A set placed by one pattern.
+/// A set placed by one pattern: judged, and not yet entered unless
+/// [`place_set`] made it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placed {
     /// The pattern's index in the set's list.
@@ -277,96 +420,169 @@ pub struct Placed {
     pub labels: Vec<PlacedLabel>,
 }
 
-/// Places a set by the first pattern every member can take at `level` in
-/// `region`, entering its labels in the record. Patterns whose places are
-/// less preferred or last in order are taken only when no pattern in order
-/// is left. On failure the record is as it was.
+/// Judges a set: the first pattern every member can take at `level` in
+/// `region`. A pattern that needs a halo where moving would avoid one, or
+/// whose places are less preferred or last in order, waits behind every
+/// pattern that needs none, in that order (semantics C3). Changes nothing:
+/// enter the result with [`enter_set`] into the record it was judged
+/// against (semantics C9).
+pub fn judge_set(
+    record: &Record,
+    set: &LabelSet,
+    region: Rect,
+    level: Level,
+) -> Result<Placed, NoPattern> {
+    let mut stopped = Vec::new();
+    let mut waiting: Option<Placed> = None;
+    for index in 0..set.patterns.len() {
+        match judge_pattern(record, set, index, region, level) {
+            Ok(placed) if placed.preference == Preference::InOrder => return Ok(placed),
+            Ok(placed) => {
+                if waiting
+                    .as_ref()
+                    .is_none_or(|w| placed.preference < w.preference)
+                {
+                    waiting = Some(placed);
+                }
+            }
+            Err(s) => stopped.push(s),
+        }
+    }
+    waiting.ok_or_else(|| NoPattern {
+        set: set.id.clone(),
+        stopped,
+    })
+}
+
+/// Enters a judged set's labels in the record, in the members' order.
+pub fn enter_set(record: &mut Record, placed: &Placed) {
+    record.enter_all(placed.labels.iter().map(|label| label.occupant.clone()));
+}
+
+/// Judges a set and enters what it places: [`judge_set`], then
+/// [`enter_set`]. On failure the record is unchanged.
 pub fn place_set(
     record: &mut Record,
     set: &LabelSet,
     region: Rect,
     level: Level,
 ) -> Result<Placed, NoPattern> {
-    let mut stopped = Vec::new();
-    let mut waiting: Option<(Preference, usize)> = None;
-    for index in 0..set.patterns.len() {
-        let start = record.len();
-        match try_pattern(record, set, index, region, level) {
-            Ok(placed) if placed.preference == Preference::InOrder => return Ok(placed),
-            Ok(placed) => {
-                record.truncate(start);
-                if waiting.is_none_or(|(p, _)| placed.preference < p) {
-                    waiting = Some((placed.preference, index));
-                }
-            }
-            Err(s) => stopped.push(s),
-        }
-    }
-    if let Some((_, index)) = waiting {
-        return try_pattern(record, set, index, region, level).map_err(|s| NoPattern {
-            set: set.id.clone(),
-            stopped: vec![s],
-        });
-    }
-    Err(NoPattern {
-        set: set.id.clone(),
-        stopped,
-    })
+    let placed = judge_set(record, set, region, level)?;
+    enter_set(record, &placed);
+    Ok(placed)
 }
 
-/// Places every member by one pattern, entering each label as it goes so
-/// that later members are judged against earlier ones; takes them all back
-/// at the first rejection.
-fn try_pattern(
-    record: &mut Record,
+/// The room a pattern needs beyond its owners on each side.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Room {
+    pub above: f64,
+    pub below: f64,
+    pub left: f64,
+    pub right: f64,
+}
+
+impl Room {
+    fn widen(&mut self, side: Side, by: f64) {
+        let edge = match side {
+            Side::Above => &mut self.above,
+            Side::Below => &mut self.below,
+            Side::Left => &mut self.left,
+            Side::Right => &mut self.right,
+        };
+        *edge = edge.max(by);
+    }
+}
+
+/// The room pattern `pattern` of `set` needs beyond its owners, along the
+/// side each label goes on: the gap and the label's depth, the most over
+/// the members. A label inside its owner needs none. A pure query that
+/// needs neither the record nor the owners, so a chart can reserve the room
+/// before anything is placed (design §9, semantics C9). How far a label
+/// wider than its owner reaches across depends on the owner's size and is
+/// not counted. A member with no end stops a pattern that follows the data.
+pub fn room_needed(
+    set: &LabelSet,
+    pattern: usize,
+    rules: &Rules,
+    sizes: &Sizes,
+) -> Result<Room, Stopped> {
+    let pattern_ref = &set.patterns[pattern];
+    let gap = pattern_ref.gap.resolve(rules, sizes);
+    let mut room = Room::default();
+    for member in &set.members {
+        let Some((side, inside)) = pattern_ref.place.side_for(member.end) else {
+            return Err(Stopped {
+                pattern,
+                member: member.id.clone(),
+                reason: Reason::NoEnd,
+            });
+        };
+        if inside {
+            continue;
+        }
+        let depth = match side {
+            Side::Above | Side::Below => member.size.height,
+            Side::Left | Side::Right => member.size.width,
+        };
+        room.widen(side, gap + depth);
+    }
+    Ok(room)
+}
+
+/// Judges every member by one pattern, each against the record and the
+/// members before it; stops at the first rejection.
+fn judge_pattern(
+    record: &Record,
     set: &LabelSet,
     index: usize,
     region: Rect,
     level: Level,
 ) -> Result<Placed, Stopped> {
     let pattern = &set.patterns[index];
-    let spacing = &record.rules().distances.diagram;
-    let gap = match pattern.gap {
-        Gap::Least => spacing.least.resolve(record.sizes()),
-        Gap::Related => spacing.related.resolve(record.sizes()),
-        Gap::Unrelated => spacing.unrelated.resolve(record.sizes()),
-        Gap::Length(length) => length,
-    };
-    let candidate = AnchorCandidate::new(pattern.side, pattern.alignment).gap(gap);
-    let start = record.len();
-    let mut labels = Vec::with_capacity(set.members.len());
+    let gap = pattern.gap.resolve(record.rules(), record.sizes());
+    let mut labels: Vec<PlacedLabel> = Vec::with_capacity(set.members.len());
+    let mut pending: Vec<Occupant> = Vec::with_capacity(set.members.len());
     let mut preference = Preference::InOrder;
     for member in &set.members {
-        let stop = |record: &mut Record, reason| {
-            record.truncate(start);
-            Stopped {
-                pattern: index,
-                member: member.id.clone(),
-                reason,
-            }
+        let stop = |reason| Stopped {
+            pattern: index,
+            member: member.id.clone(),
+            reason,
         };
         let Some(owner) = record.get(&member.owner) else {
-            return Err(stop(record, Reason::OwnerNotRecorded));
+            return Err(stop(Reason::OwnerNotRecorded));
         };
-        let anchor = pattern.on.anchor(owner.ink.bounds());
+        let Some((anchor, side, inside)) = pattern.place.resolve(&owner.ink, member.end) else {
+            return Err(stop(Reason::NoEnd));
+        };
+        let candidate = AnchorCandidate::new(side, pattern.alignment).gap(gap);
         let offered = offer(region, anchor, candidate);
         if !offered.is_some_and(|room| member.size.fits(room)) {
-            return Err(stop(record, Reason::NoRoom { offered }));
+            return Err(stop(Reason::NoRoom { offered }));
         }
         let rect = Rect::from_origin(origin(region, anchor, candidate, member.size), member.size);
+        if let Some(edge) = inside {
+            let within = inset_but(record, set.kind, owner, edge);
+            if !within.contains(rect) {
+                return Err(stop(Reason::NotInside {
+                    label: rect,
+                    within,
+                }));
+            }
+        }
         let mut label = Occupant::new(member.id.clone(), set.kind, Ink::Rect(rect))
             .owned_by(member.owner.clone());
         label.role = set.role.clone();
-        let judgement = record.judge(&label);
+        let judgement = record.judge_with(&label, &pending);
         if let Some(finding) = judgement.rejection_at(level) {
-            let finding = finding.clone();
-            return Err(stop(record, Reason::Rejected(finding)));
+            return Err(stop(Reason::Rejected(finding.clone())));
         }
         preference = preference.max(judgement.preference());
-        record.enter(label);
+        pending.push(label.clone());
         labels.push(PlacedLabel {
             id: member.id.clone(),
             rect,
+            occupant: label,
             judgement,
         });
     }
@@ -375,6 +591,27 @@ fn try_pattern(
         preference,
         labels,
     })
+}
+
+/// The owner's ink less the table's least distance between a label of
+/// `kind` and the owner, on every edge but `anchored`.
+fn inset_but(record: &Record, kind: Kind, owner: &Occupant, anchored: Side) -> Rect {
+    let (least, _) =
+        record
+            .rules()
+            .distances
+            .diagram
+            .least_between(kind, owner.kind, record.sizes());
+    let ink = owner.ink.bounds();
+    let at = |side: Side| if side == anchored { 0.0 } else { least };
+    let (top, bottom) = (at(Side::Above), at(Side::Below));
+    let (left, right) = (at(Side::Left), at(Side::Right));
+    Rect::new(
+        ink.x + left,
+        ink.y + top,
+        (ink.width - left - right).max(0.0),
+        (ink.height - top - bottom).max(0.0),
+    )
 }
 
 #[cfg(test)]
@@ -578,25 +815,22 @@ mod tests {
         let stops: Vec<_> = failure
             .stopped
             .iter()
-            .map(|s| {
-                let Reason::Rejected(Finding::Meets {
-                    against: Against::Occupant(on),
-                    verdict,
-                    ..
-                }) = &s.reason
-                else {
-                    panic!("{s:?}")
-                };
-                (s.pattern, s.member.as_str(), on.as_str(), *verdict)
-            })
+            .map(|s| (s.pattern, s.member.as_str()))
             .collect();
-        assert_eq!(
-            stops,
-            [
-                (0, "b1/value", "note", Verdict::Never),
-                (1, "b3/value", "zero", Verdict::Never),
-            ]
-        );
+        assert_eq!(stops, [(0, "b1/value"), (1, "b3/value")]);
+        assert!(matches!(
+            &failure.stopped[0].reason,
+            Reason::Rejected(Finding::Meets {
+                against: Against::Occupant(on),
+                verdict: Verdict::Never,
+                ..
+            }) if on.as_str() == "note"
+        ));
+        // b3 is 8 px tall: its label cannot lie inside it.
+        assert!(matches!(
+            failure.stopped[1].reason,
+            Reason::NotInside { .. }
+        ));
         assert_eq!(r.occupants().len(), before);
     }
 

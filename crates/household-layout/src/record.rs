@@ -7,7 +7,18 @@
 //! candidate is judged against everything it would meet or come too near,
 //! by the covering table and the distance table, and every finding names
 //! the occupant and the row of the table that gave it, so a caller can
-//! report why a place was rejected. Nothing entered is ever moved.
+//! report why a place was rejected. Judging changes nothing; entering is a
+//! separate step. Nothing entered is ever moved.
+//!
+//! A thing is another's own only when one owns the other (semantics C1).
+//! The order of drawing is data (C5): a candidate standing on a mark is not
+//! judged against a line the rules draw beneath that mark and that passes
+//! under it. A pair the caller joins by a text gap is judged by that text's
+//! spacing (C6). A pair the covering table says are meant to meet keeps no
+//! distance (C7).
+//!
+//! Not in this slice: Juliet's "clearly belongs" test (near and far), so a
+//! related distance has no upper bound yet; halo geometry.
 //!
 //! The record also answers what is at a point, innermost first, and which
 //! lines pass under a rectangle.
@@ -19,7 +30,9 @@ use crate::geometry::{FIT_EPSILON, Point, Rect};
 use crate::identity::Id;
 use crate::kinds::{Kind, Role};
 use crate::level::Level;
-use crate::rules::{CoveringRef, DistanceRow, Preference, Relation, Rules, Sizes, Verdict};
+use crate::rules::{
+    CoveringRef, DistanceRow, Preference, Relation, Rules, Sizes, TextGap, TextMetrics, Verdict,
+};
 
 /// What an occupant draws, for the record.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -183,12 +196,10 @@ impl Occupant {
         self
     }
 
-    /// Whether `other` is this occupant's own: one owns the other, or both
-    /// have the same owner.
+    /// Whether `other` is this occupant's own: one owns the other. Two
+    /// things with the same owner are not each other's own (semantics C1).
     pub fn is_own(&self, other: &Occupant) -> bool {
-        self.owner.as_ref() == Some(&other.id)
-            || other.owner.as_ref() == Some(&self.id)
-            || (self.owner.is_some() && self.owner == other.owner)
+        self.owner.as_ref() == Some(&other.id) || other.owner.as_ref() == Some(&self.id)
     }
 }
 
@@ -217,13 +228,25 @@ pub enum Finding {
         least: f64,
         row: DistanceRow,
     },
-    /// Closer than its ideal and not below the least distance: allowed,
-    /// and flagged so that squeezing is a choice.
+    /// Closer than its ideal and not below the least distance: allowed
+    /// from `allowed_from` (the rules' squeeze level), and flagged so that
+    /// squeezing is a choice.
     Squeezed {
         against: Against,
         gap: f64,
         ideal: f64,
         row: DistanceRow,
+        allowed_from: Level,
+    },
+    /// The candidate comes within the distance of something without
+    /// meeting it, and the covering row that applies holds near as well
+    /// ("along or close to a data line"): the row's verdict, in place of
+    /// the distance findings.
+    Near {
+        against: Against,
+        gap: f64,
+        verdict: Verdict,
+        row: CoveringRef,
     },
 }
 
@@ -232,18 +255,19 @@ impl Finding {
         match self {
             Self::Meets { against, .. }
             | Self::BelowLeast { against, .. }
-            | Self::Squeezed { against, .. } => against,
+            | Self::Squeezed { against, .. }
+            | Self::Near { against, .. } => against,
         }
     }
 
     /// Whether this finding rejects the place at `level`. A `Never` verdict
     /// and the least distance always reject; squeezing below an ideal is
-    /// permitted from [`Level::Strong`].
+    /// permitted from the level the finding carries.
     pub fn rejects_at(&self, level: Level) -> bool {
         match self {
-            Self::Meets { verdict, .. } => verdict.rejects(),
+            Self::Meets { verdict, .. } | Self::Near { verdict, .. } => verdict.rejects(),
             Self::BelowLeast { .. } => true,
-            Self::Squeezed { .. } => level < Level::Strong,
+            Self::Squeezed { allowed_from, .. } => level < *allowed_from,
         }
     }
 }
@@ -267,10 +291,11 @@ impl Judgement {
             .filter(|f| matches!(f, Finding::Squeezed { .. }))
     }
 
-    /// The verdicts of everything the candidate meets.
+    /// The verdicts of everything the candidate meets or, by a row that
+    /// holds near, comes close to.
     pub fn verdicts(&self) -> impl Iterator<Item = Verdict> + '_ {
         self.findings.iter().filter_map(|f| match f {
-            Finding::Meets { verdict, .. } => Some(*verdict),
+            Finding::Meets { verdict, .. } | Finding::Near { verdict, .. } => Some(*verdict),
             _ => None,
         })
     }
@@ -293,6 +318,22 @@ pub struct Record {
     bounds: Option<Rect>,
     occupants: Vec<Occupant>,
     declared: Vec<(Id, Id, Relation)>,
+    joined: Vec<Join>,
+}
+
+/// A pair joined by a text gap, with that text's metrics.
+#[derive(Clone, Debug)]
+struct Join {
+    a: Id,
+    b: Id,
+    gap: TextGap,
+    metrics: TextMetrics,
+}
+
+impl Join {
+    fn is(&self, a: &Id, b: &Id) -> bool {
+        (&self.a == a && &self.b == b) || (&self.a == b && &self.b == a)
+    }
 }
 
 impl Record {
@@ -304,6 +345,7 @@ impl Record {
             bounds: None,
             occupants: Vec::new(),
             declared: Vec::new(),
+            joined: Vec::new(),
         }
     }
 
@@ -339,6 +381,16 @@ impl Record {
         self.declared.push((a, b, relation));
     }
 
+    /// Declares two things (by identity) joined by a text gap: a swatch and
+    /// its name, a note mark and its text, a unit after its number. The
+    /// pair is judged by `gap` in a text with `metrics` instead of by the
+    /// diagram spacing, and is not flagged as squeezed (semantics C6). A
+    /// later join for the same pair replaces an earlier one.
+    pub fn join(&mut self, a: Id, b: Id, gap: TextGap, metrics: TextMetrics) {
+        self.joined.retain(|j| !j.is(&a, &b));
+        self.joined.push(Join { a, b, gap, metrics });
+    }
+
     /// How two things stand to each other: as declared, else related when
     /// one is the other's own, else unrelated.
     pub fn relation(&self, a: &Occupant, b: &Occupant) -> Relation {
@@ -367,22 +419,20 @@ impl Record {
         self.occupants.push(occupant);
     }
 
-    /// How many occupants there are; with [`Record::truncate`], lets a
-    /// caller in this crate try a set of places and take them back.
-    pub(crate) fn len(&self) -> usize {
-        self.occupants.len()
-    }
-
-    pub(crate) fn truncate(&mut self, len: usize) {
-        self.occupants.truncate(len);
-    }
-
     /// Judges a candidate against the figure's edge and everything it would
-    /// meet or come too near.
+    /// meet or come too near. Changes nothing.
     pub fn judge(&self, candidate: &Occupant) -> Judgement {
+        self.judge_with(candidate, &[])
+    }
+
+    /// Judges a candidate as [`Record::judge`] does, as if `pending` were
+    /// entered too: for a set whose members are judged against each other
+    /// before any is entered. Changes nothing.
+    pub fn judge_with(&self, candidate: &Occupant, pending: &[Occupant]) -> Judgement {
         let covering = &self.rules.covering;
         let spacing = &self.rules.distances.diagram;
         let placed = (candidate.kind, candidate.role.as_ref());
+        let everything = || self.occupants.iter().chain(pending);
         let mut findings = Vec::new();
         if let Some(bounds) = self.bounds
             && !bounds.contains(candidate.ink.bounds())
@@ -394,19 +444,20 @@ impl Record {
                 row,
             });
         }
-        for occupant in &self.occupants {
+        for occupant in everything() {
+            if self.hidden_from(candidate, occupant, everything()) {
+                continue;
+            }
             let against = || Against::Occupant(occupant.id.clone());
             let relation = self.relation(candidate, occupant);
+            let met = (occupant.kind, occupant.role.as_ref());
+            let own = candidate.is_own(occupant);
             let gap = candidate.ink.gap(&occupant.ink);
             if gap <= 0.0 {
                 let (verdict, row) = if relation == Relation::MeantToMeet {
                     (Verdict::MeantToMeet, CoveringRef::Declared)
                 } else {
-                    covering.verdict(
-                        placed,
-                        (occupant.kind, occupant.role.as_ref()),
-                        candidate.is_own(occupant),
-                    )
+                    covering.verdict(placed, met, own)
                 };
                 findings.push(Finding::Meets {
                     against: against(),
@@ -418,9 +469,39 @@ impl Record {
             if !candidate.kind.is_ink() || !occupant.kind.is_ink() {
                 continue;
             }
+            if let Some(join) = self.joined.iter().find(|j| j.is(&candidate.id, &occupant.id)) {
+                let least = self.rules.distances.text.distance(join.gap, &join.metrics);
+                if gap < least - FIT_EPSILON {
+                    findings.push(Finding::BelowLeast {
+                        against: against(),
+                        gap,
+                        least,
+                        row: DistanceRow::Text(join.gap),
+                    });
+                }
+                continue;
+            }
             let Some((ideal, ideal_row)) = spacing.ideal(relation, &self.sizes) else {
                 continue;
             };
+            if gap >= ideal - FIT_EPSILON {
+                continue;
+            }
+            if let Some(index) = covering.row_for(placed, met, own) {
+                let row = &covering.rows[index];
+                if row.verdict == Verdict::MeantToMeet {
+                    continue;
+                }
+                if row.near {
+                    findings.push(Finding::Near {
+                        against: against(),
+                        gap,
+                        verdict: row.verdict,
+                        row: CoveringRef::Row(index),
+                    });
+                    continue;
+                }
+            }
             let (least, least_row) =
                 spacing.least_between(candidate.kind, occupant.kind, &self.sizes);
             if gap < least - FIT_EPSILON {
@@ -430,16 +511,45 @@ impl Record {
                     least,
                     row: least_row,
                 });
-            } else if gap < ideal - FIT_EPSILON {
+            } else {
                 findings.push(Finding::Squeezed {
                     against: against(),
                     gap,
                     ideal,
                     row: ideal_row,
+                    allowed_from: self.rules.squeeze_from,
                 });
             }
         }
         Judgement { findings }
+    }
+
+    /// Whether `line` is hidden from `candidate` by the order of drawing:
+    /// the candidate stands wholly on a mark that the rules draw above the
+    /// line, and the line passes under that mark. Where the candidate stands
+    /// the line is covered, and beyond the mark's edge the edge stands
+    /// between them.
+    fn hidden_from<'a>(
+        &self,
+        candidate: &Occupant,
+        line: &Occupant,
+        mut everything: impl Iterator<Item = &'a Occupant>,
+    ) -> bool {
+        let lower = (line.kind, line.role.as_ref());
+        let standing = candidate.ink.bounds();
+        everything.any(|mark| {
+            !std::ptr::eq(mark, line)
+                && matches!(mark.ink, Ink::Rect(area) if area.contains(standing))
+                && self
+                    .rules
+                    .drawn_beneath(lower, (mark.kind, mark.role.as_ref()))
+                && line.ink.meets(&mark.ink)
+        })
+    }
+
+    /// Enters everything placed by a judged set or free place, in order.
+    pub fn enter_all(&mut self, occupants: impl IntoIterator<Item = Occupant>) {
+        self.occupants.extend(occupants);
     }
 
     /// What is at `point`, innermost (smallest) first; of equal size, the
@@ -651,23 +761,17 @@ mod tests {
     #[test]
     fn a_comparisons_name_never_stands_in_another_comparisons_line() {
         let mut r = record();
-        r.enter(
-            hline("cmp-a/line", Kind::ValueLine, 50.0)
-                .owned_by(id("cmp-a"))
-                .with_role(Role::comparison()),
-        );
+        r.enter(hline("cmp-a", Kind::ValueLine, 50.0).with_role(Role::comparison()));
         let name = |owner: &str| {
             label("name", Rect::new(100.0, 44.5, 30.0, 11.0))
                 .owned_by(id(owner))
                 .with_role(Role::comparison())
         };
+        assert_eq!(verdict_on(&r, &name("cmp-b"), "cmp-a").0, Verdict::Never);
+        // In its own comparison's line (the line owns it): the row for words
+        // in a value line.
         assert_eq!(
-            verdict_on(&r, &name("cmp-b"), "cmp-a/line").0,
-            Verdict::Never
-        );
-        // In its own comparison's line: the row for words in a value line.
-        assert_eq!(
-            verdict_on(&r, &name("cmp-a"), "cmp-a/line").0,
+            verdict_on(&r, &name("cmp-a"), "cmp-a").0,
             Verdict::MoveFirstElseHalo
         );
     }
