@@ -278,7 +278,7 @@ The field is `text_menu(field, &words, style).history(TextMenuHistory::of(&short
 ## Depending on it
 
 ```toml
-household-widgets = { git = "https://github.com/ThomasAndJuliet/household-widgets.git" }
+household-widgets = { git = "https://github.com/ThomasAndJuliet/household-kit.git" }
 ```
 
 The crate depends on libcosmic as an app does, by upstream's URL with no rev:
@@ -287,9 +287,9 @@ The crate depends on libcosmic as an app does, by upstream's URL with no rev:
 libcosmic = { git = "https://github.com/pop-os/libcosmic.git", default-features = false }
 ```
 
-Every household app has `[patch."https://github.com/pop-os/libcosmic.git"]` pointing at the household fork at the revision it pins. A patch replaces every dependency on that URL, so this crate is built with the app's own libcosmic: there is one libcosmic in the app's lock, selected by the app at a compatible fork revision. Naming the fork's URL here would give an app two libcosmics, and its `Element` would not be this crate's `Element`. The same goes for `household-tones`: this crate and the app must spell its URL the same way, as above, so that the app's lock has one.
+Every household app has `[patch."https://github.com/pop-os/libcosmic.git"]` pointing at the household fork at the revision it pins. A patch replaces every dependency on that URL, so this crate is built with the app's own libcosmic: there is one libcosmic in the app's lock, selected by the app at a compatible fork revision. Naming the fork's URL here would give an app two libcosmics, and its `Element` would not be this crate's `Element`. `household-tones` is in the same repository and is used by path here, so an app that depends on both through household-kit's URL has one revision of each in its lock.
 
-This repository's own `Cargo.toml` has a `[patch]` for its tests, Clippy and CI. Apps using `TextMenu` must pin a compatible household libcosmic revision providing the native text target and session interfaces. This crate is tested against `cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa`, which includes the native editing, popup and named-selection fixes; older fork revisions lack these interfaces or fixes. Cargo reads `[patch]` only from the workspace being built, so each app chooses its own compatible fork revision.
+The workspace's root `Cargo.toml` has a `[patch]` for its tests, Clippy and CI. Apps using `TextMenu` must pin a compatible household libcosmic revision providing the native text target and session interfaces. This crate is tested against `cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa`, which includes the native editing, popup and named-selection fixes; older fork revisions lack these interfaces or fixes. Cargo reads `[patch]` only from the workspace being built, so each app chooses its own compatible fork revision.
 
 A Flatpak app needs the crate in its `cargo-sources.json`.
 
@@ -303,14 +303,16 @@ A Flatpak app needs the crate in its `cargo-sources.json`.
 
 ## Checks and CI
 
+From the workspace root:
+
 ```sh
 cargo fmt --all --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
-cargo test --locked
-cargo test --all-features --locked
+cargo clippy -p household-widgets --all-targets --all-features --locked -- -D warnings
+cargo test -p household-widgets --locked
+cargo test -p household-widgets --all-features --locked
 ```
 
-`.github/workflows/ci.yml` runs those four commands. Pushes to this repository, same-repository pull requests and manual runs use the household's self-hosted runner (or a GitHub-hosted one when the `CI_RUNNER` variable is `hosted`). Pull requests from forks run on a GitHub-hosted runner with a read-only token and never on the self-hosted runner. No secret is used.
+The `widgets` job of the root `.github/workflows/ci.yml` runs the last three (formatting is checked for the whole workspace by the `check` job). It builds libcosmic, so it installs libcosmic's system libraries first. The runner rule is the workspace's: pushes, same-repository pull requests and manual runs use the household's self-hosted runner (or a GitHub-hosted one when the `CI_RUNNER` variable is `hosted`); pull requests from forks run on a GitHub-hosted runner with a read-only token and never on the self-hosted runner. No secret is used.
 
 ## Licence
 

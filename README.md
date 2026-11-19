@@ -2,6 +2,16 @@
 
 Shared crates for the household's libcosmic apps (Terminal, Cerea, Lollypop, Discord, ScreenPush, the AI-usage applet). Before this, each app kept a copy of household-ui's reference code. Each concern is now one crate in this workspace, used as a git dependency.
 
+## Layout
+
+One repository and one workspace, so the crates use each other by path at one revision and an app never pins two revisions of the household's code.
+
+- **The base crates** (`household-settings`, `household-tones`, `household-highlight`, `household-type`, `household-wait`) have no GUI and never depend on libcosmic or iced. Their CI job excludes the widgets crate, so it never builds libcosmic and stays fast.
+- **`household-widgets`** is the shared UI framework: the widgets more than one app draws, built on libcosmic (see [its README](crates/household-widgets/README.md)). It is the only crate that needs libcosmic, through the household fork, ThomasAndJuliet/libcosmic. It came from the former household-widgets repository, with its history.
+- **`household-shell`** is to come.
+
+Apps depend on this repository's git URL for every crate, as in the next sections, and pin the commit in their own `Cargo.lock`.
+
 | Crate | What it is for |
 |---|---|
 | `household-settings` | The shared settings (rule 33). There is one `shared.toml` and one file per app, looked up app file → shared → default. Writes take a lock, are atomic and keep comments. It also has the folder watch, moving a file, migration with seeding, and Open making a missing shared file. |
@@ -10,9 +20,9 @@ Shared crates for the household's libcosmic apps (Terminal, Cerea, Lollypop, Dis
 | `household-type` | How the rendered views set prose: the **Paper view** and the **Text view**, as the terminal's conversations set them. Fonts, sizes, line spacing, block spacing, indents, measure, code, maths and tables, as plain data, and a sample with where the terminal sets each line, for the apps' drift tests. |
 | `household-wait` | Waiting without freezing (rules 40–43). It covers tiers, deadlines, stalls, cancellation, keyed waits, debounce, coalescing, ordered queues, time slices and timings. |
 
-## No crate depends on libcosmic or iced
+## The base crates do not depend on libcosmic or iced
 
-The apps pin different libcosmic versions, and a crate that named a libcosmic type would tie every app to one version. Every crate here is plain Rust. Its types are its own: `Srgb`/`Srgba` (convertible to and from `[f32; 3]`/`[f32; 4]`), a `Colour` role, and an `Events<T>` stream. `household-wait` uses tokio, which libcosmic's executor already runs. Keep it that way: a change that needs a widget or a theme type belongs in the app's glue.
+The apps pin different libcosmic versions, and a crate that named a libcosmic type would tie every app to one version. Every base crate is plain Rust; only `household-widgets` takes libcosmic, and it does so by upstream's URL with no revision, so that it is built with each app's own libcosmic (see its README). Its types are its own: `Srgb`/`Srgba` (convertible to and from `[f32; 3]`/`[f32; 4]`), a `Colour` role, and an `Events<T>` stream. `household-wait` uses tokio, which libcosmic's executor already runs. Keep it that way: a change that needs a widget or a theme type belongs in the app's glue.
 
 The household's UI test harness draws the apps' own widgets, so it needs libcosmic. It is not here: it is its own repository, [ThomasAndJuliet/household-test](https://github.com/ThomasAndJuliet/household-test), which depends on libcosmic as an app does.
 
@@ -22,6 +32,7 @@ The household's UI test harness draws the apps' own widgets, so it needs libcosm
 [dependencies]
 household-settings = { git = "https://github.com/ThomasAndJuliet/household-kit.git" }
 household-tones = { git = "https://github.com/ThomasAndJuliet/household-kit.git" }
+household-widgets = { git = "https://github.com/ThomasAndJuliet/household-kit.git" }
 ```
 
 The commit is pinned by the app's `Cargo.lock`. To pick up a change, push here first, then run `cargo update -p household-tones` (or the crate concerned) in the app and commit the lock.
@@ -112,11 +123,11 @@ The size and line spacing are the shared settings (`paper-size`, `paper-line-spa
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+cargo clippy --workspace --exclude household-widgets --all-targets --locked -- -D warnings
+cargo test --workspace --exclude household-widgets --locked
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same three commands. It needs no secrets. Pushes and pull requests from this repository run on the household's own runner; pull requests from forks run on GitHub-hosted runners with a read-only token.
+CI (`.github/workflows/ci.yml`) runs those in its `check` job, and in a second job, `widgets`, runs Clippy and the tests of `household-widgets` (see its README). It needs no secrets. Pushes and pull requests from this repository run on the household's own runner; pull requests from forks run on GitHub-hosted runners with a read-only token.
 
 ## Licence
 
