@@ -1,0 +1,58 @@
+[package]
+name = "household-widgets"
+description = "The household apps' shared libcosmic widgets: what more than one app draws, in one place"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+publish = false
+repository = "https://github.com/ThomasAndJuliet/household-widgets"
+
+# Also build independently when checked out inside an application's worktree.
+[workspace]
+
+# libcosmic, as an app depends on it (see the README). It names upstream's
+# URL with no branch or rev on purpose, as household-test's does: every app
+# already has `[patch."https://github.com/pop-os/libcosmic.git"]` pointing at
+# the household fork, and a patch replaces every dependency on that URL, so
+# this crate builds against the app's own libcosmic and the widget, theme
+# and renderer types are the app's. Naming the fork here instead would give
+# an app two libcosmics whose types do not match. The features are the least
+# these widgets need; the app's own are added to them.
+[features]
+a11y = ["libcosmic/a11y", "dep:iced_accessibility"]
+
+[dependencies]
+libcosmic = { git = "https://github.com/pop-os/libcosmic.git", default-features = false }
+iced_accessibility = { git = "https://github.com/pop-os/libcosmic.git", optional = true }
+# The colour maths (the muted accent, what goes on it); the app's Cargo.lock
+# decides the revision
+household-tones = { git = "https://github.com/ThomasAndJuliet/household-kit.git" }
+# Zeroing what a password box lets go of (PasswordBox), as the terminal
+# zeroes its secrets; MIT OR Apache-2.0
+zeroize = "1"
+
+# For this repository's own build only (its tests, Clippy and CI): the
+# household libcosmic fork at a fixed revision. Cargo reads [patch] only
+# from the workspace being built, so an app that depends on household-widgets
+# never sees this one: its own [patch] on pop-os/libcosmic (every household
+# app has it) chooses the libcosmic this crate is built with, and there is
+# one libcosmic in its lock. Move this pin when the apps move, so that CI
+# here builds against what they use.
+[patch."https://github.com/pop-os/libcosmic.git"]
+libcosmic = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+cosmic-config = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+cosmic-config-derive = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+cosmic-theme = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_core = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_debug = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_futures = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_graphics = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_program = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_renderer = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_runtime = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_tiny_skia = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_wgpu = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_widget = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }
+iced_accessibility = { git = "https://github.com/ThomasAndJuliet/libcosmic.git", rev = "cb889ef4bbfccd45739d5fa6f9140fd0e53df9fa" }

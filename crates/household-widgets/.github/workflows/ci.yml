@@ -1,0 +1,57 @@
+name: CI
+# The crate's own checks: formatting, Clippy and its tests. household-widgets
+# is a library, so there is no Flatpak build here.
+#
+# Where it runs depends on who started it. Pushes to this repository,
+# same-repository pull requests and manual runs are trusted: they run on the
+# household's self-hosted runner (`neo-ubuntu`), or on a GitHub-hosted one when
+# the CI_RUNNER variable is "hosted".
+# A pull request from a fork is not trusted: it runs on a GitHub-hosted runner
+# with a read-only token, receives no secrets, and never reaches a self-hosted
+# runner. This workflow uses `pull_request`, never `pull_request_target`.
+#
+# The crate is built against the household libcosmic fork at the revision in
+# Cargo.toml's [patch], and household-tones from household-kit, both fetched
+# over https from public repositories, so no secret is needed. The [patch] is
+# for this build only; an app that depends on household-widgets builds it with
+# the app's own libcosmic.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  check:
+    name: Format, Clippy and tests
+    # Self-hosted only for a trusted event: a push, a manual run or a pull
+    # request whose head is this repository. Anything else is GitHub-hosted.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNNER != 'hosted' && 'neo-ubuntu' || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Fixed, so that formatting and Clippy say the same everywhere
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
+        with:
+          toolchain: 1.99.0
+          components: clippy, rustfmt
+      - name: Format
+        run: cargo fmt --all --check
+      # What libcosmic builds against
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libxkbcommon-dev libfontconfig1-dev libfreetype6-dev libwayland-dev libinput-dev libudev-dev libdbus-1-dev
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: Default tests
+        run: cargo test --locked
+      - name: Tests with accessibility
+        run: cargo test --all-features --locked
