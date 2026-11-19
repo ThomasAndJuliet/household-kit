@@ -9,12 +9,62 @@
 //! row and the engine judges by it; nothing else changes.
 
 use crate::kinds::{Kind, Kinds, Role};
+use crate::level::Level;
 
-/// Both tables.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// The tables, the order of drawing, and the level from which squeezing is
+/// permitted.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Rules {
     pub distances: Distances,
     pub covering: Covering,
+    /// Which kinds are drawn beneath which (semantics C5). A candidate
+    /// standing on a thing drawn above a line does not meet that line where
+    /// the thing covers it.
+    pub drawing_order: Vec<Beneath>,
+    /// The level from which a distance below its ideal is accepted
+    /// (semantics A7). Compositions take the same value for their gaps.
+    pub squeeze_from: Level,
+}
+
+impl Default for Rules {
+    fn default() -> Self {
+        Self {
+            distances: Distances::default(),
+            covering: Covering::default(),
+            drawing_order: vec![Beneath::new(
+                Match::kinds(Kind::ValueLine),
+                Match::kinds(Kind::DataMark),
+            )],
+            squeeze_from: Level::Strong,
+        }
+    }
+}
+
+impl Rules {
+    /// Whether `lower` is drawn beneath `upper` by the order of drawing.
+    pub fn drawn_beneath(
+        &self,
+        lower: (Kind, Option<&Role>),
+        upper: (Kind, Option<&Role>),
+    ) -> bool {
+        self.drawing_order
+            .iter()
+            .any(|row| row.beneath.matches(lower.0, lower.1) && row.above.matches(upper.0, upper.1))
+    }
+}
+
+/// One entry of the order of drawing: things matching `beneath` are drawn
+/// beneath things matching `above` ("Gridline | data marks | beneath them").
+#[derive(Clone, Debug, PartialEq)]
+pub struct Beneath {
+    pub beneath: Match,
+    pub above: Match,
+}
+
+impl Beneath {
+    pub fn new(beneath: Match, above: Match) -> Self {
+        Self { beneath, above }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +277,8 @@ pub enum DistanceRow {
     Related,
     /// The unrelated ideal.
     Unrelated,
+    /// Text spacing, for a pair the caller joined by a text gap.
+    Text(TextGap),
 }
 
 impl DiagramSpacing {
@@ -298,6 +350,7 @@ impl Verdict {
     /// The position this verdict gives a place in a list of places.
     pub fn preference(self) -> Preference {
         match self {
+            Self::MoveFirstElseHalo => Preference::ElseHalo,
             Self::LessPreferred => Preference::LessPreferred,
             Self::LastInOrder => Preference::LastInOrder,
             _ => Preference::InOrder,
@@ -306,12 +359,15 @@ impl Verdict {
 }
 
 /// A place's position in a list of places: places in order first, then
-/// the less preferred ones, then those last in order, each group in the
+/// those that need a halo where moving would have avoided one, then the
+/// less preferred ones, then those last in order, each group in the
 /// caller's order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Preference {
     #[default]
     InOrder,
+    /// "Move first … else a halo": after every clean place (semantics C3).
+    ElseHalo,
     LessPreferred,
     LastInOrder,
 }
@@ -352,8 +408,8 @@ pub enum Meets {
 }
 
 /// Whether a row applies to the placed thing's own occupant, another's, or
-/// either. A thing is its own when one is the other's owner or both have
-/// the same owner.
+/// either. A thing is another's own only when one owns the other; two
+/// things with the same owner are not each other's own (semantics C1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ownership {
     Any,
@@ -380,6 +436,10 @@ pub struct CoveringRow {
     pub meets: Meets,
     pub ownership: Ownership,
     pub verdict: Verdict,
+    /// Whether the verdict holds also where the placed thing comes within
+    /// the distance without meeting, in place of the distance findings
+    /// ("along or close to a data line").
+    pub near: bool,
 }
 
 impl CoveringRow {
@@ -396,7 +456,14 @@ impl CoveringRow {
             meets,
             ownership,
             verdict,
+            near: false,
         }
+    }
+
+    /// This row with its verdict holding within the distance as well.
+    pub fn near(mut self) -> Self {
+        self.near = true;
+        self
     }
 }
 
@@ -450,6 +517,20 @@ impl Covering {
                 row.placed.matches(placed.0, placed.1) && row.meets == Meets::FigureEdge
             })
             .map(|index| (self.rows[index].verdict, CoveringRef::Row(index)))
+    }
+
+    /// The row a placed thing would meet an occupant by, if one matches;
+    /// for things that come near without meeting.
+    pub fn row_for(
+        &self,
+        placed: (Kind, Option<&Role>),
+        met: (Kind, Option<&Role>),
+        own: bool,
+    ) -> Option<usize> {
+        match self.verdict(placed, met, own).1 {
+            CoveringRef::Row(index) => Some(index),
+            _ => None,
+        }
     }
 
     /// The index of the row with this name, for a caller changing it.
@@ -592,12 +673,34 @@ impl Default for Covering {
                     Never,
                 ),
                 row(
+                    "a connector and its own target",
+                    Match::kinds(Connector),
+                    on(DataMark.into()),
+                    Own,
+                    MeantToMeet,
+                ),
+                row(
                     "a connector through a data mark not its target",
                     Match::kinds(Connector),
                     on(DataMark.into()),
-                    Any,
+                    NotOwn,
                     Never,
                 ),
+                row(
+                    "a connector across a gridline",
+                    Match::kinds(Connector),
+                    on(ValueLine.into()),
+                    Any,
+                    Allowed,
+                ),
+                row(
+                    "a connector along or close to a data line",
+                    Match::kinds(Connector),
+                    on(DataLine.into()),
+                    Any,
+                    LessPreferred,
+                )
+                .near(),
                 row(
                     "a connector across another connector",
                     Match::kinds(Connector),
@@ -681,6 +784,45 @@ mod tests {
         .collect();
         assert_eq!(rejecting, [Verdict::Never]);
         assert!(Verdict::LastInOrder.preference() > Verdict::LessPreferred.preference());
+    }
+
+    #[test]
+    fn a_halo_one_could_move_from_comes_after_clean_places_and_before_less_preferred() {
+        let order = [
+            Verdict::Allowed,
+            Verdict::AllowedWithHalo,
+            Verdict::MoveFirstElseHalo,
+            Verdict::LessPreferred,
+            Verdict::LastInOrder,
+        ]
+        .map(Verdict::preference);
+        assert_eq!(
+            order,
+            [
+                Preference::InOrder,
+                Preference::InOrder,
+                Preference::ElseHalo,
+                Preference::LessPreferred,
+                Preference::LastInOrder,
+            ]
+        );
+    }
+
+    #[test]
+    fn the_default_rules_draw_value_lines_beneath_data_marks_and_squeeze_from_strong() {
+        let rules = Rules::default();
+        assert_eq!(rules.squeeze_from, Level::Strong);
+        assert!(rules.drawn_beneath((Kind::ValueLine, None), (Kind::DataMark, None)));
+        assert!(!rules.drawn_beneath((Kind::DataLine, None), (Kind::DataMark, None)));
+        assert!(!rules.drawn_beneath((Kind::DataMark, None), (Kind::ValueLine, None)));
+        let near: Vec<_> = rules
+            .covering
+            .rows
+            .iter()
+            .filter(|row| row.near)
+            .map(|row| row.name.as_str())
+            .collect();
+        assert_eq!(near, ["a connector along or close to a data line"]);
     }
 
     #[test]
