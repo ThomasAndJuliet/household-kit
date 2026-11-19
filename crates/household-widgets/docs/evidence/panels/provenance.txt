@@ -1,0 +1,39 @@
+Native shared panel example — 2026-11-15
+
+Validated worktree base: 91d371678fd7132f2b1cd8a22b7a1434a04be8f7
+Build/capture host: neo, jcooke-build toolbox through neo-work/neo-cargo; headless tiny-skia, light theme, scale 1, default native font 14px, symbols on 16px canvas.
+
+cargo fmt --all --check: passed
+cargo clippy --all-targets --all-features --locked -- -D warnings: passed on neo
+cargo test --locked -- --test-threads=2: 281 passed
+cargo test --all-features --locked -- --test-threads=2: 283 passed
+Two pre-existing ignored doctests in both configurations.
+
+Native example frame test drives actual collapse/expand and popup action events. Separate integrated test exercises resistance, manual sizing across rebuilds, saved sizes after collapse, panel hide/reopen.
+Discovered/fixed: divider cross-axis width allocation; precision-induced no-fit/cancellation; wrapped navigation losing allocated width and moving trailing controls; fractional divider lines blurring together.
+
+Images: expanded.png and collapsed.png 720x600, menu-narrow.png 420x600. Raw native RGBA encoded losslessly as PNG. No generated-image or HTML rendering. Example data, not running Terminal UI.
+No desktop window was opened. No cross-window resource transfer, tab dragging or keyboard divider support is demonstrated.
+No commit/push/CI/merge/deployment performed.
+
+Source SHA-256:
+872df48628d59d5c16f021f19be829ee85b5fd98ed2a24b5a75b590f3b54c866  src/layout.rs
+9a3a5c6609cfe7c4cde5de1e4299decfdcdd1857928ef7989f3a92146c50e114  src/layout_engine_tests.rs
+beba5e4e7ca39d09609ef86fef0acdd99c14fc3c8c43a0956f0d41d09a00ed87  src/lib.rs
+a90618798f903758b56fba57db23d80b0a29050d906921c986627bb4319018f0  src/panel_layout.rs
+ad3fa0fa6700569ef7107c10bbd4d9fbea459688ce1b2e75992834c9baf963d0  src/panel_resize.rs
+2262d09b44dcb26bcefc87b52eba9c64339c254833f22f7331128b650143b5e1  src/panel_state.rs
+a4db0cf003161034efe56700e6c095c1ba54ff4f2fbab2d9b7d611247627f267  src/panel_header.rs
+e7edcf76a1a44f38107608d427ce021ab921a7a5208c034290886189b59e5a54  src/panel_divider.rs
+591cf31f96fc5a4ae07bbc952d763ed54928935efd8b323210cbe013362de1c3  src/panel_fixture_tests.rs
+ab3ffb898081d508e5b5a2e8690ef5ced192eeb3270c581dfb79f0aa2108ab22  tests/panel-assets/ai-session-symbolic.svg
+ccb21b4c415bc4e71a73afc26d60c8cab6ff8913dbb7cc7033890bc2b57dfba8  tests/panel-assets/go-next-symbolic.svg
+eccd317711e8156cbef69039070dd3ba65ce3467949367469e12654c44afc9c6  tests/panel-assets/go-up-symbolic.svg
+b5fe31ce6c5c1fb20332e661d1150b71afac9b8f4101bea3e5ce8101bba91a3e  tests/panel-assets/mail-attachment-symbolic.svg
+17012755ddaa28dec68bef6b96d2e1a227fa0ddae8c50fa89fe9036135d08cdf  tests/panel-assets/panel-right-show-symbolic.svg
+06a8b589d10d238b50225ab77ad143f00dda83dd1b319ae9f919451acff2d27b  tests/panel-assets/panel-right-shown-symbolic.svg
+89b4d7a23d5b104a5d829eb510421448cb08117f5ca2e076c71e7a2711435c48  tests/panel-assets/plan-symbolic.svg
+c256ca54b60b382c83cd56d28e3af4e5334052995c303c30f19d6f41be965632  tests/panel-assets/terminal-symbolic.svg
+f325c379f79074a1c56ce0df900d84bfb1d6d34d8366617997dcb1349f06b147  tests/panel-assets/tool-calls-symbolic.svg
+b8ec6b7f6f2c4860e22ddc5fab9b9cd3e140b5b18cf650e7230596be667e06be  tests/panel-assets/view-more-symbolic.svg
+47f9929538b156cde75b2c680408cdab551e2df1716928c0cee948f7d5baa439  tests/panel-assets/x-office-document-symbolic.svg
