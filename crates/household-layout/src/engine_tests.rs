@@ -691,3 +691,195 @@ fn a_frame_counts_its_chrome_inside_the_fit() {
             .is_err()
     );
 }
+
+/// The toolbar of the module documentation's first worked example.
+fn toolbar(arrangement: Arrangement) -> Child<'static> {
+    let button = |name: &str| {
+        forms(vec![
+            (Level::Preferred, block(90.0, 32.0)),
+            (Level::Mild, block(32.0, 32.0)),
+        ])
+        .identity(Id::new(name), None)
+    };
+    let children = vec![
+        block(160.0, 32.0)
+            .minimum_width(|_, _| 60.0)
+            .identity(Id::new("title"), None),
+        button("open"),
+        button("save"),
+        button("share"),
+        block(100.0, 32.0)
+            .weight(0.0)
+            .identity(Id::new("primary"), None),
+    ];
+    match arrangement {
+        Arrangement::Row => row_child(children, 8.0),
+        Arrangement::Wrap => wrap_child(children, 8.0),
+        Arrangement::Column => column_child(children, 8.0),
+    }
+    .identity(Id::new("toolbar"), None)
+}
+
+fn toolbar_stages() -> Vec<Stage<'static>> {
+    vec![
+        Stage::new(Level::Preferred, toolbar(Arrangement::Row)),
+        Stage::new(Level::Mild, toolbar(Arrangement::Row)),
+        Stage::new(Level::Mild, toolbar(Arrangement::Wrap)),
+    ]
+}
+
+fn width_of(plan: &GeometryPlan, id: &str) -> f64 {
+    plan.find(&Id::new(id))
+        .expect("a placed child")
+        .1
+        .size
+        .width
+}
+
+#[test]
+fn worked_example_the_toolbar() {
+    let stages = toolbar_stages();
+    let row = toolbar(Arrangement::Row);
+    assert_eq!(row.query(Level::Preferred).preferred.width, 562.0);
+    assert_eq!(row.query(Level::Preferred).minimum.width, 462.0);
+    assert_eq!(row.query(Level::Mild).preferred.width, 388.0);
+    assert_eq!(row.query(Level::Mild).minimum.width, 288.0);
+
+    let chosen = |width| choose_stage(&stages, Size::new(width, 80.0));
+    let wide = chosen(600.0).unwrap();
+    assert_eq!((wide.stage_index, wide.geometry.size.width), (0, 562.0));
+    assert_eq!(width_of(&wide.geometry, "title"), 160.0);
+
+    let shorter = chosen(500.0).unwrap();
+    assert_eq!(shorter.stage_index, 0);
+    assert_eq!(width_of(&shorter.geometry, "title"), 98.0);
+    assert_eq!(width_of(&shorter.geometry, "open"), 90.0);
+    assert_eq!(width_of(&shorter.geometry, "primary"), 100.0);
+
+    let compact = chosen(400.0).unwrap();
+    assert_eq!(compact.stage_index, 1);
+    assert_eq!(width_of(&compact.geometry, "title"), 160.0);
+    assert_eq!(width_of(&compact.geometry, "open"), 32.0);
+
+    let narrower = chosen(300.0).unwrap();
+    assert_eq!(narrower.stage_index, 1);
+    assert_eq!(width_of(&narrower.geometry, "title"), 72.0);
+
+    let wrapped = chosen(250.0).unwrap();
+    assert_eq!(wrapped.stage_index, 2);
+    assert_eq!(wrapped.geometry.rows(), &[vec![0, 1, 2, 3], vec![4]]);
+    assert_eq!(width_of(&wrapped.geometry, "title"), 130.0);
+    assert_eq!(wrapped.geometry.size.height, 72.0);
+    let (position, _) = wrapped.geometry.find(&Id::new("primary")).unwrap();
+    assert_eq!(position, Point::new(0.0, 40.0));
+
+    // Too low for two rows: the wrap takes the gap between its rows off
+    // first, and its two rows of 32 need 64 of the 52 left.
+    let low = choose_stage(&stages, Size::new(250.0, 60.0)).unwrap_err();
+    assert_eq!(
+        low.failures[2].error,
+        AllocationError::NoFit {
+            required: 64.0,
+            available: 52.0
+        }
+    );
+    let narrow = chosen(90.0).unwrap_err();
+    assert_eq!(narrow.attempted, 3);
+    assert_eq!(
+        narrow.failures[2],
+        StageFailure {
+            stage_index: 2,
+            level: Level::Mild,
+            error: AllocationError::NoFit {
+                required: 100.0,
+                available: 90.0
+            },
+            child: Some(Id::new("toolbar")),
+        }
+    );
+}
+
+/// The chart's vertical gap of the module documentation's second worked
+/// example: 16 recommended and 8 compact; at Strong it starts at 8 and
+/// may be squeezed to 4.
+struct VerticalGap;
+
+impl Leaf for VerticalGap {
+    fn query(&self, level: Level) -> MeasuredSize {
+        let start = if level >= Level::Strong { 8.0 } else { 16.0 };
+        MeasuredSize {
+            preferred: Size::new(0.0, start),
+            minimum: Size::new(0.0, start),
+        }
+    }
+
+    fn layout(&self, level: Level, maximum: Size) -> Size {
+        let start = self.query(level).preferred.height;
+        Size::new(0.0, start.min(maximum.height))
+    }
+}
+
+fn chart() -> Child<'static> {
+    let gap = scroll_child_with_minimum(VerticalGap, |level| {
+        Size::new(0.0, if level >= Level::Strong { 4.0 } else { 8.0 })
+    })
+    .identity(Id::new("gap"), None);
+    column_child(
+        vec![
+            block(120.0, 20.0).identity(Id::new("title"), None),
+            gap,
+            block(180.0, 100.0).identity(Id::new("plot"), None),
+        ],
+        0.0,
+    )
+}
+
+#[test]
+fn worked_example_a_charts_vertical_gap() {
+    let stages = vec![
+        Stage::new(Level::Preferred, chart()),
+        Stage::new(Level::Strong, chart()),
+    ];
+    let gap_at = |height| {
+        let chosen = choose_stage(&stages, Size::new(200.0, height)).unwrap();
+        let (position, gap) = chosen.geometry.find(&Id::new("gap")).unwrap();
+        assert_eq!(position.y, 20.0);
+        (
+            chosen.stage_index,
+            gap.size.height,
+            chosen.geometry.size.height,
+        )
+    };
+    assert_eq!(gap_at(140.0), (0, 16.0, 136.0));
+    assert_eq!(gap_at(130.0), (0, 10.0, 130.0));
+    assert_eq!(gap_at(128.0), (0, 8.0, 128.0));
+    assert_eq!(gap_at(125.0), (1, 5.0, 125.0));
+    let none = choose_stage(&stages, Size::new(200.0, 120.0)).unwrap_err();
+    assert_eq!(
+        none.failures
+            .iter()
+            .map(|failure| failure.error)
+            .collect::<Vec<_>>(),
+        vec![
+            AllocationError::NoFit {
+                required: 128.0,
+                available: 120.0
+            },
+            AllocationError::NoFit {
+                required: 124.0,
+                available: 120.0
+            },
+        ]
+    );
+    // An ordinary child's height is a floor: the same gap as a plain leaf
+    // gives nothing, and the column does not fit below 136.
+    let plain = column_child(
+        vec![block(120.0, 20.0), child(VerticalGap), block(180.0, 100.0)],
+        0.0,
+    );
+    assert!(
+        plain
+            .query_at(Level::Preferred, Size::new(200.0, 130.0))
+            .is_err()
+    );
+}

@@ -2,43 +2,267 @@
 
 //! The household apps' layout engine, without a toolkit.
 //!
-//! This is household-widgets' engine (`layout.rs` and `layout_frame.rs`
-//! there) translated item by item, with the engine's names, so that a chart
-//! lays out exactly as a window does. Where the engine measures a native
-//! widget, the port asks a [`Leaf`] the same two questions: its preferred
-//! size and useful minimum at one exact level, and its size when laid out
-//! in an offered space. Everything about live widgets is left out: views,
-//! the verified commit, speculative measuring, native state, decorators,
-//! popups, hovers, navigation regions and presentations.
+//! # What the engine is for
 //!
-//! In short, as the engine works: at one exact level a component has a
-//! preferred size and a useful minimum ([`MeasuredSize`]); a shortage is
-//! shared by [`allocate_width`] and surplus by `grow`. Between levels the
-//! change is discrete ([`forms`]). Only the root selects a level, and a
-//! composite forwards that exact level to its children. A policy is a list
-//! of [`Stage`]s, and [`choose_stage`] takes the first that fits. Widths
-//! come first; each child is then planned at its width, which gives its
+//! The engine decides where the boxes of a window or a chart go when the
+//! room they are given changes. It answers one question for a tree of
+//! boxes and an available size: which of the arrangements the caller has
+//! declared fits, and where every box goes in it. A window and a chart
+//! that use it adapt in the same way, by the same rules.
+//!
+//! What it deliberately does not do matters as much. It draws nothing and
+//! measures nothing: the caller measures its own content (see [`Leaf`]).
+//! It never invents hiding, clipping or scrolling: a box is hidden only
+//! where the box itself declares it may be ([`Child::hidden_when`]), and
+//! a box gives up height only where it declares a viewport. It does not
+//! decide child by child which box should compact: every box is asked at
+//! the same level, so boxes compact together. And it has no scores: it
+//! does not weigh one layout against another, it takes the first declared
+//! stage that fits.
+//!
+//! # The model
+//!
+//! A layout is a tree of [`Child`]ren. A leaf is the caller's content; a
+//! composite arranges its immediate children in a row, a column or a wrap
+//! (rows that break onto new lines), with a fixed spacing between them.
+//!
+//! A [`Level`] says how much compromise is permitted: `Preferred`, `Mild`,
+//! `Strong` or `AllPermitted`, in increasing order. Each child changes
+//! with the level in two kinds of way.
+//!
+//! - **Continuous change, within one level.** At one exact level a child
+//!   has a preferred size and a useful minimum ([`MeasuredSize`]). Either
+//!   may depend on the level. Between those two widths the child can take
+//!   any width a parent gives it; a shortage of room is shared out between
+//!   siblings by weight (see *Sharing a shortage* below), and a surplus is
+//!   shared by `grow`.
+//! - **Discrete change, between levels.** A child can declare a different
+//!   form from a given level ([`forms`]): for example a labelled button at
+//!   `Preferred` and an icon from `Mild`. A form carries on to every
+//!   higher level until the next level that declares another.
+//!
+//! # One level for everyone
+//!
+//! Only the root selects the level. Every composite passes that exact
+//! level on to all of its children, which pass it on to theirs; no child
+//! picks a level for itself and no parent schedules its children one at a
+//! time. So when a toolbar is asked at `Mild`, every button in it takes its
+//! `Mild` form at once. Which things compact together is decided by how
+//! the tree is organised and by the forms each child declares, not by a
+//! search over who should give way.
+//!
+//! # Stages
+//!
+//! The caller's policy is a short ordered list of [`Stage`]s, each one
+//! level and one tree, for example: a row at `Preferred`; a row at `Mild`;
+//! a wrap at `Mild`; a wrap at `Strong`. [`choose_stage`] tries them in
+//! order and takes the first that fits. Putting the wrap before the `Mild`
+//! row would make the layout change before the boxes compact; the order
+//! is the caller's statement of which it prefers.
+//!
+//! A stage fits when its whole tree can be laid out within the available
+//! width and height: every child at least its useful minimum wide, every
+//! leaf no wider than the width it was given, and the total height no more
+//! than the height available, each to within [`FIT_EPSILON`]. Each stage
+//! starts again from the preferred sizes at its own level; nothing carried
+//! over from a stage that failed. So a compact form that frees room lets
+//! its siblings grow back towards their preferred widths. If no stage
+//! fits, the answer is [`NoFit`]; nothing is hidden, clipped or compacted
+//! further than the stages declare.
+//!
+//! # How one layout is worked out
+//!
+//! Width comes first. Content such as text that wraps is taller when it is
+//! narrower, so a child's height is only known once its width is: the
+//! engine settles every width, then lays each leaf out at its width with
+//! unbounded height, so that a clipped height can never pass for a fit.
+//!
+//! - **A row** shares its width, less the spacing, between its children
+//!   (see *Sharing a shortage*), then lays each one out at its width. Its
+//!   height is that of its tallest child, and each shorter child is centred
+//!   vertically in it, unless the row is top-aligned ([`row_child_top`]).
+//! - **A column** gives each child its own share of the column's width
+//!   (each child alone, as if it were the only one), and lays it out there,
+//!   which gives the child's height. The heights are then fitted to the
+//!   column's height. An ordinary child's height is a floor: content laid
+//!   out at its width needs that height, and taking any away would clip
+//!   it. Only a child that declares vertical capacity can give height:
+//!   a viewport ([`scroll_child`], [`scroll_child_with_minimum`]), which
+//!   says the least height at which it still works, or a composite that
+//!   holds one. A chart's gap that
+//!   may shrink declares itself in the same way. The heights are shared
+//!   between such children by the same rule as widths, using each child's
+//!   `weight`, and surplus height goes to children that `grow_height`.
+//! - **A wrap** packs its children into rows greedily by their useful
+//!   minimum widths: a child goes on the current row if its minimum, with
+//!   the spacing, still fits, and starts a new row otherwise. Each row then
+//!   shares the full width afresh, as a row does. The rows stack downwards.
+//!   If they are too tall, the wrap shares its height between the rows in
+//!   the way a column does, so again only viewports can give height.
+//!
+//! Some children have a part to play beyond their content:
+//!
+//! - A **hidden** child ([`Child::hidden_when`]) takes no room and no
+//!   spacing, and has no placement; a composite all of whose children are
+//!   hidden is hidden itself. The placements of the others keep their
+//!   index among the declared children.
+//! - A **frame** ([`framed_child`]) adds chrome around a child. The chrome
+//!   is counted inside the fit: the frame's minimum and preferred sizes
+//!   are the child's plus the padding (its preferred width stands for its
+//!   minimum if its weight is zero), and the child is laid out in what
+//!   is left when the padding is taken away.
+//! - A **spacer** ([`spacer`]) is an empty leaf with a fixed minimum width
+//!   and a weight of zero that takes surplus width (`grow` of 1): it pushes
+//!   what follows it to the far end of a row.
+//! - **Growth**: after any shortage has been shared, a surplus is given to
+//!   the children with a positive `grow`, in proportion to it. Without any,
+//!   the surplus is left empty at the end of the row.
+//!
+//! # Sharing a shortage
+//!
+//! When children's preferred widths add up to more than the room,
+//! [`allocate_width`] takes the shortage from them at a rate of
+//! `weight × (preferred − minimum)`. A child that reaches its minimum is
+//! held there, and what remains of the shortage is shared again between
+//! the others at their original rates. A weight of zero protects the
+//! preferred width: such a child never shrinks, so wherever the engine
+//! adds up minima it counts that child's preferred width as its minimum.
+//! If the minima (and the protected preferred widths) add up to more than
+//! the room, nothing fits.
+//!
+//! For example, three children of preferred widths 100, 100 and 40, minima
+//! 80, 0 and 0, and weights 3, 1 and 0, in 160. The shortage is 80. The
+//! rates are 3 × 20 = 60 and 1 × 100 = 100; the third child is protected.
+//! The first share takes 30 from the first child, which can give only 20
+//! and stops at 80, and 50 from the second, which goes to 50. Ten remain;
+//! only the second can give, so it takes all ten and ends at 40. The widths
+//! are 80, 40 and 40. In 119 nothing fits: the minima need 80 + 0 + 40 =
+//! 120. (Checked by the test
+//! `capacity_sharing_uses_original_rates_clamps_and_protects_zero_weight`.)
+//!
+//! # A worked example: a toolbar
+//!
+//! A toolbar row with a spacing of 8 holds a title, which prefers 160 and
+//! is useful down to 60; three buttons, 90 wide with their labels and 32
+//! as icons, with the icon form from `Mild`; and a primary action 100 wide
+//! with a weight of zero, so that it keeps its label. Every box is 32
+//! high. The stages are a row at `Preferred`, a row at `Mild` and a wrap
+//! at `Mild`, and the height available is 80.
+//!
+//! At `Preferred` the row prefers 160 + 3 × 90 + 100 + 4 × 8 = 562 and
+//! needs at least 60 + 270 + 100 + 32 = 462. At `Mild` it prefers 160 +
+//! 3 × 32 + 100 + 32 = 388 and needs 288.
+//!
+//! - In 600, the `Preferred` row fits as it is, 562 wide; the rest is
+//!   left empty.
+//! - In 500, the `Preferred` row is 62 short. Only the title can give, so
+//!   it takes the whole shortage and is 98 wide; the buttons keep their
+//!   labels.
+//! - In 400, the `Preferred` row cannot fit (it needs 462), so the `Mild`
+//!   row is tried from its own preferred sizes: all three buttons become
+//!   icons together, and the title is back at 160.
+//! - In 300, the `Mild` row is 88 short; the title gives it and is 72.
+//! - In 250, neither row fits (the `Mild` one needs 288), and the wrap is
+//!   tried. Packed by minima, the title and the three icons take 60 + 3 ×
+//!   (8 + 32) = 180, and the primary action would make 288, so it starts a
+//!   second row. On the first row the title shares out the 226 left after
+//!   the spacing and is 130 wide. The wrap is 32 + 8 + 32 = 72 high, and
+//!   the primary action is placed at (0, 40).
+//! - In 250 by 60, no stage fits: the wrap's two rows need 64 of the 52
+//!   left once the spacing between them is taken off.
+//! - In 90, no stage fits: even the wrap needs the primary action's 100.
+//!
+//! (Checked by the test `worked_example_the_toolbar`.)
+//!
+//! # A worked example: a chart's vertical gap
+//!
+//! A chart's column holds a title 20 high, a gap, and a plot 100 high,
+//! with no spacing. The gap is 16 at its recommended size and 8 at its
+//! compact size. It declares a viewport whose least height is 8 at
+//! `Preferred` and `Mild`, so that at those levels it runs from 16 down to
+//! 8. At `Strong` it starts at its compact size, 8, and may be squeezed
+//! to 4. The stages are the column at `Preferred` and at `Strong`.
+//!
+//! - In a height of 140, the `Preferred` column fits as it is: 20 + 16 +
+//!   100 = 136.
+//! - In 130 it is 6 short. The title and the plot are floors, so the gap
+//!   gives all 6 and is 10.
+//! - In 128 the gap is at its compact size, 8.
+//! - In 125 the `Preferred` column needs 128 and does not fit. At
+//!   `Strong` the gap starts at 8, the column is 3 short, and the gap is 5.
+//! - In 120 nothing fits: `Strong` needs 20 + 4 + 100 = 124.
+//!
+//! Declared as an ordinary leaf instead, the gap would be a floor like the
+//! title, and the `Preferred` column would not fit below 136. (Checked by
+//! the test `worked_example_a_charts_vertical_gap`.)
+//!
+//! # What a caller supplies and gets back
+//!
+//! The caller supplies the leaves. A [`Leaf`] answers two questions, both
+//! pure: its preferred size and useful minimum at a level, and its size
+//! when laid out within a given width and height limit at a level. Around
+//! the leaves the caller builds the tree with this module's builders and
+//! declares its stages.
+//!
+//! It gets back a [`StagePlan`]: which stage was taken, at which level,
+//! and a [`GeometryPlan`], whose size, and whose placements of each child
+//! (its index, position relative to its parent and own plan, recursively)
+//! say where everything goes. Or it gets [`NoFit`], with what failed at
+//! each stage. A single child can also be asked directly with
+//! [`Child::query`] and [`Child::query_at`].
+//!
+//! # Where it comes from
+//!
+//! The engine is household-widgets' `layout.rs` (with `layout_frame.rs`),
+//! the layout of the household's apps, which follows the levels contract
+//! of 8 November 2026. This module is a translation of it, item by item,
+//! with the engine's names; where the engine measures a native widget,
+//! this module asks a [`Leaf`]. What is about live widgets is left out:
+//! views and their elements, the verified commit, speculative measuring,
+//! native state, decorators, popups, hovers, navigation regions and
+//! presentations. household-widgets' test `layout_port_equality` builds
+//! trees in both and requires the same results over sweeps of width and
 //! height.
 //!
-//! Three things are added, none of which changes a choice the engine
-//! makes: a child may carry an [`Id`] and a [`Source`], which its node in
-//! the plan carries ([`GeometryPlan::find`]); when no stage fits, [`NoFit`]
-//! says for each stage what failed and in which identified child; and a
-//! child may report what its form does not show
-//! ([`Child::report_information`]), gathered as the engine gathers its
-//! source reports.
+//! # Three additions
+//!
+//! None of these changes a choice the engine makes.
+//!
+//! - **Identities.** A child may carry an [`Id`], and the [`Source`] in
+//!   the input it draws ([`Child::identity`]); its node in the plan carries
+//!   them, and [`GeometryPlan::find`] finds a node by identity. A chart
+//!   needs to know which box is its title and which its legend; a window
+//!   knows its widgets by other means.
+//! - **What failed.** When no stage fits, [`NoFit`] lists, for each stage,
+//!   the engine's own error ([`AllocationError`]), which says how much
+//!   room was required and how much was available, and the identity of the
+//!   child it came from where one is known. The engine discards this; a
+//!   chart needs it to say which size would help.
+//! - **What a form does not show.** A child may report which information
+//!   its planned form shortens or omits ([`Child::report_information`]);
+//!   the reports are gathered in the plan ([`GeometryPlan::reports`]) as
+//!   the engine gathers its source reports, so that what is left out can be
+//!   shown some other way.
 
 use std::rc::Rc;
 
+/// Why an allocation or a plan failed: the engine's `AllocationError`.
+/// `InvalidInput` is a length that is not a finite, nonnegative number (or a
+/// minimum above its preferred); `NoFit { required, available }` says how
+/// much room was needed and how much there was.
 pub use crate::allocate::AllocationError;
 use crate::allocate::{Capacity, allocate};
 use crate::geometry::{FIT_EPSILON, Point, Size};
 use crate::identity::{Id, Source};
+/// The four levels of permitted compromise, in increasing order: the
+/// engine's `Level`.
 pub use crate::level::Level;
 
-/// Query representations without retaining the result of any rejected
-/// query. `None` explicitly means that none of the permitted representations
-/// fits. As in the engine, the fit here is exact, with no tolerance.
+/// The first level, up to `max_level`, whose measured size fits
+/// `available`; `None` when none does. The engine's `first_fitting`: a
+/// helper for a single box with a size per level, which [`choose_stage`]
+/// does not use. As in the engine, the fit is exact, with no tolerance, and
+/// a size that is not finite or is negative never fits.
 pub fn first_fitting(
     max_level: Level,
     available: Size,
@@ -58,18 +282,27 @@ pub fn first_fitting(
         })
 }
 
-/// Width a child prefers, its lower bound, and its willingness to shrink.
+/// One child's claim on a shared length, for [`allocate_width`]: the
+/// engine's `WidthCapacity`. A column uses it for heights too.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WidthCapacity {
+    /// The length the child takes when there is room.
     pub preferred: f64,
+    /// The least length at which the child is still useful.
     pub minimum: f64,
     /// Higher weights shrink faster; zero protects the preferred width.
     pub weight: f64,
 }
 
-/// Share a shortage using each child's original `weight * (preferred-minimum)`
-/// rate, clamping minima and redistributing at the remaining original rates.
-/// Surplus space is left unallocated. No representation levels are scheduled.
+/// Share a shortage of `available` between children: the engine's
+/// `allocate_width`. Each child gives at its original rate,
+/// `weight * (preferred - minimum)`; a child that reaches its minimum is held
+/// there and the rest of the shortage is shared again at the others'
+/// original rates. A weight of zero protects the preferred length. When
+/// there is room, every child gets its preferred length and the surplus is
+/// left unallocated (growth is the caller's next step). `NoFit` when the
+/// minima and protected preferred lengths exceed `available` by more than
+/// [`FIT_EPSILON`]. The module documentation works an example.
 pub fn allocate_width(
     available: f64,
     capacities: &[WidthCapacity],
@@ -81,17 +314,24 @@ pub fn allocate_width(
     allocate(available, &capacities)
 }
 
-/// Preferred and useful minimum geometry of a component at one exact level.
+/// A child's preferred size and useful minimum at one exact level: the
+/// engine's `MeasuredSize`. A parent never gives a child less width than
+/// its minimum, and gives it its preferred width when there is room.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeasuredSize {
+    /// The size the child takes when there is room.
     pub preferred: Size,
+    /// The least size at which the child is still useful at this level.
     pub minimum: Size,
 }
 
-/// What the engine measures natively, supplied by the caller. Both answers
-/// must be pure: they are asked for trial stages as well as the chosen one.
+/// The caller's content: what the engine measures as a native widget. Both
+/// answers must be pure, since they are asked for every stage tried, not
+/// only the one taken, and may be asked several times.
 pub trait Leaf {
-    /// The preferred size and useful minimum at one exact level.
+    /// The preferred size and useful minimum at one exact level: the
+    /// engine's intrinsic measurement of a native view. For content that
+    /// does not change with its width, both are its size.
     fn query(&self, level: Level) -> MeasuredSize;
 
     /// The size when laid out within `maximum` at `level`: the engine's
@@ -102,44 +342,68 @@ pub trait Leaf {
     fn layout(&self, level: Level, maximum: Size) -> Size;
 }
 
-/// An arrangement applies only to immediate children, which remain atomic.
+/// How a composite arranges its immediate children: the engine's
+/// `Arrangement`. Each child is placed whole; a wrap never breaks a nested
+/// composite across rows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Arrangement {
+    /// Side by side, sharing the width ([`row_child`], [`row_child_top`]).
     Row,
+    /// One below another, each with the width it asks for ([`column_child`]).
     Column,
+    /// Side by side, starting a new row when the next child's minimum no
+    /// longer fits ([`wrap_child`]).
     Wrap,
 }
 
-/// What a child's form does not show.
+/// How a form loses a piece of information: the engine's `LossKind`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LossKind {
+    /// Shown in part, such as a label cut short.
     Shortened,
+    /// Not shown at all.
     Omitted,
 }
 
-/// One piece of information a form shortens or omits.
+/// One piece of information a form shortens or omits: the engine's
+/// `InformationLoss`, with the information named by an [`Id`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InformationLoss {
+    /// The information, as the reporting child names it.
     pub identity: Id,
+    /// Whether it is shortened or omitted.
     pub kind: LossKind,
 }
 
-/// A child's report on its planned form, with the child's identity. An
-/// empty `losses` says plainly that the form shows everything.
+/// A child's report on its planned form ([`Child::report_information`]),
+/// one of the port's additions; the engine's `SourceReport` without the
+/// revision and presentation that certify its native commit. An empty
+/// `losses` says plainly that the form shows everything.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceReport {
+    /// The reporting child's identity, if it has one.
     pub id: Option<Id>,
+    /// The input the reporting child draws, if it names one.
     pub source: Option<Source>,
+    /// The level the form was planned at.
     pub level: Level,
+    /// The size the form was planned at.
     pub size: Size,
+    /// What the form shortens or omits.
     pub losses: Vec<InformationLoss>,
 }
 
-/// Geometry proposed by a pure query.
+/// Where a child and everything inside it go: the engine's `GeometryPlan`.
+/// A plan is computed afresh by each query and changes nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeometryPlan {
+    /// The child's size. For a leaf, the width is the width it was given,
+    /// even when the leaf itself is narrower ([`Self::native_size`]).
     pub size: Size,
+    /// Whether the child is hidden at this level; a hidden plan is empty.
     pub hidden: bool,
+    /// The placements of the visible immediate children, in declared
+    /// order; a frame has one, its content.
     pub children: Vec<Placement>,
     // Row membership is part of the plan, not recomputed during commit.
     rows: Vec<Vec<usize>>,
@@ -149,11 +413,15 @@ pub struct GeometryPlan {
     source_reports: Vec<SourceReport>,
 }
 
+/// One immediate child's place in its parent's plan: the engine's
+/// `Placement`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placement {
     /// Index in the declared immediate children (hidden children are omitted).
     pub index: usize,
+    /// The child's top left corner, relative to its parent's.
     pub position: Point,
+    /// The child's own plan.
     pub geometry: GeometryPlan,
 }
 
@@ -178,32 +446,40 @@ impl GeometryPlan {
         }
     }
 
-    /// Useful minimum height after measuring this form at its offered width.
-    /// Divider constraints must use this width-dependent result for wrapped
-    /// children rather than an unconstrained preferred height.
+    /// The least height this plan could be given at its width: its size's
+    /// height for ordinary content, less for a declared viewport, and for a
+    /// composite the sum (column) or the tallest (row) of its children's,
+    /// with the spacing. The engine's `minimum_height`; a column shares its
+    /// height down to these. Unlike a wrap's measured minimum, this one is
+    /// worked out at the width actually given.
     pub fn minimum_height(&self) -> f64 {
         self.minimum_height
     }
 
     /// The placements in each row of a row or a wrap, as indices into
-    /// `children`; empty for a column or a leaf.
+    /// `children`; empty for a column or a leaf. Private in the engine,
+    /// where only its commit reads it.
     pub fn rows(&self) -> &[Vec<usize>] {
         &self.rows
     }
 
     /// For a leaf, the size the leaf answered at its offered space; the
-    /// plan's own width is the allocated width.
+    /// plan's own width is the allocated width. Private in the engine,
+    /// where its commit checks the native widget against it.
     pub fn native_size(&self) -> Option<Size> {
         self.native_size
     }
 
     /// The identities of the children whose node this is: a form's own
-    /// identity first, then that of the child that selected it.
+    /// identity first, then that of the child that selected it. One of the
+    /// port's additions.
     pub fn identities(&self) -> &[(Id, Option<Source>)] {
         &self.identities
     }
 
-    /// The node carrying `id`, with its position relative to this plan.
+    /// The node carrying `id` ([`Child::identity`]), with its top left
+    /// corner relative to this plan's; searched depth first, in placement
+    /// order. One of the port's additions.
     pub fn find(&self, id: &Id) -> Option<(Point, &GeometryPlan)> {
         if self.identities.iter().any(|(own, _)| own == id) {
             return Some((Point::new(0.0, 0.0), self));
@@ -221,7 +497,9 @@ impl GeometryPlan {
         })
     }
 
-    /// Facts about this plan and its immediate-child subplans, recursively.
+    /// The information-loss reports of this node and every node inside it,
+    /// in that order ([`Child::report_information`]); the engine's
+    /// `reports`.
     pub fn reports(&self) -> Vec<&SourceReport> {
         let mut reports: Vec<_> = self.source_reports.iter().collect();
         for child in &self.children {
@@ -231,7 +509,8 @@ impl GeometryPlan {
     }
 }
 
-/// Space added around a framed child: its chrome.
+/// The chrome a frame adds on each side of its content ([`framed_child`]):
+/// the engine's padding, which is iced's `Padding`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Padding {
     pub top: f64,
@@ -241,6 +520,7 @@ pub struct Padding {
 }
 
 impl Padding {
+    /// Padding with each side given, in the order top, right, bottom, left.
     pub const fn new(top: f64, right: f64, bottom: f64, left: f64) -> Self {
         Self {
             top,
@@ -261,6 +541,7 @@ impl Padding {
     }
 }
 
+/// The same padding on every side.
 impl From<f64> for Padding {
     fn from(all: f64) -> Self {
         Self::new(all, all, all, all)
@@ -320,8 +601,17 @@ fn no_fit(required: f64, available: f64) -> Failure {
     .into()
 }
 
-/// A queryable leaf or composite. Only the root selects a level. Composites
-/// forward that exact level; outward weights never replace internal weights.
+/// A node of the layout tree: a leaf, a composite, a family of forms or a
+/// frame, with how it behaves towards its parent (weight, growth, hiding,
+/// fixed dimensions). The engine's `Child`. Build one with [`child`],
+/// [`row_child`], [`column_child`], [`wrap_child`], [`forms`],
+/// [`framed_child`], [`scroll_child`] or [`spacer`], then adjust it with
+/// the methods below, each of which returns the changed child.
+///
+/// Only the root selects a level; a composite asks every child at the
+/// level it was asked at. A child's `weight` and `grow` concern its share
+/// in its parent; they never change how a composite shares its own room
+/// between its children. A child is cheap to clone: its parts are shared.
 #[derive(Clone)]
 pub struct Child<'a> {
     native: Option<Rc<dyn Leaf + 'a>>,
@@ -363,14 +653,23 @@ impl<'a> Child<'a> {
     }
 
     /// Give this child an identity, and the field of the input it draws if
-    /// there is one; its node in every plan carries them.
+    /// there is one; its node in every plan carries them
+    /// ([`GeometryPlan::find`]), and failures inside it are attributed to it
+    /// unless a child inside it has an identity of its own
+    /// ([`StageFailure::child`]). One of the port's additions; it changes
+    /// no choice. A wrapper made later by [`Self::fill_width`] or
+    /// [`Self::fixed_dimensions`] does not inherit it.
     pub fn identity(mut self, id: Id, source: Option<Source>) -> Self {
         self.identity = Some((id, source));
         self
     }
 
-    /// Report what this form does not show, from this exact candidate
-    /// geometry. The callback is pure and runs for trial queries too.
+    /// Report what this form does not show, from the level and the plan
+    /// just made for it: the engine's `report_information`, with the losses
+    /// as plain data. The callback runs for every plan made, including
+    /// those of stages that are not taken, so it must be pure. Its report
+    /// is kept in the plan ([`GeometryPlan::reports`]); a hidden child
+    /// makes none.
     pub fn report_information(
         mut self,
         report: impl Fn(Level, &GeometryPlan) -> Vec<InformationLoss> + 'a,
@@ -440,6 +739,10 @@ impl<'a> Child<'a> {
                 .is_some_and(|frame| frame.content.is_hidden(level))
     }
 
+    /// This child's preferred size and useful minimum at `level`, as its
+    /// parent sees them: the engine's `query`. A hidden child measures zero.
+    /// A composite adds its children up: a row sums widths and takes the
+    /// tallest height, a column the reverse, each with its spacing.
     pub fn query(&self, level: Level) -> MeasuredSize {
         if self.is_hidden(level) {
             return MeasuredSize {
@@ -450,9 +753,14 @@ impl<'a> Child<'a> {
         (self.query)(level)
     }
 
-    /// Allocate first, then lay out leaves at their allocated width with
-    /// unbounded height. Thus a clipped height can never certify a fit. A useful
-    /// minimum narrower than intrinsic width must be explicitly declared.
+    /// Plan this child as a root at `level` in `available`: the engine's
+    /// `query_at`, and what [`choose_stage`] asks of each stage. The width
+    /// is allocated first (a composite takes the whole available width, a
+    /// leaf its share of it), then leaves are laid out at their widths with
+    /// unbounded height, so a clipped height can never pass for a fit. An
+    /// infinite available width gives every child its preferred width. A
+    /// useful minimum narrower than the intrinsic width must be declared
+    /// ([`Self::minimum_width`]).
     pub fn query_at(&self, level: Level, available: Size) -> Result<GeometryPlan, AllocationError> {
         self.try_query_at(level, available)
             .map_err(|failure| failure.error)
@@ -472,6 +780,10 @@ impl<'a> Child<'a> {
         }
         let measured = self.query(level);
         validate_measurement(measured)?;
+        // Width is settled before height: content that wraps is taller when
+        // narrower, so its height is only known once its width is. A
+        // composite takes the whole width offered and shares it out itself;
+        // a leaf takes its own share of it.
         let widths = allocate_with_growth(
             available.width,
             &[WidthCapacity {
@@ -547,6 +859,10 @@ impl<'a> Child<'a> {
                     measured.preferred.height.min(height).max(minimum.height)
                 }
             });
+            // Ordinary content is laid out at its width with unbounded
+            // height, so the height it needs is what it reports; a clipped
+            // height could otherwise pass for a fit. Only a declared
+            // viewport is given a finite height.
             let size = native.layout(
                 level,
                 Size::new(width, viewport_height.unwrap_or(f64::INFINITY)),
@@ -593,7 +909,10 @@ impl<'a> Child<'a> {
     }
 
     /// Reserve the full width allocated by the parent, keeping the inner
-    /// component's natural geometry and reports intact. Useful for wrapping
+    /// component's natural geometry and reports intact: the engine's
+    /// `fill_width`. The child is wrapped in a one-child column that keeps
+    /// its weight and height growth, grows by 1 (its own `grow` is not
+    /// kept) and is always as wide as it is given. Useful for wrapping
     /// navigation followed by trailing controls: a short final row must not
     /// move those controls into space already allocated to navigation.
     pub fn fill_width(self) -> Self {
@@ -607,7 +926,8 @@ impl<'a> Child<'a> {
         result
     }
 
-    /// Reserve exact dimensions for this component. A dimension below its
+    /// Reserve exact dimensions for this component: the engine's
+    /// `fixed_dimensions`. A dimension below its
     /// measured useful minimum is raised to that minimum; insufficient
     /// available space fails the stage rather than shrinking the request.
     /// Apply this to the expanded form, before declaring a collapsed form.
@@ -651,34 +971,47 @@ impl<'a> Child<'a> {
         result
     }
 
+    /// How readily this child gives width in a shortage, relative to its
+    /// siblings (default 1); zero means never, and then its preferred width
+    /// counts as its minimum. In a column the same weight shares a shortage
+    /// of height between viewports. The engine's `weight`.
     pub fn weight(mut self, weight: f64) -> Self {
         assert!(weight.is_finite() && weight >= 0.0);
         self.weight = weight;
         self
     }
 
-    /// Share surplus only after shrinking has finished.
+    /// This child's share of surplus width (default 0): once any shortage
+    /// is shared, room left over is divided between siblings in proportion
+    /// to `grow`. The engine's `grow`.
     pub fn grow(mut self, grow: f64) -> Self {
         assert!(grow.is_finite() && grow >= 0.0);
         self.grow = grow;
         self
     }
 
-    /// Share surplus height in a column independently of width growth. A
-    /// leaf keeps its laid-out height floor; a declared viewport expands.
+    /// This child's share of surplus height in a column (default 0),
+    /// independent of width growth: the engine's `grow_height`. A growing
+    /// child's plan is as tall as the height it is given; a declared
+    /// viewport is laid out at that height, while a leaf's own height
+    /// stays a floor.
     pub fn grow_height(mut self, grow: f64) -> Self {
         assert!(grow.is_finite() && grow >= 0.0);
         self.grow_height = grow;
         self
     }
 
-    /// Explicit component permission to omit this form. No layout slot or
-    /// gap is planned for hidden children.
+    /// Permit this child to be left out at the levels where `hidden` is
+    /// true: the engine's `hidden_when`. A hidden child has no placement and
+    /// costs no width or spacing. This is the only way a child is hidden.
     pub fn hidden_when(mut self, hidden: impl Fn(Level) -> bool + 'a) -> Self {
         self.hidden = Rc::new(hidden);
         self
     }
 
+    /// Round this child's preferred and minimum widths up to whole units,
+    /// so that fractional content does not shift its neighbours by a
+    /// fraction: the engine's `round_width_up`.
     pub fn round_width_up(mut self) -> Self {
         let query = self.query.clone();
         self.query = Rc::new(move |level| {
@@ -690,7 +1023,8 @@ impl<'a> Child<'a> {
         self
     }
 
-    /// Set the desired width independently of the measured useful minimum.
+    /// Set the desired width independently of the measured useful minimum:
+    /// the engine's `preferred_width`.
     /// A parent may allocate less down to that minimum; when the minimum is
     /// larger than the requested width it remains authoritative. Geometry is
     /// laid out again at the allocated width.
@@ -698,8 +1032,10 @@ impl<'a> Child<'a> {
         self.preferred_width_with(move |_, _| width)
     }
 
-    /// Derive a preferred width from the same measurement, without
-    /// replacing the independently measured minimum.
+    /// Set the preferred width from the level and the measurement, without
+    /// changing the minimum: the engine's `preferred_width_with`. A
+    /// preferred width below the minimum is raised to it; one that is not a
+    /// finite, nonnegative number makes the child invalid input.
     pub fn preferred_width_with(
         mut self,
         preferred: impl Fn(Level, MeasuredSize) -> f64 + 'a,
@@ -725,7 +1061,10 @@ impl<'a> Child<'a> {
         self.minimum_width_with(minimum)
     }
 
-    /// Declare a finite, nonnegative useful width floor. If the intrinsic
+    /// Declare a finite, nonnegative useful width floor from the level and
+    /// the measured preferred size: the engine's `minimum_width_with`. A
+    /// floor that is not a finite, nonnegative number makes the child
+    /// invalid input. If the intrinsic
     /// width is smaller, the preferred offer is raised to the floor. A leaf
     /// with positive infinite intrinsic width is laid out at this declared
     /// floor; only a finite fitting result can use the floor as its initial
@@ -786,14 +1125,19 @@ impl<'a> Child<'a> {
     }
 }
 
-/// A leaf: the caller's content, measured and laid out by the caller.
+/// A leaf holding the caller's content: the engine's `child`, with a
+/// [`Leaf`] in place of a view. Its measurement is the leaf's own
+/// [`Leaf::query`]; it is laid out with [`Leaf::layout`] at the width its
+/// parent gives it, and fails if the leaf answers wider than that.
 pub fn child<'a>(leaf: impl Leaf + 'a) -> Child<'a> {
     let leaf: Rc<dyn Leaf + 'a> = Rc::new(leaf);
     let measure = leaf.clone();
     Child::new(Some(leaf), Rc::new(move |level| measure.query(level)))
 }
 
-/// A component family's own structured forms, inherited until the next
+/// A child that is one of several forms, chosen by level: the engine's
+/// `forms`. Each form is given from a level and is
+/// inherited until the next
 /// threshold. The first threshold must be Preferred and thresholds strictly
 /// increase. Every selected form receives the requested level, so an inherited
 /// composite still forwards Mild/Strong rules to its own immediate children.
@@ -827,19 +1171,21 @@ fn select_form<'a, 'forms>(
         .1
 }
 
-/// Declare a scrolling viewport: the leaf must show its content within the
-/// offered viewport height. The declaration is local; no stage invents
-/// scrolling. If the leaf has no finite intrinsic preferred dimension, the
-/// declared minimum supplies that initial offer after a bounded layout
-/// succeeds.
+/// A leaf that declares vertical capacity, down to `minimum`: the engine's
+/// `scroll_child`. In a window it is a scrolling viewport; in a chart it
+/// can be any box that works at less than its preferred height, such as a
+/// gap. It is the only kind of leaf a column or a wrap can take height
+/// from, and it is laid out at the height it is given, which the leaf must
+/// fit within. If the leaf has no finite intrinsic size, `minimum` stands
+/// for it once the leaf has been laid out within it successfully.
 pub fn scroll_child<'a>(leaf: impl Leaf + 'a, minimum: Size) -> Child<'a> {
     assert!(finite_size(minimum));
     scroll_child_with_minimum(leaf, move |_| minimum)
 }
 
-/// Declare a scrolling viewport whose useful floor depends on the level.
-/// Nonfinite or negative floors are explicit invalid input, never clipped
-/// viewports.
+/// [`scroll_child`] with a minimum that depends on the level: the engine's
+/// `scroll_child_with_minimum`. A minimum that is not finite or is
+/// negative makes the child invalid input; it is never clipped.
 pub fn scroll_child_with_minimum<'a>(
     leaf: impl Leaf + 'a,
     minimum: impl Fn(Level) -> Size + 'a,
@@ -921,6 +1267,9 @@ impl Leaf for Space {
     }
 }
 
+/// An empty leaf at least `minimum` wide, with no height, that never
+/// shrinks (weight 0) and takes surplus width (grow 1): the engine's
+/// `spacer`. Between two groups in a row it pushes the second to the end.
 pub fn spacer<'a>(minimum: f64) -> Child<'a> {
     assert!(minimum.is_finite() && minimum >= 0.0);
     child(Space)
@@ -932,10 +1281,14 @@ pub fn spacer<'a>(minimum: f64) -> Child<'a> {
         .grow(1.0)
 }
 
-/// Add declared chrome without flattening a box into a fixed-size leaf.
-/// All geometry, forms, minima and requested levels of the immediate child
-/// remain part of the same engine. Hidden content omits the entire frame
-/// and its spacing.
+/// Put `padding` around `content`, counting it inside the fit: the
+/// engine's `framed_child`, without its decorator. The frame measures the
+/// content plus the padding (the content's preferred width standing for
+/// its minimum if its weight is zero) and lays the content out in what is
+/// left when the padding is taken away, placing it at the padding's top
+/// left corner. The content stays a full child of the engine: its forms,
+/// minima and level are unchanged. If the content is hidden, so is the
+/// whole frame.
 pub fn framed_child<'a>(content: Child<'a>, padding: impl Into<Padding>) -> Child<'a> {
     let padding = padding.into();
     assert!(
@@ -1007,19 +1360,31 @@ impl Frame<'_> {
     }
 }
 
+/// Children side by side with `spacing` between them, each centred
+/// vertically in the row: the engine's `row_child`. The row's width is
+/// shared between the children by weight, surplus by growth.
 pub fn row_child(children: Vec<Child<'_>>, spacing: f64) -> Child<'_> {
     compose(children, spacing, Arrangement::Row)
 }
 
-/// Arrange a row with each immediate child aligned to its top edge.
+/// A [`row_child`] whose children are aligned to its top edge rather than
+/// centred: the engine's `row_child_top`.
 pub fn row_child_top(children: Vec<Child<'_>>, spacing: f64) -> Child<'_> {
     compose_aligned(children, spacing, Arrangement::Row, true)
 }
 
+/// Children one below another with `spacing` between them: the engine's
+/// `column_child`. Each child gets the width it asks for, up to the
+/// column's (all of it if the child grows); heights are floors except
+/// where a child declares capacity.
 pub fn column_child(children: Vec<Child<'_>>, spacing: f64) -> Child<'_> {
     compose(children, spacing, Arrangement::Column)
 }
 
+/// Children in rows that break onto new lines, with `spacing` between
+/// children and between rows: the engine's `wrap_child`. Rows are packed
+/// greedily by the children's minimum widths; each row then shares the
+/// whole width as a row does.
 pub fn wrap_child(children: Vec<Child<'_>>, spacing: f64) -> Child<'_> {
     compose(children, spacing, Arrangement::Wrap)
 }
@@ -1110,6 +1475,8 @@ impl Composition<'_> {
             minimum: Size::new(0.0, 0.0),
         };
         for (child, size) in &measured {
+            // A child of weight zero never gives width in a shortage, so the
+            // least it can take is its preferred width.
             let minimum_width = if child.weight == 0.0 {
                 size.preferred.width
             } else {
@@ -1124,7 +1491,10 @@ impl Composition<'_> {
                         result.minimum.height = result.minimum.height.max(size.minimum.height);
                     } else {
                         result.minimum.width = result.minimum.width.max(minimum_width);
-                        // A height bound, not the height at that width. plan() measures rows.
+                        // A height bound, not the height at that width: how
+                        // the children fall into rows, and so how tall the
+                        // wrap is, depends on the width, which a measurement
+                        // does not know. plan() measures the rows.
                         result.minimum.height = result.minimum.height.max(size.minimum.height);
                     }
                 }
@@ -1227,6 +1597,7 @@ impl Composition<'_> {
         let mut used = 0.0;
         for (index, measured) in active {
             let child = &self.children[index];
+            // As in measure(): weight zero protects the preferred width.
             let minimum = if child.weight == 0.0 {
                 measured.preferred.width
             } else {
@@ -1355,22 +1726,30 @@ impl Composition<'_> {
     }
 }
 
-/// One exact level and component arrangement in the parent's ordered policy.
+/// One entry in the root's ordered policy: a tree to try at one exact
+/// level. The engine's `Stage`.
 pub struct Stage<'a> {
+    /// The level every child in `content` is asked at.
     pub level: Level,
+    /// The tree, usually with the arrangement this stage tries.
     pub content: Child<'a>,
 }
 
 impl<'a> Stage<'a> {
+    /// A stage trying `content` at `level`.
     pub fn new(level: Level, content: Child<'a>) -> Self {
         Self { level, content }
     }
 }
 
+/// The stage taken and its plan: the engine's `StagePlan`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StagePlan {
+    /// The stage's position in the list given to [`choose_stage`].
     pub stage_index: usize,
+    /// The stage's level.
     pub level: Level,
+    /// The plan of the stage's tree.
     pub geometry: GeometryPlan,
 }
 
@@ -1378,24 +1757,41 @@ pub struct StagePlan {
 /// identified child it came from, if any child on the way had an identity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StageFailure {
+    /// The stage's position in the list given to [`choose_stage`].
     pub stage_index: usize,
+    /// The stage's level.
     pub level: Level,
+    /// The first failure met in the stage, as the engine's query returns
+    /// it.
     pub error: AllocationError,
+    /// The identity of the child the failure came from: the child itself
+    /// if it has one, otherwise the nearest enclosing child that does. A
+    /// failure of a composite's own sharing (its children's minima do not
+    /// fit) is the composite's.
     pub child: Option<Id>,
 }
 
 /// No declared stage supplied complete fitting geometry. Nothing is implicitly
 /// hidden, clipped, scrolled or promoted to a stronger undeclared level.
+/// The engine's `NoFit`, with what failed at each stage added.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NoFit {
+    /// How many stages were tried: all of them.
     pub attempted: usize,
     /// One entry per stage, in the order tried.
     pub failures: Vec<StageFailure>,
 }
 
+/// Take the first stage whose tree fits `available`: the engine's
+/// `choose_stage`. Each stage is planned from scratch at its own level
+/// ([`Child::query_at`]), so nothing from a stage that failed carries over.
 pub fn choose_stage(stages: &[Stage<'_>], available: Size) -> Result<StagePlan, NoFit> {
     let mut failures = Vec::new();
     for (stage_index, stage) in stages.iter().enumerate() {
+        // Every stage is measured and allocated afresh at its own level,
+        // from its preferred sizes: a stage that compacts some children
+        // frees room for others to grow back, and nothing from a stage that
+        // failed is kept.
         match stage.content.try_query_at(stage.level, available) {
             Ok(geometry) => {
                 return Ok(StagePlan {
