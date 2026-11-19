@@ -34,5 +34,6 @@ pub mod identity;
 pub mod kinds;
 pub mod labels;
 pub mod level;
+pub mod presentation;
 pub mod record;
 pub mod rules;

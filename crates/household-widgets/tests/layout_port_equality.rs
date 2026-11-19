@@ -923,3 +923,101 @@ fn a_stage_list_where_nothing_fits() {
     // Only the widest offers fit any stage of this list.
     assert!(unfitted > sizes / 2);
 }
+
+// ----- presentations -----
+
+use household_layout::presentation as pp;
+
+/// Every pair, in both crates' types.
+fn pairs() -> Vec<(eng::Presentation, pp::Presentation)> {
+    let mut pairs = Vec::new();
+    for (ee, pe) in [
+        (eng::Emphasis::Normal, pp::Emphasis::Normal),
+        (eng::Emphasis::Emphasised, pp::Emphasis::Emphasised),
+    ] {
+        for (ed, pd) in [
+            (eng::Detail::Concise, pp::Detail::Concise),
+            (eng::Detail::Verbose, pp::Detail::Verbose),
+        ] {
+            pairs.push((
+                eng::Presentation {
+                    emphasis: ee,
+                    detail: ed,
+                },
+                pp::Presentation {
+                    emphasis: pe,
+                    detail: pd,
+                },
+            ));
+        }
+    }
+    pairs
+}
+
+/// Every request, in both crates' types: each axis absent or one value.
+fn requests() -> Vec<(eng::PresentationRequest, pp::PresentationRequest)> {
+    let emphases = [
+        (None, None),
+        (Some(eng::Emphasis::Normal), Some(pp::Emphasis::Normal)),
+        (
+            Some(eng::Emphasis::Emphasised),
+            Some(pp::Emphasis::Emphasised),
+        ),
+    ];
+    let details = [
+        (None, None),
+        (Some(eng::Detail::Concise), Some(pp::Detail::Concise)),
+        (Some(eng::Detail::Verbose), Some(pp::Detail::Verbose)),
+    ];
+    let mut requests = Vec::new();
+    for (ee, pe) in emphases {
+        for (ed, pd) in details {
+            requests.push((
+                eng::PresentationRequest {
+                    emphasis: ee,
+                    detail: ed,
+                },
+                pp::PresentationRequest {
+                    emphasis: pe,
+                    detail: pd,
+                },
+            ));
+        }
+    }
+    requests
+}
+
+fn same_presentation(e: eng::Presentation, p: pp::Presentation) -> bool {
+    pairs().contains(&(e, p))
+}
+
+#[test]
+fn presentations_resolve_alike() {
+    let pairs = pairs();
+    // Every family: each nonempty set of supported pairs, with each of
+    // them as its default.
+    for mask in 1u8..16 {
+        let supported: Vec<_> = (0..4).filter(|i| mask & (1 << i) != 0).collect();
+        for &default in &supported {
+            let engine = eng::PresentationFamily::new(
+                pairs[default].0,
+                supported.iter().map(|&i| pairs[i].0).collect(),
+            );
+            let port = pp::PresentationFamily::new(
+                pairs[default].1,
+                supported.iter().map(|&i| pairs[i].1).collect(),
+            );
+            for (ei, pi) in requests() {
+                for (ed, pd) in requests() {
+                    match (engine.resolve(ei, ed), port.resolve(pi, pd)) {
+                        (Ok(e), Ok(p)) => assert!(same_presentation(e, p)),
+                        (Err(e), Err(p)) => {
+                            assert!(same_presentation(e.requested, p.requested))
+                        }
+                        (e, p) => panic!("engine {e:?}, port {p:?}"),
+                    }
+                }
+            }
+        }
+    }
+}
