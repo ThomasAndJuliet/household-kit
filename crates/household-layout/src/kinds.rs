@@ -107,7 +107,9 @@ impl Kinds {
 
     /// The kinds in this set, in the order of [`Kind::ALL`].
     pub fn iter(self) -> impl Iterator<Item = Kind> {
-        Kind::ALL.into_iter().filter(move |&kind| self.contains(kind))
+        Kind::ALL
+            .into_iter()
+            .filter(move |&kind| self.contains(kind))
     }
 }
 

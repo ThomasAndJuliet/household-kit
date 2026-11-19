@@ -506,7 +506,10 @@ mod tests {
         let b = label("b", Rect::new(33.0, 10.0, 20.0, 11.0));
         let j = r.judge(&b);
         assert_eq!(j.findings.len(), 1);
-        let Finding::Squeezed { gap, ideal, row, .. } = &j.findings[0] else {
+        let Finding::Squeezed {
+            gap, ideal, row, ..
+        } = &j.findings[0]
+        else {
             panic!("{j:?}")
         };
         assert!((gap - 3.0).abs() < 1e-9 && (ideal - 7.26).abs() < 1e-9);
