@@ -38,3 +38,8 @@ zeroize = "1"
 # size against the text, how far a line grows for one); from this workspace
 household-content = { path = "../household-content", optional = true }
 household-type = { path = "../household-type", optional = true }
+
+[dev-dependencies]
+# The toolkit-free port of this crate's layout engine, whose equality with
+# the engine `tests/layout_port_equality.rs` checks; from this workspace
+household-layout = { path = "../household-layout" }

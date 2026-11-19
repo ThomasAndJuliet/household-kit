@@ -1772,6 +1772,7 @@ name = "household-widgets"
 version = "0.1.0"
 dependencies = [
  "household-content",
+ "household-layout",
  "household-tones",
  "household-type",
  "iced_accessibility",
