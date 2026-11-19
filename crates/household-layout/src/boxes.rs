@@ -51,6 +51,16 @@ pub trait LayoutBox<C> {
     /// The presentations the box accepts, and its family's default.
     fn accepts(&self) -> &Accepts;
 
+    /// Whether the box takes the level it is ordered exactly, as a leaf
+    /// with forms and a list do, rather than distributing it as a ceiling
+    /// among its children, as a row, a column and arrangements do.
+    /// Whoever holds a ceiling over a box that takes its level exactly
+    /// gives it each level from Preferred up and orders it the lowest at
+    /// which it fits.
+    fn takes_level_exactly(&self) -> bool {
+        true
+    }
+
     /// The box's answer under `orders` in `space`. Pure.
     fn measure(&self, orders: &Resolved, space: Size) -> Result<Answer, Unsupported>;
 
@@ -335,16 +345,32 @@ impl From<Unsupported> for Refusal {
 }
 
 /// Lay out `root` under `order` in `space`, at the origin: the kept plan,
-/// or a refusal.
+/// or a refusal. The level `order` resolves to is a ceiling. A root that
+/// [takes its level exactly](LayoutBox::takes_level_exactly) is given each
+/// level from Preferred up to it and ordered the first at which it fits,
+/// so that nothing is ordered more compaction than it needs; any other
+/// root distributes the ceiling itself.
 pub fn plan<C>(root: &dyn LayoutBox<C>, order: &Order, space: Size) -> Result<Node<C>, Refusal> {
-    let answer = root.query(order, space)?;
-    if !answer.fits() {
-        return Err(Refusal::NoFit {
-            short: answer.short,
-        });
+    let ceiling = root.resolve(order)?.level;
+    let lowest = if root.takes_level_exactly() {
+        Level::Preferred
+    } else {
+        ceiling
+    };
+    let mut short = Vec::new();
+    for level in Level::ALL
+        .into_iter()
+        .filter(|level| (lowest..=ceiling).contains(level))
+    {
+        let at = order.clone().with_level(level);
+        let answer = root.query(&at, space)?;
+        if answer.fits() {
+            let bounds = Rect::from_origin(Point::default(), answer.taken_size(space));
+            return Ok(root.order(&at, bounds)?);
+        }
+        short = answer.short;
     }
-    let bounds = Rect::from_origin(Point::default(), answer.taken_size(space));
-    Ok(root.order(order, bounds)?)
+    Err(Refusal::NoFit { short })
 }
 
 #[cfg(test)]
