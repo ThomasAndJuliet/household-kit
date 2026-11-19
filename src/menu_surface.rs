@@ -1355,6 +1355,91 @@ mod presentation_tests {
     }
 
     #[test]
+    fn a_scrolling_menus_scrollbar_does_not_cover_the_inline_frames_right_border() {
+        use cosmic::iced::advanced::{
+            Layout, mouse,
+            renderer::Headless,
+            widget::Tree,
+        };
+        use cosmic::iced::{Color, Font, Pixels};
+        fn icon(name: &'static str) -> widget::icon::Handle {
+            widget::icon::from_name(name).handle()
+        }
+        fn body(text: String) -> Element<'static, ()> {
+            widget::text(text).size(14).into()
+        }
+        let item = |label: &str| crate::menu::MenuItem {
+            label: label.into(),
+            message: (),
+            icon: None,
+            shortcut: None,
+            mark: None,
+            disabled_reason: None,
+            destructive: false,
+        };
+        let mut inner = Menu::new();
+        for n in 0..12 {
+            inner = inner.item(item(&format!("Choice {n}")));
+        }
+        let content = Content {
+            menu: Menu::new().folder("View", inner),
+            style: MenuStyle { icon, body },
+            owner: Owner::Anchors(Anchors::default()),
+            namespace: "frame".into(),
+            path: vec![],
+            open: vec![row_key("View", true, 0)],
+            on_path: Rc::new(|_| ()),
+            on_action: Rc::new(|_| ()),
+            presentation: Presentation::default(),
+            choice_body: None,
+            emphasized_body: None,
+            preferred_width: None,
+            hover: None,
+        };
+        let (w, h) = (240usize, 150usize);
+        let mut renderer =
+            cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
+                Font::default(),
+                Pixels(14.0),
+                Some("tiny-skia"),
+            ))
+            .expect("native renderer");
+        let theme = cosmic::Theme::light();
+        let mut element = content.view(true, 1);
+        let mut tree = Tree::new(element.as_widget());
+        let size = Size::new(w as f32, h as f32);
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &cosmic::iced::advanced::layout::Limits::new(Size::ZERO, size),
+        );
+        element.as_widget().draw(
+            &tree,
+            &mut renderer,
+            &theme,
+            &cosmic::iced::advanced::renderer::Style::default(),
+            Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &Rectangle::with_size(size),
+        );
+        let pixels = renderer.screenshot(Size::new(w as u32, h as u32), 1.0, Color::WHITE);
+        let frame = crate::look::Look::normal().border(&theme, crate::look::State::Focused);
+        let c = frame.color;
+        let near = |p: &[u8]| {
+            let d = |a: u8, b: f32| (f32::from(a) - b * 255.0).abs();
+            d(p[0], c.r) < 3.0 && d(p[1], c.g) < 3.0 && d(p[2], c.b) < 3.0
+        };
+        // Down the middle of the title and its rows, the border colour is
+        // drawn at both the left and the right of the frame
+        let row = h / 2;
+        let xs: Vec<usize> = (0..w).filter(|x| near(&pixels[(row * w + x) * 4..][..4])).collect();
+        assert!(
+            xs.iter().any(|x| *x < w / 4) && xs.iter().any(|x| *x > w / 2),
+            "the frame's border shows on both sides: {xs:?}"
+        );
+    }
+
+    #[test]
     fn real_menu_box_queries_and_commits_native_geometry() {
         use cosmic::iced::advanced::{
             Widget, layout as native_layout, renderer::Headless, widget::Tree,
