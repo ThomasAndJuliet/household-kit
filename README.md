@@ -469,6 +469,17 @@ This repository's own `Cargo.toml` has a `[patch]` for its tests, Clippy and CI.
 
 A Flatpak app needs the crate in its `cargo-sources.json`.
 
+The content boxes (`content`: inline text and formulas, from household-kit's
+`household-content`) are behind the `content` feature, so an app that uses
+these widgets only for controls builds no Markdown parser, RaTeX or syntect:
+
+```toml
+household-widgets = { git = "https://github.com/ThomasAndJuliet/household-widgets.git", features = ["content"] }
+```
+
+Its kit crates (`household-content`, `household-type`) are named by the same
+URL as `household-tones`, for the same reason.
+
 ## Panel interface foundations
 
 `panel_layout` composes ordinary `layout::Child` boxes: `panel` stacks arbitrary

@@ -21,6 +21,10 @@ repository = "https://github.com/ThomasAndJuliet/household-widgets"
 # these widgets need; the app's own are added to them.
 [features]
 a11y = ["libcosmic/a11y", "dep:iced_accessibility"]
+# The content boxes (`content`): inline text and formulas, from
+# household-kit's content model. Gated so that apps using these widgets
+# only for controls build no Markdown, RaTeX or syntect
+content = ["dep:household-content", "dep:household-type"]
 
 [dependencies]
 libcosmic = { git = "https://github.com/pop-os/libcosmic.git", default-features = false }
@@ -31,6 +35,12 @@ household-tones = { git = "https://github.com/ThomasAndJuliet/household-kit.git"
 # Zeroing what a password box lets go of (PasswordBox), as the terminal
 # zeroes its secrets; MIT OR Apache-2.0
 zeroize = "1"
+
+# The content model the `content` boxes draw (inline content, maths laid
+# out by RaTeX, the formula cache), and the views' typography (formulas'
+# size against the text, how far a line grows for one)
+household-content = { git = "https://github.com/ThomasAndJuliet/household-kit.git", optional = true }
+household-type = { git = "https://github.com/ThomasAndJuliet/household-kit.git", optional = true }
 
 # For this repository's own build only (its tests, Clippy and CI): the
 # household libcosmic fork at a fixed revision. Cargo reads [patch] only
