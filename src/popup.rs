@@ -65,6 +65,8 @@ pub struct Panel<'a, Message> {
     region: Option<Rectangle>,
     lateral_only: bool,
     focus_first: bool,
+    /// Which target [`Self::focus_first`] focuses
+    initial_target: usize,
     relative: bool,
     key: u64,
     reset_native: bool,
@@ -86,6 +88,7 @@ impl<'a, Message: 'a> Panel<'a, Message> {
             region: None,
             lateral_only: false,
             focus_first: false,
+            initial_target: 0,
             relative: false,
             key: 0,
             reset_native: true,
@@ -158,6 +161,13 @@ impl<'a, Message: 'a> Panel<'a, Message> {
     /// Move focus to the first opted-in target when this panel session opens.
     pub fn focus_first(mut self) -> Self {
         self.focus_first = true;
+        self
+    }
+    /// Focus target `index` rather than the first when this panel session
+    /// opens, as a dropdown does its selected option.
+    pub fn focus_initial(mut self, index: usize) -> Self {
+        self.focus_first = true;
+        self.initial_target = index;
         self
     }
     /// A stable identity for this panel session. Change the key when replacing
@@ -1035,7 +1045,12 @@ impl<'a, Message: Clone + 'a> overlay::Overlay<Message, Theme, Renderer>
                 for depth in card.index..card.index + card.span {
                     if self.state.initial_focus.get(depth) == Some(&true) {
                         self.state.initial_focus[depth] = false;
-                        if let Some(target) = self.panels[depth].targets.first() {
+                        let at = self.panels[depth].initial_target;
+                        if let Some(target) = self.panels[depth]
+                            .targets
+                            .get(at)
+                            .or_else(|| self.panels[depth].targets.first())
+                        {
                             initial = Some(target.id.clone());
                             if self.state.entry_information[depth] {
                                 information_entry = Some(target.id.clone());
