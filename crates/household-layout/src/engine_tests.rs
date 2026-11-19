@@ -883,3 +883,252 @@ fn worked_example_a_charts_vertical_gap() {
             .is_err()
     );
 }
+
+/// The setting of the module documentation's third worked example: a
+/// label and a control side by side, or stacked, chosen by its own width.
+fn setting() -> ResponsiveLevels<'static> {
+    let parts = || {
+        vec![
+            block(120.0, 20.0).identity(Id::new("label"), None),
+            block(80.0, 20.0).identity(Id::new("control"), None),
+        ]
+    };
+    stages(vec![
+        Stage::new(Level::Preferred, row_child(parts(), 8.0)),
+        Stage::new(Level::Preferred, column_child(parts(), 4.0)),
+    ])
+}
+
+/// A gap 16 high that may shrink to 8.
+fn shrinking_gap() -> Child<'static> {
+    scroll_child(block_leaf(0.0, 16.0), Size::new(0.0, 8.0)).identity(Id::new("gap"), None)
+}
+
+fn settings_column(setting: Child<'static>) -> Child<'static> {
+    column_child(
+        vec![
+            block(100.0, 20.0),
+            shrinking_gap(),
+            setting.identity(Id::new("setting"), None),
+        ],
+        0.0,
+    )
+}
+
+#[test]
+fn worked_example_a_part_with_its_own_stages() {
+    let outer = settings_column(Child::from(setting()).minimum_width(|_, _| 120.0));
+    let measured = outer.query(Level::Preferred);
+    assert_eq!(measured.preferred, Size::new(208.0, 56.0));
+    assert_eq!(measured.minimum.width, 120.0);
+    let setting_measured = Child::from(setting()).query(Level::Preferred);
+    assert_eq!(setting_measured.preferred, Size::new(208.0, 20.0));
+    assert_eq!(setting_measured.minimum, Size::new(208.0, 20.0));
+
+    // (inner stage, setting's box, gap height, column height)
+    let at = |width, height| {
+        let plan = outer
+            .query_at(Level::Preferred, Size::new(width, height))
+            .unwrap();
+        let (_, setting) = plan.find(&Id::new("setting")).unwrap();
+        let (_, gap) = plan.find(&Id::new("gap")).unwrap();
+        let chosen = setting.selection().unwrap().as_ref().unwrap();
+        (
+            chosen.stage_index,
+            setting.size,
+            gap.size.height,
+            plan.size.height,
+        )
+    };
+    assert_eq!(at(240.0, 60.0), (0, Size::new(208.0, 20.0), 16.0, 56.0));
+    assert_eq!(at(240.0, 50.0), (0, Size::new(208.0, 20.0), 10.0, 50.0));
+    assert_eq!(at(160.0, 80.0), (1, Size::new(160.0, 44.0), 16.0, 80.0));
+    assert_eq!(at(160.0, 76.0), (1, Size::new(160.0, 44.0), 12.0, 76.0));
+
+    // Side by side needs 208 in 160: that is in the setting's own record,
+    // not the outer one.
+    let stacked = setting().layout(Size::new(160.0, f64::INFINITY)).1.unwrap();
+    assert_eq!(stacked.stage_index, 1);
+    let side_by_side = stages(vec![setting().stages.remove(0)])
+        .layout(Size::new(160.0, f64::INFINITY))
+        .1
+        .unwrap_err();
+    assert_eq!(
+        side_by_side.failures[0].error,
+        AllocationError::NoFit {
+            required: 208.0,
+            available: 160.0
+        }
+    );
+
+    assert_eq!(
+        outer.query_at(Level::Preferred, Size::new(160.0, 71.0)),
+        Err(AllocationError::NoFit {
+            required: 72.0,
+            available: 71.0
+        })
+    );
+    assert_eq!(
+        outer.query_at(Level::Preferred, Size::new(110.0, 200.0)),
+        Err(AllocationError::NoFit {
+            required: 120.0,
+            available: 110.0
+        })
+    );
+    // Without the declared minimum the outer column needs the setting's
+    // preferred width, and the setting never stacks.
+    let undeclared = settings_column(setting().into());
+    assert_eq!(
+        undeclared.query_at(Level::Preferred, Size::new(160.0, 200.0)),
+        Err(AllocationError::NoFit {
+            required: 208.0,
+            available: 160.0
+        })
+    );
+}
+
+#[test]
+fn the_outer_level_does_not_choose_the_inner_stage() {
+    // The inner stages are at Preferred and Strong; the outer list asks at
+    // Preferred and Mild. The same width gives the same inner choice.
+    let inner = || {
+        Child::from(stages(vec![
+            Stage::new(
+                Level::Preferred,
+                row_child(
+                    vec![levels([90.0, 40.0, 40.0, 40.0], 20.0), block(60.0, 20.0)],
+                    4.0,
+                ),
+            ),
+            Stage::new(
+                Level::Strong,
+                column_child(
+                    vec![levels([90.0, 40.0, 40.0, 40.0], 20.0), block(60.0, 20.0)],
+                    4.0,
+                ),
+            ),
+        ]))
+        .minimum_width(|_, _| 40.0)
+        .identity(Id::new("inner"), None)
+    };
+    let outer = || {
+        column_child(
+            vec![levels([150.0, 100.0, 100.0, 100.0], 10.0), inner()],
+            0.0,
+        )
+    };
+    let inner_stage = |plan: &GeometryPlan| {
+        let (_, node) = plan.find(&Id::new("inner")).unwrap();
+        let chosen = node.selection().unwrap().as_ref().unwrap();
+        (chosen.stage_index, chosen.level, chosen.geometry.size)
+    };
+    for width in [154.0, 150.0] {
+        let preferred = outer()
+            .query_at(Level::Preferred, Size::new(width, 100.0))
+            .unwrap();
+        let mild = outer()
+            .query_at(Level::Mild, Size::new(width, 100.0))
+            .unwrap();
+        assert_eq!(inner_stage(&preferred), inner_stage(&mild));
+    }
+    // At Mild the outer header is 100, but the first inner child is still
+    // 90, at the inner stage's own level: side by side needs 154.
+    let mild = outer()
+        .query_at(Level::Mild, Size::new(154.0, 100.0))
+        .unwrap();
+    assert_eq!(
+        inner_stage(&mild),
+        (0, Level::Preferred, Size::new(154.0, 20.0))
+    );
+    let narrower = outer()
+        .query_at(Level::Mild, Size::new(150.0, 100.0))
+        .unwrap();
+    assert_eq!(
+        inner_stage(&narrower),
+        (1, Level::Strong, Size::new(60.0, 44.0))
+    );
+}
+
+#[test]
+fn a_part_none_of_whose_stages_fit_shows_its_fallback_and_says_why() {
+    let part = |fallback: bool| {
+        let levels = stages(vec![
+            Stage::new(
+                Level::Preferred,
+                row_child(vec![block(50.0, 20.0), block(50.0, 20.0)], 0.0),
+            ),
+            Stage::new(
+                Level::Preferred,
+                block(70.0, 30.0).identity(Id::new("wide"), None),
+            ),
+        ]);
+        let levels = if fallback {
+            levels.fallback(|maximum| Size::new(40.0f64.min(maximum.width), 12.0))
+        } else {
+            levels
+        };
+        Child::from(levels)
+            .minimum_width(|_, _| 30.0)
+            .identity(Id::new("part"), None)
+    };
+    for (fallback, height) in [(false, 0.0), (true, 12.0)] {
+        let outer = column_child(vec![block(20.0, 10.0), part(fallback)], 0.0);
+        // The outer column fits: the part is as wide as it is given.
+        let plan = outer
+            .query_at(Level::Preferred, Size::new(60.0, 100.0))
+            .unwrap();
+        let (position, node) = plan.find(&Id::new("part")).unwrap();
+        assert_eq!(position, Point::new(0.0, 10.0));
+        assert_eq!(node.size, Size::new(60.0, height));
+        assert_eq!(plan.size.height, 10.0 + height);
+        let none = node.selection().unwrap().as_ref().unwrap_err();
+        assert_eq!(none.attempted, 2);
+        assert_eq!(
+            none.failures
+                .iter()
+                .map(|failure| (failure.error, failure.child.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    AllocationError::NoFit {
+                        required: 100.0,
+                        available: 60.0
+                    },
+                    None
+                ),
+                (
+                    AllocationError::NoFit {
+                        required: 70.0,
+                        available: 60.0
+                    },
+                    Some(Id::new("wide"))
+                ),
+            ]
+        );
+        // Wider, the second stage is chosen; the row needs 100.
+        let wider = outer
+            .query_at(Level::Preferred, Size::new(80.0, 100.0))
+            .unwrap();
+        let (_, node) = wider.find(&Id::new("part")).unwrap();
+        assert_eq!(node.selection().unwrap().as_ref().unwrap().stage_index, 1);
+        assert_eq!(node.size, Size::new(80.0, 30.0));
+    }
+    // Other nodes carry no selection.
+    let plan = block(10.0, 10.0)
+        .query_at(Level::Preferred, Size::new(10.0, 10.0))
+        .unwrap();
+    assert!(plan.selection().is_none());
+}
+
+#[test]
+fn responsive_child_tries_the_same_child_at_each_level() {
+    let content = levels([100.0, 80.0, 60.0, 40.0], 10.0);
+    let part = responsive_child(Level::Strong, content);
+    let (size, chosen) = part.layout(Size::new(70.0, 10.0));
+    let chosen = chosen.unwrap();
+    assert_eq!((chosen.stage_index, chosen.level), (2, Level::Strong));
+    assert_eq!(size, Size::new(70.0, 10.0));
+    let (size, none) = part.layout(Size::new(50.0, 10.0));
+    assert_eq!(none.unwrap_err().attempted, 3);
+    assert_eq!(size, Size::new(50.0, 0.0));
+}

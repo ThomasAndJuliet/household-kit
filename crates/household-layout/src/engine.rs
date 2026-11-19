@@ -79,6 +79,57 @@
 //! fits, the answer is [`NoFit`]; nothing is hidden, clipped or compacted
 //! further than the stages declare.
 //!
+//! # A part with its own stages
+//!
+//! A part of a layout can be a root of its own: it holds its own list of
+//! stages ([`stages`]) and takes the first that fits the room its parent
+//! gives it, as [`choose_stage`] does for the whole layout, whatever the
+//! rest of the layout chooses. This is the engine's `ResponsiveLevels`
+//! placed in another layout as an ordinary leaf; here a
+//! [`ResponsiveLevels`] becomes a [`Child`] with `Child::from` or `into()`.
+//!
+//! Use it for a choice that depends only on that part's own room. A
+//! settings row puts its label, preview and control side by side, then the
+//! preview below, then everything stacked, by the width the row itself is
+//! given. A chart's category names go onto two lines when the axis they
+//! label is short of width, while the gap under the figure's title answers
+//! to the figure's height. Written as stages of the whole page or figure,
+//! each of these choices would be tied to every other choice in that list:
+//! the names would wrap only together with whatever else that stage
+//! compacts.
+//!
+//! The outer layout sees an ordinary leaf, which it measures and lays out
+//! as it does any other:
+//!
+//! - **Measured**, the part lays itself out in unbounded room. The first of
+//!   its stages that fits there gives its preferred size, and its minimum
+//!   is the same, as for any leaf. So unless the caller declares a
+//!   [`Child::minimum_width`], the outer layout never gives it less width
+//!   than its first stage prefers, and in that width the first stage
+//!   fits: its later stages are never reached. A part that should
+//!   rearrange when short of width declares the least width it can work
+//!   in.
+//! - **Laid out** at the width its parent allocates, it chooses its stage
+//!   there. Like any ordinary leaf it chooses with unbounded height, so its
+//!   choice follows its width alone, and in a column its height is a
+//!   floor. Its box fills the width it is given and is as high as the
+//!   chosen stage.
+//! - **When none of its stages fits**, it shows the caller's fallback
+//!   ([`ResponsiveLevels::fallback`]) or an empty box, as wide as it was
+//!   given and as high as the fallback (nothing, for none). To the outer
+//!   layout that is still a leaf that fits: the failure does not make the
+//!   outer stage fail.
+//!
+//! The outer level does not reach inside. An outer stage asks the part at
+//! its own level, as it asks every child, but the part does not use it:
+//! each of its stages names its own level, and the same width gives the
+//! same inner choice under an outer stage at `Preferred` or at `Mild`.
+//!
+//! The outer plan carries the inner choice. The node of the part has a
+//! [`GeometryPlan::selection`]: the stage it took, at its level, with that
+//! stage's plan (relative to the node's top left corner), or, when none
+//! fitted, the [`NoFit`] that says what each stage lacked.
+//!
 //! # How one layout is worked out
 //!
 //! Width comes first. Content such as text that wraps is taller when it is
@@ -205,6 +256,41 @@
 //! title, and the `Preferred` column would not fit below 136. (Checked by
 //! the test `worked_example_a_charts_vertical_gap`.)
 //!
+//! # A worked example: a part with its own stages
+//!
+//! A setting has a label 120 wide and a control 80 wide, both 20 high. Its
+//! own stages, both at `Preferred`, are the two side by side with a spacing
+//! of 8, which needs 208, and the two stacked with a spacing of 4, which is
+//! 120 wide and 44 high. It declares a minimum width of 120. It sits in an
+//! outer column with no spacing, below a title 100 wide and 20 high and a
+//! gap that is 16 high and may shrink to 8 (a viewport, as in the chart
+//! above). The outer column is the only outer stage.
+//!
+//! Measured, the setting is 208 by 20 (its first stage in unbounded room),
+//! with a minimum width of 120 as declared. The outer column prefers 208
+//! by 20 + 16 + 20 = 56.
+//!
+//! - In 240 by 60, the setting is given 208, its preferred width. Its
+//!   first stage fits, and it is 20 high; the column is 56 high, with the
+//!   gap at 16.
+//! - In 240 by 50, the column is 6 short of height. The setting's height
+//!   is a floor and its choice does not change: it is still side by side.
+//!   The gap gives the 6 and is 10.
+//! - In 160 by 80, the setting is given 160. Side by side it needs 120 +
+//!   8 + 80 = 208, since neither part can be narrower, so it stacks: its
+//!   box is 160 wide and 44 high. The column needs 20 + 16 + 44 = 80 and
+//!   fits as it is. What the side-by-side stage lacked is in the setting's
+//!   own record, not the outer one.
+//! - In 160 by 76, both are short: the setting stacks because of the width
+//!   and the gap gives 4 and is 12 because of the height.
+//! - In 160 by 71 the outer column does not fit: its floors and the gap's
+//!   least height need 20 + 8 + 44 = 72.
+//! - In 110 the outer column does not fit either: the setting's declared
+//!   minimum is 120. Without that declaration it would not fit below 208,
+//!   and the setting would never stack.
+//!
+//! (Checked by the test `worked_example_a_part_with_its_own_stages`.)
+//!
 //! # What a caller supplies and gets back
 //!
 //! The caller supplies the leaves. A [`Leaf`] answers two questions, both
@@ -229,8 +315,12 @@
 //! this module asks a [`Leaf`]. What is about live widgets is left out:
 //! views and their elements, the verified commit, speculative measuring,
 //! native state, decorators, popups, hovers, navigation regions and
-//! presentations. household-widgets' test `layout_port_equality` builds
-//! trees in both and requires the same results over sweeps of width and
+//! presentations. Of `ResponsiveLevels` only what it does as a leaf of
+//! another layout is kept, with its default width and height (fill the
+//! width, shrink to the height); its other widths and heights, and the
+//! conveniences `responsive` and `row`, are left out. household-widgets'
+//! tests `layout_port_equality` and `layout_port_nested_equality` build
+//! trees in both and require the same results over sweeps of width and
 //! height.
 //!
 //! # Three additions
@@ -246,7 +336,9 @@
 //!   the engine's own error ([`AllocationError`]), which says how much
 //!   room was required and how much was available, and the identity of the
 //!   child it came from where one is known. The engine discards this; a
-//!   chart needs it to say which size would help.
+//!   chart needs it to say which size would help. In the same way the node
+//!   of a part with its own stages carries the choice it made
+//!   ([`GeometryPlan::selection`]), which the engine keeps on its widget.
 //! - **What a form does not show.** A child may report which information
 //!   its planned form shortens or omits ([`Child::report_information`]);
 //!   the reports are gathered in the plan ([`GeometryPlan::reports`]) as
@@ -420,6 +512,7 @@ pub struct GeometryPlan {
     native_size: Option<Size>,
     identities: Vec<(Id, Option<Source>)>,
     source_reports: Vec<SourceReport>,
+    selection: Option<Rc<Result<StagePlan, NoFit>>>,
 }
 
 /// One immediate child's place in its parent's plan: the engine's
@@ -445,6 +538,7 @@ impl GeometryPlan {
             native_size: None,
             identities: Vec::new(),
             source_reports: Vec::new(),
+            selection: None,
         }
     }
 
@@ -477,6 +571,20 @@ impl GeometryPlan {
     /// where its commit checks the native widget against it.
     pub fn native_size(&self) -> Option<Size> {
         self.native_size
+    }
+
+    /// For the node of a part with its own stages ([`ResponsiveLevels`]),
+    /// the choice it made in the room this plan gave it: the stage taken,
+    /// with its level and its plan, whose positions are relative to this
+    /// node's top left corner; or, when none of its stages fitted, what
+    /// each lacked ([`NoFit`]), while this node holds the fallback's size.
+    /// `None` for every other node. The engine's
+    /// `ResponsiveLevels::selection`, which the engine keeps on the widget
+    /// rather than in the outer plan; part of the port's addition *what
+    /// failed*, and it changes no choice. [`Self::find`] and
+    /// [`Self::reports`] do not look inside it.
+    pub fn selection(&self) -> Option<&Result<StagePlan, NoFit>> {
+        self.selection.as_deref()
     }
 
     /// The identities of the children whose node this is: a form's own
@@ -638,11 +746,15 @@ pub struct Child<'a> {
     fixed_height: Option<f64>,
     identity: Option<(Id, Option<Source>)>,
     information: Option<InformationQuery<'a>>,
+    // A part with its own stages: `native` lays it out, and this records
+    // the choice it made there in the plan.
+    nested: Option<Rc<ResponsiveLevels<'a>>>,
 }
 
 impl<'a> Child<'a> {
     fn new(native: Option<Rc<dyn Leaf + 'a>>, query: SizeQuery<'a>) -> Self {
         Self {
+            nested: None,
             native,
             query,
             composition: None,
@@ -872,10 +984,17 @@ impl<'a> Child<'a> {
             // height, so the height it needs is what it reports; a clipped
             // height could otherwise pass for a fit. Only a declared
             // viewport is given a finite height.
-            let size = native.layout(
-                level,
-                Size::new(width, viewport_height.unwrap_or(f64::INFINITY)),
-            );
+            let maximum = Size::new(width, viewport_height.unwrap_or(f64::INFINITY));
+            // A part with its own stages chooses one in this room; its
+            // choice is kept in the plan. The level is not passed on: its
+            // own stages name theirs.
+            let (size, selection) = match &self.nested {
+                Some(nested) => {
+                    let (size, selection) = nested.layout(maximum);
+                    (size, Some(Rc::new(selection)))
+                }
+                None => (native.layout(level, maximum), None),
+            };
             if !finite_size(size) {
                 return Err(AllocationError::InvalidInput.into());
             }
@@ -890,6 +1009,7 @@ impl<'a> Child<'a> {
             // The parent reserves the allocated width even for shrink content.
             let mut plan = GeometryPlan::leaf(Size::new(width, size.height));
             plan.native_size = Some(size);
+            plan.selection = selection;
             if let Some(minimum) = &self.viewport {
                 let minimum = minimum(level);
                 plan.size.height = viewport_height.expect("declared viewport height");
@@ -1821,6 +1941,118 @@ pub fn choose_stage(stages: &[Stage<'_>], available: Size) -> Result<StagePlan, 
         attempted: stages.len(),
         failures,
     })
+}
+
+type Fallback<'a> = Rc<dyn Fn(Size) -> Size + 'a>;
+
+/// A part with its own ordered list of stages, which it chooses among from
+/// the room it is given: the engine's `ResponsiveLevels`, without its
+/// widget. Made by [`stages`] or [`responsive_child`]; laid out directly
+/// with [`Self::layout`], or placed in another layout as a leaf with
+/// `Child::from` (or `into()`), as the engine places it with `child`. The
+/// module documentation's *A part with its own stages* says what the
+/// outer layout sees of it, and works an example.
+pub struct ResponsiveLevels<'a> {
+    stages: Vec<Stage<'a>>,
+    fallback: Option<Fallback<'a>>,
+}
+
+/// A part that chooses among `stages`, in order, by its own room: the
+/// engine's `stages`. With no fallback, a room where none fits gets an
+/// empty box.
+pub fn stages(stages: Vec<Stage<'_>>) -> ResponsiveLevels<'_> {
+    ResponsiveLevels {
+        stages,
+        fallback: None,
+    }
+}
+
+/// The same child at each level from `Preferred` up to `max_level`, as
+/// that many stages: the engine's `responsive_child`.
+pub fn responsive_child(max_level: Level, child: Child<'_>) -> ResponsiveLevels<'_> {
+    stages(
+        Level::ALL
+            .into_iter()
+            .take_while(|level| *level <= max_level)
+            .map(|level| Stage::new(level, child.clone()))
+            .collect(),
+    )
+}
+
+impl<'a> ResponsiveLevels<'a> {
+    /// What to show when no stage fits: the engine's `fallback`, with a
+    /// function giving the fallback's size within a maximum (an infinite
+    /// width meaning unbounded) in place of its view. The fallback takes
+    /// the place of the stages; it is not checked against the room.
+    pub fn fallback(mut self, fallback: impl Fn(Size) -> Size + 'a) -> Self {
+        self.fallback = Some(Rc::new(fallback));
+        self
+    }
+
+    /// Choose a stage within `maximum` and say how large the part is: the
+    /// engine's `ResponsiveLevels::layout` with its default width and
+    /// height (fill the width, shrink to the height), and its
+    /// `selection`, without the native commit and its agreement check.
+    ///
+    /// The choice is [`choose_stage`] in `maximum`. The size is the chosen
+    /// stage's, or, when none fits, the fallback's laid out within
+    /// `maximum` (nothing for no fallback); then its width is the whole of
+    /// a finite `maximum.width` (an unbounded one keeps the content's
+    /// width), and its height is the content's, no more than
+    /// `maximum.height`.
+    pub fn layout(&self, maximum: Size) -> (Size, Result<StagePlan, NoFit>) {
+        let selection = choose_stage(&self.stages, maximum);
+        let content = match &selection {
+            Ok(chosen) => chosen.geometry.size,
+            Err(_) => self
+                .fallback
+                .as_ref()
+                .map_or(Size::new(0.0, 0.0), |fallback| fallback(maximum)),
+        };
+        // iced's `Limits::resolve` for a fill width and a shrink height.
+        // Only an unbounded width compresses a fill width to its content.
+        let width = if maximum.width.is_infinite() {
+            content.width.max(0.0)
+        } else {
+            maximum.width
+        };
+        let height = content.height.min(maximum.height).max(0.0);
+        (Size::new(width, height), selection)
+    }
+}
+
+/// The engine's native leaf around a `ResponsiveLevels`. Its intrinsic
+/// size, at any level, is its layout in unbounded room; the level it is
+/// asked at is not passed on.
+struct Nested<'a>(Rc<ResponsiveLevels<'a>>);
+
+impl Leaf for Nested<'_> {
+    fn query(&self, _: Level) -> MeasuredSize {
+        let (size, _) = self.0.layout(Size::INFINITE);
+        MeasuredSize {
+            preferred: size,
+            minimum: size,
+        }
+    }
+
+    fn layout(&self, _: Level, maximum: Size) -> Size {
+        self.0.layout(maximum).0
+    }
+}
+
+/// A part with its own stages as a leaf of another layout: the engine's
+/// `child(move |_| stages(..).into())`. Its preferred size and minimum are
+/// its size in unbounded room (the first stage that fits there), unless a
+/// [`Child::minimum_width`] is declared, as for any leaf; laid out, it
+/// chooses its stage in the width it is given, and its plan carries that
+/// choice ([`GeometryPlan::selection`]).
+impl<'a> From<ResponsiveLevels<'a>> for Child<'a> {
+    fn from(levels: ResponsiveLevels<'a>) -> Self {
+        let levels = Rc::new(levels);
+        let mut result = child(Nested(levels.clone()));
+        result.nested = Some(levels);
+        result
+    }
 }
 
 #[cfg(test)]
