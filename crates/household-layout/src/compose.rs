@@ -4,9 +4,9 @@
 //! arrangements in its order of preference.
 //!
 //! A row or column shares a shortage along its direction with
-//! [`allocate`], then asks each child for its size across at the room it
-//! got. Gaps are children with a range from a least to an ideal, named by
-//! what they separate.
+//! [`allocate`], then asks each child again at the room it got. Gaps are
+//! children with a range from a least to an ideal, named by what they
+//! separate.
 //!
 //! A level in an order is a ceiling, everywhere: "you may compromise up
 //! to here" (semantics A1).
@@ -17,31 +17,31 @@
 //!   action buttons this means they compact together". That is the only
 //!   "together". A list takes its level exactly, so whoever holds a
 //!   ceiling over it works up from Preferred.
-//! - A row or column works up level by level (A3). For each target from
-//!   Mild up to its ceiling it tries the children at their current
-//!   levels, and if they do not fit it orders up the first child, in its
-//!   own asking order with flexible children last, that is below the
-//!   target, whose next level (the next at which its answer changes) is
-//!   not past the target, and that the queries show needs it: it does not
-//!   fit its own room, or the composition is short along its direction
-//!   and its next level takes less room there without leaving it short
-//!   across. So every child that needs it reaches Mild before any child
-//!   reaches Strong, and a child that fits and takes no room that is short
-//!   is never ordered up. A flexible child keeps its preferred length
-//!   while the others can still give; only then is it squeezed. A row or
-//!   column passes its children only the level.
+//! - A row or column (A3, second round) first shares the shortage: it
+//!   fits if its children's least lengths along fit together and each
+//!   child fits the room it gets across, the room short of the preferred
+//!   lengths being shared by weight over the children's ranges. A weight
+//!   of zero protects a child's preferred length. If it does not fit, then
+//!   for each target from Mild up to its ceiling it orders up, one level
+//!   at a time, the first child in its asking order that is below the
+//!   target and whose next level helps: its least length along shrinks
+//!   while the direction is short, or it comes nearer to fitting its own
+//!   room across. When it fits, it relaxes: in the reverse of the order in
+//!   which children were ordered up, each is tried one level lower and
+//!   kept there if the whole still fits. A row or column passes its
+//!   children only the level.
 //! - [`Arrangements`] tries its arrangements in passes (A4): by default up
 //!   to Mild, then up to Strong, then up to AllPermitted, each capped at
 //!   its own ceiling; within a pass each arrangement starts again from
 //!   Preferred, and the first that fits is taken: "compact mildly, change
 //!   arrangement, then compact strongly".
 //!
-//! A composition's answer describes what it would do in the space
-//! offered (B1): its preferred size comes from the levels its
-//! distribution reaches there, and its least length in each direction is
-//! what it reaches when driven as far as its ceiling allows, with the
-//! other direction as offered. A composition remembers its answers and
-//! its children's, since a query is pure (B5).
+//! A composition's answer is about the space offered (B1, second round):
+//! each of its four lengths is for one direction with the other as
+//! offered, and its taken size is what it decides there. Ordering it in
+//! the same space makes the same decision. A composition remembers its
+//! answers while it is unchanged: adding to it, or telling it to
+//! [forget](LayoutBox::forget), clears what it remembered (B5).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -49,7 +49,7 @@ use std::rc::Rc;
 
 use crate::allocate::{AllocationError, Capacity, allocate};
 use crate::boxes::{Answer, Kept, LayoutBox, Node, Reason, Shortfall, Showed};
-use crate::geometry::{Direction, FIT_EPSILON, Rect, Size};
+use crate::geometry::{Direction, FIT_EPSILON, Point, Rect, Size};
 use crate::identity::{Id, Source};
 use crate::level::Level;
 use crate::order::{Accepts, Order, Resolved, Unsupported};
@@ -78,7 +78,8 @@ impl From<Size> for SpaceKey {
 type AskedKey = (usize, Order, SpaceKey);
 
 /// The answers a parent has had from its children. A query is pure, so
-/// each child is asked once for each order and space.
+/// each child is asked once for each order and space while the parent is
+/// unchanged.
 #[derive(Default)]
 struct Asked(RefCell<HashMap<AskedKey, Result<Answer, Unsupported>>>);
 
@@ -97,6 +98,40 @@ impl Asked {
         let answer = child.query(order, space);
         self.0.borrow_mut().insert(key, answer.clone());
         answer
+    }
+
+    fn clear(&self) {
+        self.0.borrow_mut().clear();
+    }
+}
+
+/// A box's own answers, by its resolved orders and the space offered.
+struct Remembered<T>(RefCell<HashMap<(Resolved, SpaceKey), Rc<T>>>);
+
+impl<T> Default for Remembered<T> {
+    fn default() -> Self {
+        Self(RefCell::default())
+    }
+}
+
+impl<T> Remembered<T> {
+    fn get_or(
+        &self,
+        own: &Resolved,
+        space: Size,
+        make: impl FnOnce() -> Result<T, Unsupported>,
+    ) -> Result<Rc<T>, Unsupported> {
+        let key = (own.clone(), SpaceKey::from(space));
+        if let Some(remembered) = self.0.borrow().get(&key) {
+            return Ok(Rc::clone(remembered));
+        }
+        let made = Rc::new(make()?);
+        self.0.borrow_mut().insert(key, Rc::clone(&made));
+        Ok(made)
+    }
+
+    fn clear(&self) {
+        self.0.borrow_mut().clear();
     }
 }
 
@@ -175,8 +210,13 @@ impl<C> LayoutBox<C> for Gap {
         ))
     }
 
-    fn arrange(&self, orders: &Resolved, bounds: Rect) -> Result<Node<C>, Unsupported> {
-        Ok(Node::new(self.id.clone(), orders.clone(), bounds))
+    fn arrange(&self, orders: &Resolved, at: Point, space: Size) -> Result<Node<C>, Unsupported> {
+        let taken = LayoutBox::<C>::measure(self, orders, space)?.taken;
+        Ok(Node::new(
+            self.id.clone(),
+            orders.clone(),
+            Rect::from_origin(at, taken),
+        ))
     }
 }
 
@@ -186,7 +226,8 @@ pub enum Align {
     Start,
     Centre,
     End,
-    /// It takes the whole length across.
+    /// It takes the whole length across: its node is stretched to the
+    /// composition's length across.
     Fill,
 }
 
@@ -197,13 +238,10 @@ pub struct Member<C> {
     /// row or column sets the level itself. A list passes every member
     /// what the list was ordered and ignores this.
     pub order: Order,
-    /// How readily it shrinks, as in [`Capacity::weight`].
+    /// How readily it gives room within its range, from its preferred
+    /// length down to its least, as in [`Capacity::weight`]. Zero protects
+    /// its preferred length.
     pub weight: f64,
-    /// In a row or column, a flexible child keeps its preferred length
-    /// until the others have given what their levels allow, and its own
-    /// levels are tried last. A list's members change together, so a list
-    /// has no flexible member.
-    pub flexible: bool,
     /// Where it sits across; `None` is the composition's default: a row
     /// centres its members ("boxes in a row are centred on one line"), a
     /// column starts them.
@@ -219,7 +257,6 @@ impl<C> Member<C> {
             child,
             order: Order::NONE,
             weight: 1.0,
-            flexible: false,
             align: None,
             grow: 0.0,
         }
@@ -235,9 +272,12 @@ impl<C> Member<C> {
         self
     }
 
-    pub fn flexible(mut self) -> Self {
-        self.flexible = true;
-        self
+    /// The child that gives and grows, such as a plot: it gives room by
+    /// its range at its weight like every member, and takes the surplus
+    /// with a growth of one. Nothing else sets it apart; in particular its
+    /// siblings are not compacted to spare it.
+    pub fn flexible(self) -> Self {
+        self.growing(1.0)
     }
 
     pub fn aligned(mut self, align: Align) -> Self {
@@ -258,7 +298,6 @@ impl<C> Clone for Member<C> {
             child: Rc::clone(&self.child),
             order: self.order.clone(),
             weight: self.weight,
-            flexible: self.flexible,
             align: self.align,
             grow: self.grow,
         }
@@ -270,12 +309,6 @@ struct GapAt {
     index: usize,
     least: f64,
     ideal: f64,
-}
-
-/// What a composition decided under one resolved order in one space.
-struct Measured {
-    outcome: Outcome,
-    answer: Answer,
 }
 
 /// A row, a column or a list of immediate children.
@@ -293,7 +326,8 @@ pub struct Stack<C> {
     squeezed_from: Level,
     on_baselines: bool,
     asked: Asked,
-    measured: RefCell<HashMap<(Resolved, SpaceKey), Rc<Measured>>>,
+    decided: Remembered<Outcome>,
+    answered: Remembered<Answer>,
 }
 
 impl<C> Stack<C> {
@@ -311,7 +345,8 @@ impl<C> Stack<C> {
             squeezed_from: Level::Strong,
             on_baselines: false,
             asked: Asked::default(),
-            measured: RefCell::default(),
+            decided: Remembered::default(),
+            answered: Remembered::default(),
         }
     }
 
@@ -330,6 +365,19 @@ impl<C> Stack<C> {
         Self::new(id, direction, true)
     }
 
+    /// Forget this composition's own answers, not its children's.
+    fn forget_own(&self) {
+        self.asked.clear();
+        self.decided.clear();
+        self.answered.clear();
+    }
+
+    /// The same composition, changed: what it remembered no longer holds.
+    fn changed(self) -> Self {
+        self.forget_own();
+        self
+    }
+
     pub fn with_source(mut self, source: Source) -> Self {
         self.source = Some(source);
         self
@@ -339,22 +387,21 @@ impl<C> Stack<C> {
     /// the ceiling ordered from above.
     pub fn with_maker(mut self, maker: Order) -> Self {
         self.maker = maker;
-        self
+        self.changed()
     }
 
     /// The presentations this composition accepts. A list passes what it
     /// was ordered on to every member, so each member must accept it too.
     pub fn accepting(mut self, accepts: Accepts) -> Self {
         self.accepts = accepts;
-        self
+        self.changed()
     }
 
     /// The parent's short list of who is asked first. Children not on it
-    /// are asked after, in their order in the composition, and flexible
-    /// children after all the rest.
+    /// are asked after, in their order in the composition.
     pub fn asked_first(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
         self.asked_first = ids.into_iter().collect();
-        self
+        self.changed()
     }
 
     /// A row whose members that have a baseline sit on one shared
@@ -362,7 +409,7 @@ impl<C> Stack<C> {
     /// own alignment. A column ignores this.
     pub fn on_baselines(mut self) -> Self {
         self.on_baselines = true;
-        self
+        self.changed()
     }
 
     pub fn direction(&self) -> Direction {
@@ -379,10 +426,11 @@ impl<C: 'static> Stack<C> {
         self.member(Member::new(child))
     }
 
+    /// Add a member. What the composition remembered is cleared.
     pub fn member(mut self, member: Member<C>) -> Self {
         self.members.push(member);
         self.name_gaps();
-        self
+        self.changed()
     }
 
     /// A gap from `least` to `ideal` along this composition, as the next
@@ -398,7 +446,7 @@ impl<C: 'static> Stack<C> {
             ideal,
         });
         self.name_gaps();
-        self
+        self.changed()
     }
 
     /// The level from which this composition's gaps may go below their
@@ -406,7 +454,7 @@ impl<C: 'static> Stack<C> {
     pub fn squeezing_from(mut self, level: Level) -> Self {
         self.squeezed_from = level;
         self.name_gaps();
-        self
+        self.changed()
     }
 
     /// Make each gap again, named by the nearest children on either side
@@ -448,27 +496,24 @@ impl<C: 'static> Stack<C> {
     }
 }
 
-/// The children's answers under one assignment of levels.
+/// The children's answers under one assignment of levels in one space.
 struct Trial {
     orders: Vec<Order>,
-    /// Answers in the composition's whole space: the lengths along.
+    /// Answers with unlimited room along and the room across as offered:
+    /// each child's lengths along.
     full: Vec<Answer>,
-    /// Each child's room along: what the allocation gave it or, when the
-    /// floors do not fit, its floor (its least length, or its preferred
-    /// length while it is a protected flexible child).
+    /// Each child's room along: what the allocation gave it, with its
+    /// share of any surplus if it grows, or, when the floors do not fit,
+    /// its floor.
     lengths: Vec<f64>,
-    /// Answers at each child's room. While the floors do not fit there is
-    /// no room to speak of, and a child given at least its preferred
-    /// length answers as it does with room to spare: these are its answers
-    /// in the whole space.
+    /// Each child's answer at its room. A child given its preferred
+    /// length, or any length while the floors do not fit, answers as it
+    /// does in `full`.
     rooms: Vec<Answer>,
-    /// The room each child was asked at, when it was asked at one.
-    asked_at: Vec<Option<Size>>,
+    /// The space each child was asked in for `rooms`.
+    asked_at: Vec<Size>,
     /// What the floors need and the room has, when they do not fit.
     along_short: Option<(f64, f64)>,
-    /// What the least lengths alone need and the room has, when even
-    /// they do not fit.
-    least_short: Option<(f64, f64)>,
 }
 
 impl Trial {
@@ -477,7 +522,8 @@ impl Trial {
     }
 }
 
-/// The distribution's result.
+/// What a row, column or list decided under one resolved order in one
+/// space.
 struct Outcome {
     levels: Vec<Level>,
     trial: Trial,
@@ -500,13 +546,18 @@ impl<C> Stack<C> {
         size_in(self.direction, along, self.across().length(space))
     }
 
-    /// The space a child is asked in for its lengths along: unlimited
-    /// along, since a preferred length is the length with room to spare
-    /// and a least length the least it can reach, and as offered across.
-    /// Asking every child there, whatever the length along offered, keeps
-    /// the spaces a tree is asked in few (semantics B5).
+    /// Unlimited along and as offered across: where a child is asked for
+    /// its lengths along, and where this composition's preferred length
+    /// along is decided. Asking every child there, whatever the length
+    /// along offered, keeps the spaces a tree is asked in few (B5).
     fn whole(&self, space: Size) -> Size {
         self.room(space, f64::INFINITY)
+    }
+
+    /// As offered along and unlimited across: where this composition's
+    /// preferred length across is decided.
+    fn open(&self, space: Size) -> Size {
+        size_in(self.direction, self.direction.length(space), f64::INFINITY)
     }
 
     fn order_for(&self, i: usize, level: Level, own: &Resolved) -> Order {
@@ -529,6 +580,16 @@ impl<C> Stack<C> {
             .ask(i, self.members[i].child.as_ref(), &order, space)
     }
 
+    /// The least length along child `i` can be given: its least, or its
+    /// preferred length while its weight protects it.
+    fn floor(&self, i: usize, full: &Answer) -> f64 {
+        if self.members[i].weight == 0.0 {
+            preferred_in(self.direction, full)
+        } else {
+            self.direction.length(full.least)
+        }
+    }
+
     fn align_of(&self, i: usize) -> Align {
         self.members[i].align.unwrap_or(match self.direction {
             Direction::Across => Align::Centre,
@@ -541,7 +602,7 @@ impl<C> Stack<C> {
     }
 
     /// The order in which children are asked: the short list, then the
-    /// rest in their order, with flexible children after all of them.
+    /// rest in their order.
     fn asking_order(&self) -> Vec<usize> {
         let mut order: Vec<usize> = self
             .asked_first
@@ -553,52 +614,29 @@ impl<C> Stack<C> {
                 order.push(i);
             }
         }
-        let (mut fixed, flexible): (Vec<usize>, Vec<usize>) =
-            order.into_iter().partition(|i| !self.members[*i].flexible);
-        fixed.extend(flexible);
-        fixed
+        order
     }
 
-    fn trial(
-        &self,
-        levels: &[Level],
-        own: &Resolved,
-        space: Size,
-        protect: bool,
-    ) -> Result<Trial, Unsupported> {
+    /// Share the room along at `levels`, then ask each child at its room.
+    fn trial(&self, levels: &[Level], own: &Resolved, space: Size) -> Result<Trial, Unsupported> {
         let d = self.direction;
         let n = self.members.len();
         let orders: Vec<Order> = (0..n).map(|i| self.order_for(i, levels[i], own)).collect();
+        let whole = self.whole(space);
         let full = (0..n)
-            .map(|i| self.ask(i, levels[i], own, self.whole(space)))
+            .map(|i| self.ask(i, levels[i], own, whole))
             .collect::<Result<Vec<_>, _>>()?;
         let available = d.length(space);
-        let protected = |i: usize| protect && self.members[i].flexible;
-        let floors: Vec<f64> = full
-            .iter()
-            .enumerate()
-            .map(|(i, answer)| {
-                if protected(i) {
-                    preferred_in(d, answer)
-                } else {
-                    d.length(answer.least)
-                }
-            })
-            .collect();
-        let least_total: f64 = full.iter().map(|answer| d.length(answer.least)).sum();
-        let least_short =
-            (least_total > available + FIT_EPSILON).then_some((least_total, available));
-        let (lengths, along_short) = if available.is_finite() {
-            let capacities: Vec<Capacity> = full
-                .iter()
-                .enumerate()
-                .map(|(i, answer)| {
-                    let weight = if protected(i) {
-                        0.0
-                    } else {
-                        self.members[i].weight
-                    };
-                    Capacity::new(preferred_in(d, answer), d.length(answer.least), weight)
+        let preferred: Vec<f64> = full.iter().map(|answer| preferred_in(d, answer)).collect();
+        let floors: Vec<f64> = (0..n).map(|i| self.floor(i, &full[i])).collect();
+        let (mut lengths, along_short) = if available.is_finite() {
+            let capacities: Vec<Capacity> = (0..n)
+                .map(|i| {
+                    Capacity::new(
+                        preferred[i],
+                        d.length(full[i].least),
+                        self.members[i].weight,
+                    )
                 })
                 .collect();
             match allocate(available, &capacities) {
@@ -612,21 +650,33 @@ impl<C> Stack<C> {
                 Err(AllocationError::InvalidInput) => (floors, Some((f64::INFINITY, available))),
             }
         } else {
-            (
-                full.iter().map(|answer| preferred_in(d, answer)).collect(),
-                None,
-            )
+            (preferred.clone(), None)
         };
-        let asked_at: Vec<Option<Size>> = (0..n)
+        let growing: f64 = self.members.iter().map(|member| member.grow).sum();
+        if along_short.is_none() && available.is_finite() && growing > 0.0 {
+            let surplus = available - lengths.iter().sum::<f64>();
+            if surplus > FIT_EPSILON {
+                for (length, member) in lengths.iter_mut().zip(&self.members) {
+                    *length += surplus * member.grow / growing;
+                }
+            }
+        }
+        let asked_at: Vec<Size> = (0..n)
             .map(|i| {
-                (along_short.is_none() && lengths[i] < preferred_in(d, &full[i]) - FIT_EPSILON)
-                    .then(|| self.room(space, lengths[i]))
+                if along_short.is_none() && (lengths[i] - preferred[i]).abs() > FIT_EPSILON {
+                    self.room(space, lengths[i])
+                } else {
+                    whole
+                }
             })
             .collect();
         let rooms = (0..n)
-            .map(|i| match asked_at[i] {
-                Some(room) => self.ask(i, levels[i], own, room),
-                None => Ok(full[i].clone()),
+            .map(|i| {
+                if asked_at[i] == whole {
+                    Ok(full[i].clone())
+                } else {
+                    self.ask(i, levels[i], own, asked_at[i])
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Trial {
@@ -636,28 +686,26 @@ impl<C> Stack<C> {
             rooms,
             asked_at,
             along_short,
-            least_short,
         })
     }
 
     /// The next level above `from`, up to the ceiling, at which child
-    /// `i`'s answer in the whole space or at its room changes: a box need
-    /// not have a form at every level.
+    /// `i`'s answer with unlimited room along or at `room` changes: a box
+    /// need not have a form at every level.
     fn next_changing(
         &self,
         i: usize,
         from: Level,
         own: &Resolved,
         space: Size,
-        room: Option<Size>,
+        room: Size,
     ) -> Result<Option<Level>, Unsupported> {
-        let full = self.ask(i, from, own, self.whole(space))?;
-        let at_room = room.map(|room| self.ask(i, from, own, room)).transpose()?;
+        let whole = self.whole(space);
+        let full = self.ask(i, from, own, whole)?;
+        let at_room = self.ask(i, from, own, room)?;
         let mut level = from;
         while let Some(next) = level.next().filter(|next| *next <= own.level) {
-            if self.ask(i, next, own, self.whole(space))? != full
-                || room.map(|room| self.ask(i, next, own, room)).transpose()? != at_room
-            {
+            if self.ask(i, next, own, whole)? != full || self.ask(i, next, own, room)? != at_room {
                 return Ok(Some(next));
             }
             level = next;
@@ -678,8 +726,8 @@ impl<C> Stack<C> {
             < lacks(&self.ask(i, from, own, room)?) - FIT_EPSILON)
     }
 
-    /// Whether child `i` at `next` takes less room along than at `from`
-    /// without falling short across, in the whole space, where it did not.
+    /// Whether child `i` at `next` can be given less room along than at
+    /// `from` without falling short across where it did not.
     fn gives_along(
         &self,
         i: usize,
@@ -688,16 +736,16 @@ impl<C> Stack<C> {
         own: &Resolved,
         space: Size,
     ) -> Result<bool, Unsupported> {
-        let d = self.direction;
-        let current = d.length(self.ask(i, from, own, self.whole(space))?.least);
-        let least = d.length(self.ask(i, next, own, self.whole(space))?.least);
-        if least >= current - FIT_EPSILON {
+        let whole = self.whole(space);
+        let (now, then) = (
+            self.ask(i, from, own, whole)?,
+            self.ask(i, next, own, whole)?,
+        );
+        if self.floor(i, &then) >= self.floor(i, &now) - FIT_EPSILON {
             return Ok(false);
         }
         let across = self.across();
-        let was_short = short_in(across, &self.ask(i, from, own, self.whole(space))?);
-        let is_short = short_in(across, &self.ask(i, next, own, self.whole(space))?);
-        Ok(was_short || !is_short)
+        Ok(short_in(across, &now) || !short_in(across, &then))
     }
 
     /// The child to order up towards `target`, with its next level and
@@ -711,44 +759,22 @@ impl<C> Stack<C> {
         trial: &Trial,
         reasons: &mut Vec<Reason>,
     ) -> Result<Option<(usize, Level, Showed)>, Unsupported> {
-        let flexible = self
-            .members
-            .iter()
-            .find(|member| member.flexible)
-            .map(|member| member.child.id().clone());
         for i in self.asking_order() {
             if levels[i] >= target {
                 continue;
             }
-            let member = &self.members[i];
             let room_short = !trial.rooms[i].fits();
-            let along_short = if member.flexible {
-                trial.least_short.is_some()
-            } else {
-                trial.along_short.is_some()
-            };
+            let along_short = trial.along_short.is_some();
             if !room_short && !along_short {
                 continue;
             }
-            let showed = if room_short {
-                Showed::DoesNotFitItsRoom {
+            let showed = match trial.along_short {
+                Some((needs, has)) if !room_short => Showed::NoRoomForTheLeast { needs, has },
+                _ => Showed::DoesNotFitItsRoom {
                     short: trial.rooms[i].short.clone(),
-                }
-            } else {
-                match (trial.least_short, &flexible, trial.along_short) {
-                    (None, Some(flexible), Some((needs, has))) => Showed::TakesRoomFlexibleLacks {
-                        flexible: flexible.clone(),
-                        lacks: needs - has,
-                    },
-                    (Some((needs, has)), _, _) | (None, _, Some((needs, has))) => {
-                        Showed::NoRoomForTheLeast { needs, has }
-                    }
-                    (None, _, None) => {
-                        unreachable!("a child is asked only when something is short")
-                    }
-                }
+                },
             };
-            let child = member.child.id().clone();
+            let child = self.members[i].child.id().clone();
             let room = trial.asked_at[i];
             let Some(next) = self.next_changing(i, levels[i], own, space, room)? else {
                 note(
@@ -765,14 +791,7 @@ impl<C> Stack<C> {
             if next > target {
                 continue;
             }
-            let helps = (room_short
-                && self.fits_better(
-                    i,
-                    levels[i],
-                    next,
-                    own,
-                    room.unwrap_or_else(|| self.whole(space)),
-                )?)
+            let helps = (room_short && self.fits_better(i, levels[i], next, own, room)?)
                 || (along_short && self.gives_along(i, levels[i], next, own, space)?);
             if helps {
                 return Ok(Some((i, next, showed)));
@@ -806,11 +825,12 @@ impl<C> Stack<C> {
         }
     }
 
+    /// Share, order up, relax (A3, second round).
     fn distribute(&self, own: &Resolved, space: Size) -> Result<Outcome, Unsupported> {
         let n = self.members.len();
         if self.together {
             let levels = vec![own.level; n];
-            let trial = self.trial(&levels, own, space, false)?;
+            let trial = self.trial(&levels, own, space)?;
             let short = self.short_of(&trial);
             return Ok(Outcome {
                 levels,
@@ -821,17 +841,10 @@ impl<C> Stack<C> {
         }
         let mut levels = vec![Level::Preferred; n];
         let mut reasons = Vec::new();
+        let mut ups: Vec<(usize, Level, Level)> = Vec::new();
+        let mut trial = self.trial(&levels, own, space)?;
         for target in Level::ALL.into_iter().filter(|level| *level <= own.level) {
-            loop {
-                let trial = self.trial(&levels, own, space, true)?;
-                if trial.fits() {
-                    return Ok(Outcome {
-                        levels,
-                        trial,
-                        reasons,
-                        short: Vec::new(),
-                    });
-                }
+            while !trial.fits() {
                 let Some((i, next, showed)) =
                     self.pick(target, &levels, own, space, &trial, &mut reasons)?
                 else {
@@ -843,21 +856,30 @@ impl<C> Stack<C> {
                     to: next,
                     showed,
                 });
+                ups.push((i, levels[i], next));
                 levels[i] = next;
+                trial = self.trial(&levels, own, space)?;
+            }
+            if trial.fits() {
+                break;
             }
         }
-        // Nothing more can be ordered up: the flexible children give room
-        // too.
-        let trial = self.trial(&levels, own, space, false)?;
-        if trial.along_short.is_none() {
-            for (i, member) in self.members.iter().enumerate() {
-                let preferred = preferred_in(self.direction, &trial.full[i]);
-                if member.flexible && trial.lengths[i] < preferred - FIT_EPSILON {
-                    reasons.push(Reason::FlexibleSqueezed {
-                        child: member.child.id().clone(),
-                        preferred,
-                        got: trial.lengths[i],
+        if trial.fits() {
+            for &(i, from, to) in ups.iter().rev() {
+                if levels[i] != to {
+                    continue;
+                }
+                let mut lower = levels.clone();
+                lower[i] = from;
+                let relaxed = self.trial(&lower, own, space)?;
+                if relaxed.fits() {
+                    reasons.push(Reason::OrderedDown {
+                        child: self.members[i].child.id().clone(),
+                        from: to,
+                        to: from,
                     });
+                    levels = lower;
+                    trial = relaxed;
                 }
             }
         }
@@ -875,17 +897,28 @@ impl<C> Stack<C> {
         })
     }
 
-    /// The least length along: each child driven from Preferred as far as
-    /// the ceiling allows, while its next level takes less room along
-    /// without falling short across, or falls less short across.
+    fn decided(&self, own: &Resolved, space: Size) -> Result<Rc<Outcome>, Unsupported> {
+        self.decided
+            .get_or(own, space, || self.distribute(own, space))
+    }
+
+    /// The least length along at the length across offered: each child
+    /// driven from Preferred as far as the ceiling allows, while its next
+    /// level can be given less room along without falling short across, or
+    /// falls less short across.
     fn least_along(&self, own: &Resolved, space: Size) -> Result<f64, Unsupported> {
-        let d = self.direction;
         let across = self.across();
+        let whole = self.whole(space);
         let mut total = 0.0;
         for i in 0..self.members.len() {
-            let whole = self.whole(space);
-            let mut level = Level::Preferred;
-            while let Some(next) = self.next_changing(i, level, own, space, None)? {
+            let mut level = if self.together {
+                own.level
+            } else {
+                Level::Preferred
+            };
+            while !self.together
+                && let Some(next) = self.next_changing(i, level, own, space, whole)?
+            {
                 let short_across = short_in(across, &self.ask(i, level, own, whole)?);
                 let helps = (short_across && self.fits_better(i, level, next, own, whole)?)
                     || self.gives_along(i, level, next, own, space)?;
@@ -894,7 +927,7 @@ impl<C> Stack<C> {
                 }
                 level = next;
             }
-            total += d.length(self.ask(i, level, own, self.whole(space))?.least);
+            total += self.floor(i, &self.ask(i, level, own, whole)?);
         }
         Ok(total)
     }
@@ -924,40 +957,37 @@ impl<C> Stack<C> {
         (extent, shared)
     }
 
-    /// The least length across: from the levels reached, each child
-    /// driven while its next level is shorter across at its room and the
-    /// least lengths along still fit.
-    fn least_across(
-        &self,
-        own: &Resolved,
-        space: Size,
-        outcome: &Outcome,
-    ) -> Result<f64, Unsupported> {
-        let d = self.direction;
+    /// The least length across at the length along offered: from what the
+    /// composition decides there with unlimited room across, each child
+    /// driven further while its next level is shorter across at its room
+    /// and the floors along still fit.
+    fn least_across(&self, own: &Resolved, space: Size) -> Result<f64, Unsupported> {
         let across = self.across();
+        let open = self.open(space);
+        let outcome = self.decided(own, open)?;
         let trial = &outcome.trial;
-        let mut levels = outcome.levels.clone();
-        let mut along: Vec<f64> = trial
-            .full
-            .iter()
-            .map(|answer| d.length(answer.least))
-            .collect();
         let mut answers = trial.rooms.clone();
-        for i in self.asking_order() {
-            let room = trial.asked_at[i];
-            let at = room.unwrap_or_else(|| self.whole(space));
-            while let Some(next) = self.next_changing(i, levels[i], own, space, room)? {
-                let at_next = self.ask(i, next, own, at)?;
-                let narrower =
-                    across.length(at_next.least) < across.length(answers[i].least) - FIT_EPSILON;
-                let along_next = d.length(self.ask(i, next, own, self.whole(space))?.least);
-                let total: f64 = along.iter().sum::<f64>() - along[i] + along_next;
-                if !narrower || total > d.length(space) + FIT_EPSILON {
-                    break;
+        if !self.together {
+            let whole = self.whole(open);
+            let mut levels = outcome.levels.clone();
+            let mut floors: Vec<f64> = (0..self.members.len())
+                .map(|i| self.floor(i, &trial.full[i]))
+                .collect();
+            for i in self.asking_order() {
+                let room = trial.asked_at[i];
+                while let Some(next) = self.next_changing(i, levels[i], own, open, room)? {
+                    let at_next = self.ask(i, next, own, room)?;
+                    let shorter = across.length(at_next.least)
+                        < across.length(answers[i].least) - FIT_EPSILON;
+                    let floor = self.floor(i, &self.ask(i, next, own, whole)?);
+                    let total: f64 = floors.iter().sum::<f64>() - floors[i] + floor;
+                    if !shorter || total > self.direction.length(space) + FIT_EPSILON {
+                        break;
+                    }
+                    levels[i] = next;
+                    floors[i] = floor;
+                    answers[i] = at_next;
                 }
-                levels[i] = next;
-                along[i] = along_next;
-                answers[i] = at_next;
             }
         }
         Ok(self
@@ -965,51 +995,28 @@ impl<C> Stack<C> {
             .0)
     }
 
-    fn measured(&self, own: &Resolved, space: Size) -> Result<Rc<Measured>, Unsupported> {
-        let key = (own.clone(), SpaceKey::from(space));
-        if let Some(measured) = self.measured.borrow().get(&key) {
-            return Ok(Rc::clone(measured));
-        }
-        let outcome = self.distribute(own, space)?;
-        let answer = self.answer(own, space, &outcome)?;
-        let measured = Rc::new(Measured { outcome, answer });
-        self.measured.borrow_mut().insert(key, Rc::clone(&measured));
-        Ok(measured)
-    }
-
-    fn answer(
-        &self,
-        own: &Resolved,
-        space: Size,
-        outcome: &Outcome,
-    ) -> Result<Answer, Unsupported> {
+    fn answer(&self, own: &Resolved, space: Size) -> Result<Answer, Unsupported> {
         let d = self.direction;
         let across = self.across();
+        let outcome = self.decided(own, space)?;
         let trial = &outcome.trial;
-        let available = d.length(space);
-        let mut preferred_along: f64 = trial
+        let preferred_along: f64 = self
+            .decided(own, self.whole(space))?
+            .trial
             .full
             .iter()
             .map(|answer| preferred_in(d, answer))
             .sum();
-        if available.is_finite() && self.members.iter().any(|member| member.grow > 0.0) {
-            preferred_along = preferred_along.max(available);
-        }
-        let (least_along, least_across) = if self.together {
-            (
-                trial.full.iter().map(|answer| d.length(answer.least)).sum(),
-                self.extent(&trial.rooms, |answer| across.length(answer.least))
-                    .0,
+        let preferred_across = self
+            .extent(
+                &self.decided(own, self.open(space))?.trial.rooms,
+                |answer| across.length(answer.taken),
             )
-        } else {
-            (
-                self.least_along(own, space)?,
-                self.least_across(own, space, outcome)?,
-            )
-        };
-        let offered_across = across.length(space);
-        let (preferred_across, shared) =
-            self.extent(&trial.rooms, |answer| answer.taken(across, offered_across));
+            .0;
+        let least_along = self.least_along(own, space)?;
+        let least_across = self.least_across(own, space)?;
+        let (taken_across, shared) =
+            self.extent(&trial.rooms, |answer| across.length(answer.taken));
         let baseline = match d {
             Direction::Across => shared,
             Direction::Down => trial.rooms.iter().enumerate().find_map(|(i, answer)| {
@@ -1025,6 +1032,7 @@ impl<C> Stack<C> {
                 preferred_across.max(least_across),
             ),
             least: size_in(d, least_along, least_across),
+            taken: size_in(d, trial.lengths.iter().sum(), taken_across),
             baseline,
             short: outcome.short.clone(),
             unshown: trial
@@ -1059,50 +1067,35 @@ impl<C> LayoutBox<C> for Stack<C> {
     }
 
     fn measure(&self, orders: &Resolved, space: Size) -> Result<Answer, Unsupported> {
-        Ok(self.measured(orders, space)?.answer.clone())
+        Ok((*self
+            .answered
+            .get_or(orders, space, || self.answer(orders, space))?)
+        .clone())
     }
 
-    fn arrange(&self, orders: &Resolved, bounds: Rect) -> Result<Node<C>, Unsupported> {
-        let space = bounds.size();
-        let measured = self.measured(orders, space)?;
-        let outcome = &measured.outcome;
+    /// Each child is ordered in the space it was last asked in when the
+    /// composition decided, so it makes the choices it answered with.
+    fn arrange(&self, orders: &Resolved, at: Point, space: Size) -> Result<Node<C>, Unsupported> {
+        let taken = LayoutBox::<C>::measure(self, orders, space)?.taken;
+        let outcome = self.decided(orders, space)?;
         let trial = &outcome.trial;
         let d = self.direction;
         let across = self.across();
-        let cross = across.length(space);
-        let mut lengths = trial.lengths.clone();
-        let available = d.length(space);
-        let growing: f64 = self.members.iter().map(|member| member.grow).sum();
-        if trial.along_short.is_none() && available.is_finite() && growing > 0.0 {
-            let surplus = available - lengths.iter().sum::<f64>();
-            if surplus > FIT_EPSILON {
-                for (length, member) in lengths.iter_mut().zip(&self.members) {
-                    *length += surplus * member.grow / growing;
-                }
-            }
-        }
-        let answers = (0..self.members.len())
-            .map(|i| {
-                if lengths[i] == trial.lengths[i] {
-                    Ok(trial.rooms[i].clone())
-                } else {
-                    self.ask(i, outcome.levels[i], orders, self.room(space, lengths[i]))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let (_, shared) = self.extent(&answers, |answer| answer.taken(across, cross));
-        let mut node =
-            Node::new(self.id.clone(), orders.clone(), bounds).with_source(self.source.clone());
+        let cross = across.length(taken);
+        let (_, shared) = self.extent(&trial.rooms, |answer| across.length(answer.taken));
+        let mut node = Node::new(
+            self.id.clone(),
+            orders.clone(),
+            Rect::from_origin(at, taken),
+        )
+        .with_source(self.source.clone());
         let mut offset = 0.0;
         let mut baseline = shared;
         for (i, member) in self.members.iter().enumerate() {
-            let answer = &answers[i];
+            let answer = &trial.rooms[i];
             let align = self.align_of(i);
-            let length_across = match align {
-                Align::Fill => cross,
-                _ => answer.taken(across, cross),
-            };
-            let at = match (shared, answer.baseline) {
+            let length_across = across.length(answer.taken);
+            let shift = match (shared, answer.baseline) {
                 (Some(shared), Some(own)) if align != Align::Fill => shared - own,
                 _ => match align {
                     Align::Start | Align::Fill => 0.0,
@@ -1110,25 +1103,42 @@ impl<C> LayoutBox<C> for Stack<C> {
                     Align::End => (cross - length_across).max(0.0),
                 },
             };
-            let size = size_in(d, lengths[i], length_across);
-            let (x, y) = match d {
-                Direction::Across => (bounds.x + offset, bounds.y + at),
-                Direction::Down => (bounds.x + at, bounds.y + offset),
+            let place = match d {
+                Direction::Across => Point::new(at.x + offset, at.y + shift),
+                Direction::Down => Point::new(at.x + shift, at.y + offset),
             };
-            node.children.push(
-                member
-                    .child
-                    .order(&trial.orders[i], Rect::new(x, y, size.width, size.height))?,
-            );
+            let mut child = member
+                .child
+                .order(&trial.orders[i], place, trial.asked_at[i])?;
+            // A member that fills is stretched across, and one that grows
+            // along to its room, beyond what it would take of itself.
+            let stretch = |bounds: &mut Rect, direction: Direction, length: f64| match direction {
+                Direction::Across => bounds.width = length,
+                Direction::Down => bounds.height = length,
+            };
+            if align == Align::Fill {
+                stretch(&mut child.bounds, across, cross);
+            }
+            if member.grow > 0.0 {
+                stretch(&mut child.bounds, d, trial.lengths[i]);
+            }
+            node.children.push(child);
             if d == Direction::Down && baseline.is_none() {
                 baseline = answer.baseline.map(|own| offset + own);
             }
-            offset += lengths[i];
+            offset += trial.lengths[i];
         }
         debug_assert_eq!(outcome.levels.len(), node.children.len());
         node.baseline = baseline;
         node.reasons = outcome.reasons.clone();
         Ok(node)
+    }
+
+    fn forget(&self) {
+        self.forget_own();
+        for member in &self.members {
+            member.child.forget();
+        }
     }
 }
 
@@ -1143,9 +1153,6 @@ struct Decision {
     rejected: Vec<(usize, Answer)>,
     /// The first arrangement that fits, at the level it was given.
     chosen: Option<(usize, Level)>,
-    /// The arrangement whose least size the box reports: the narrowest
-    /// whose least height fits, at the level it was given.
-    narrowest: (usize, Level),
 }
 
 /// A parent's arrangements of its children, in its order of preference,
@@ -1154,8 +1161,14 @@ struct Decision {
 /// first that fits is taken: "compact mildly, change arrangement, then
 /// compact strongly". An arrangement can be tagged with the value of a
 /// family kind it stands for (`direction` = `turned`); an order naming
-/// that kind restricts the box to the arrangements so tagged. The chosen
+/// that kind restricts the box to the arrangements so tagged, and the
+/// box's node records the tags of the one it chose. The chosen
 /// arrangement is passed everything the box was ordered.
+///
+/// Its answer, for each direction, gives the least length over the
+/// arrangements that fit the other direction as offered (B2, second
+/// round), and its preferred and taken sizes are those of the
+/// arrangement it would choose.
 pub struct Arrangements<C> {
     id: Id,
     source: Option<Source>,
@@ -1165,6 +1178,7 @@ pub struct Arrangements<C> {
     tags: Vec<BTreeMap<String, String>>,
     passes: Vec<Level>,
     asked: Asked,
+    answered: Remembered<Answer>,
 }
 
 impl<C> Arrangements<C> {
@@ -1179,7 +1193,14 @@ impl<C> Arrangements<C> {
             tags,
             passes: DEFAULT_PASSES.to_vec(),
             asked: Asked::default(),
+            answered: Remembered::default(),
         }
+    }
+
+    fn changed(self) -> Self {
+        self.asked.clear();
+        self.answered.clear();
+        self
     }
 
     pub fn with_source(mut self, source: Source) -> Self {
@@ -1189,19 +1210,19 @@ impl<C> Arrangements<C> {
 
     pub fn with_maker(mut self, maker: Order) -> Self {
         self.maker = maker;
-        self
+        self.changed()
     }
 
     pub fn accepting(mut self, accepts: Accepts) -> Self {
         self.accepts = accepts;
-        self
+        self.changed()
     }
 
     /// The passes, as the ceiling of each in turn; each is capped at the
     /// box's own ceiling.
     pub fn with_passes(mut self, passes: impl IntoIterator<Item = Level>) -> Self {
         self.passes = passes.into_iter().collect();
-        self
+        self.changed()
     }
 
     /// Tag the arrangement `arrangement` as standing for `value` of the
@@ -1222,19 +1243,26 @@ impl<C> Arrangements<C> {
             .position(|option| option.id() == arrangement)
             .expect("a tag names one of the arrangements");
         self.tags[k].insert(kind.into(), value.into());
-        self
+        self.changed()
     }
 
     /// The arrangements the order permits, in order of preference.
-    fn eligible(&self, own: &Resolved) -> Vec<usize> {
-        (0..self.options.len())
+    fn eligible(&self, own: &Resolved) -> Result<Vec<usize>, Unsupported> {
+        let eligible: Vec<usize> = (0..self.options.len())
             .filter(|k| {
                 own.ordered.added.iter().all(|(kind, value)| {
                     !self.tags.iter().any(|tags| tags.contains_key(kind))
                         || self.tags[*k].get(kind) == Some(value)
                 })
             })
-            .collect()
+            .collect();
+        if eligible.is_empty() {
+            return Err(Unsupported {
+                part: self.id.clone(),
+                requested: own.presentation.clone(),
+            });
+        }
+        Ok(eligible)
     }
 
     /// What the chosen arrangement is passed: everything the box was
@@ -1258,14 +1286,35 @@ impl<C> Arrangements<C> {
         )
     }
 
-    fn decide(&self, own: &Resolved, space: Size) -> Result<Decision, Unsupported> {
-        let eligible = self.eligible(own);
-        if eligible.is_empty() {
-            return Err(Unsupported {
-                part: self.id.clone(),
-                requested: own.presentation.clone(),
-            });
+    /// The levels an arrangement can be given under the passes: each from
+    /// Preferred to the highest pass's ceiling for one that takes its
+    /// level exactly, that ceiling alone for one that distributes it.
+    fn candidates(&self, own: &Resolved) -> Result<Vec<(usize, Level)>, Unsupported> {
+        let reach = self
+            .passes
+            .iter()
+            .map(|pass| (*pass).min(own.level))
+            .max()
+            .unwrap_or(Level::Preferred);
+        let mut candidates = Vec::new();
+        for k in self.eligible(own)? {
+            let lowest = if self.options[k].takes_level_exactly() {
+                Level::Preferred
+            } else {
+                reach
+            };
+            for level in Level::ALL
+                .into_iter()
+                .filter(|level| (lowest..=reach).contains(level))
+            {
+                candidates.push((k, level));
+            }
         }
+        Ok(candidates)
+    }
+
+    fn decide(&self, own: &Resolved, space: Size) -> Result<Decision, Unsupported> {
+        let eligible = self.eligible(own)?;
         let mut rejected: Vec<(usize, Answer)> = Vec::new();
         let mut chosen = None;
         let mut covered: Option<Level> = None;
@@ -1300,43 +1349,72 @@ impl<C> Arrangements<C> {
         if let Some((k, _)) = chosen {
             rejected.retain(|(seen, _)| *seen != k);
         }
-        let reach = self
-            .passes
-            .iter()
-            .map(|pass| (*pass).min(own.level))
-            .max()
-            .unwrap_or(Level::Preferred);
-        let mut candidates = Vec::new();
-        for &k in &eligible {
-            let lowest = if self.options[k].takes_level_exactly() {
-                Level::Preferred
-            } else {
-                reach
-            };
-            for level in Level::ALL
-                .into_iter()
-                .filter(|level| (lowest..=reach).contains(level))
-            {
-                candidates.push((k, level, self.ask(k, level, own, space)?.least));
+        Ok(Decision { rejected, chosen })
+    }
+
+    /// The arrangement taken in `space`: the chosen one or, when none
+    /// fits, the one that falls least short, as the parent's last resort.
+    fn taken(&self, own: &Resolved, space: Size) -> Result<(Decision, usize, Level), Unsupported> {
+        let decision = self.decide(own, space)?;
+        if let Some((k, level)) = decision.chosen {
+            return Ok((decision, k, level));
+        }
+        let mut best: Option<(usize, Level, f64)> = None;
+        for (k, level) in self.candidates(own)? {
+            let lacking = lacks(&self.ask(k, level, own, space)?);
+            if best.is_none_or(|(_, _, least)| lacking < least - FIT_EPSILON) {
+                best = Some((k, level, lacking));
             }
         }
-        let height_fits = |least: &Size| least.height <= space.height + FIT_EPSILON;
-        let any_fits = candidates.iter().any(|(_, _, least)| height_fits(least));
-        let narrowest = candidates
-            .into_iter()
-            .filter(|(_, _, least)| !any_fits || height_fits(least))
-            .reduce(|best, next| {
-                let narrower = next.2.width < best.2.width - FIT_EPSILON
-                    || ((next.2.width - best.2.width).abs() <= FIT_EPSILON
-                        && next.2.height < best.2.height - FIT_EPSILON);
-                if narrower { next } else { best }
-            })
-            .map(|(k, level, _)| (k, level))
-            .expect("at least one arrangement is eligible");
-        Ok(Decision {
-            rejected,
-            chosen,
-            narrowest,
+        let (k, level, _) = best.expect("at least one arrangement is eligible");
+        Ok((decision, k, level))
+    }
+
+    /// The least of `length` over the candidates asked in `space` that do
+    /// not fall short in `other`; over every candidate if none fits.
+    fn least_over(
+        &self,
+        own: &Resolved,
+        space: Size,
+        other: Direction,
+        length: impl Fn(&Answer) -> f64,
+    ) -> Result<f64, Unsupported> {
+        let mut fitting = f64::INFINITY;
+        let mut any = f64::INFINITY;
+        for (k, level) in self.candidates(own)? {
+            let answer = self.ask(k, level, own, space)?;
+            any = any.min(length(&answer));
+            if !short_in(other, &answer) {
+                fitting = fitting.min(length(&answer));
+            }
+        }
+        Ok(if fitting.is_finite() { fitting } else { any })
+    }
+
+    fn answer(&self, own: &Resolved, space: Size) -> Result<Answer, Unsupported> {
+        let (_, k, level) = self.taken(own, space)?;
+        let main = self.ask(k, level, own, space)?;
+        let wide = Size::new(f64::INFINITY, space.height);
+        let tall = Size::new(space.width, f64::INFINITY);
+        let preferred_width = {
+            let (_, k, level) = self.taken(own, wide)?;
+            self.ask(k, level, own, wide)?.taken.width
+        };
+        let preferred_height = {
+            let (_, k, level) = self.taken(own, tall)?;
+            self.ask(k, level, own, tall)?.taken.height
+        };
+        let least = Size::new(
+            self.least_over(own, wide, Direction::Down, |answer| answer.least.width)?,
+            self.least_over(own, tall, Direction::Across, |answer| answer.least.height)?,
+        );
+        Ok(Answer {
+            preferred: Size::new(
+                preferred_width.max(least.width),
+                preferred_height.max(least.height),
+            ),
+            least,
+            ..main
         })
     }
 }
@@ -1362,49 +1440,53 @@ impl<C> LayoutBox<C> for Arrangements<C> {
         false
     }
 
-    /// The chosen arrangement's answer, with the least size of the one
-    /// arrangement that can be narrowest (B2: a least width and a least
-    /// height that belong to one arrangement). When none fits, the
-    /// narrowest's answer, since it is the parent's last resort.
+    /// The answer of the arrangement it would take, with each least
+    /// length the least over the arrangements that fit the other
+    /// direction as offered.
     fn measure(&self, orders: &Resolved, space: Size) -> Result<Answer, Unsupported> {
-        let decision = self.decide(orders, space)?;
-        let (k, level) = decision.narrowest;
-        let narrowest = self.ask(k, level, orders, space)?;
-        Ok(match decision.chosen {
-            Some((k, level)) => Answer {
-                least: narrowest.least,
-                ..self.ask(k, level, orders, space)?
-            },
-            None => narrowest,
-        })
+        Ok((*self
+            .answered
+            .get_or(orders, space, || self.answer(orders, space))?)
+        .clone())
     }
 
-    fn arrange(&self, orders: &Resolved, bounds: Rect) -> Result<Node<C>, Unsupported> {
-        let decision = self.decide(orders, bounds.size())?;
-        let mut node =
-            Node::new(self.id.clone(), orders.clone(), bounds).with_source(self.source.clone());
-        for (k, answer) in &decision.rejected {
+    fn arrange(&self, orders: &Resolved, at: Point, space: Size) -> Result<Node<C>, Unsupported> {
+        let (decision, k, level) = self.taken(orders, space)?;
+        let mut resolved = orders.clone();
+        for (kind, value) in &self.tags[k] {
+            resolved
+                .presentation
+                .added
+                .insert(kind.clone(), value.clone());
+        }
+        let child = self.options[k].order(&Self::order_at(orders, level), at, space)?;
+        let mut node = Node::new(
+            self.id.clone(),
+            resolved,
+            Rect::from_origin(at, child.bounds.size()),
+        )
+        .with_source(self.source.clone());
+        for (rejected, answer) in &decision.rejected {
             node.reasons.push(Reason::ArrangementRejected {
-                arrangement: self.options[*k].id().clone(),
+                arrangement: self.options[*rejected].id().clone(),
                 short: answer.short.clone(),
             });
         }
-        let (k, level) = match decision.chosen {
-            Some(chosen) => {
-                node.reasons.push(Reason::ArrangementTaken {
-                    arrangement: self.options[chosen.0].id().clone(),
-                });
-                chosen
-            }
-            None => decision.narrowest,
-        };
-        let size = self
-            .ask(k, level, orders, bounds.size())?
-            .taken_size(bounds.size());
-        let rect = Rect::new(bounds.x, bounds.y, size.width, size.height);
-        node.children
-            .push(self.options[k].order(&Self::order_at(orders, level), rect)?);
+        if decision.chosen.is_some() {
+            node.reasons.push(Reason::ArrangementTaken {
+                arrangement: self.options[k].id().clone(),
+            });
+        }
+        node.children.push(child);
         Ok(node)
+    }
+
+    fn forget(&self) {
+        self.asked.clear();
+        self.answered.clear();
+        for option in &self.options {
+            option.forget();
+        }
     }
 }
 
@@ -1413,6 +1495,17 @@ mod tests {
     use super::*;
     use crate::boxes::{Refusal, plan as lay_out};
     use crate::order::{Presentation, Prominence};
+
+    /// A leaf's node at `at`, of the size it takes in `space`.
+    fn leaf_node(id: &Id, orders: &Resolved, at: Point, answer: Answer) -> Node<String> {
+        Node::leaf(
+            id.clone(),
+            orders.clone(),
+            Rect::from_origin(at, answer.taken),
+            id.as_str().to_owned(),
+        )
+        .with_baseline(answer.baseline)
+    }
 
     /// A leaf with a form at some levels: each `(level, preferred, least)`
     /// holds from that level until the next form. Its content is its name.
@@ -1445,12 +1538,17 @@ mod tests {
             let (preferred, least) = self.form(orders.level);
             Ok(Answer::of(&self.id, preferred, least, space))
         }
-        fn arrange(&self, orders: &Resolved, bounds: Rect) -> Result<Node<String>, Unsupported> {
-            Ok(Node::leaf(
-                self.id.clone(),
-                orders.clone(),
-                bounds,
-                self.id.as_str().to_owned(),
+        fn arrange(
+            &self,
+            orders: &Resolved,
+            at: Point,
+            space: Size,
+        ) -> Result<Node<String>, Unsupported> {
+            Ok(leaf_node(
+                &self.id,
+                orders,
+                at,
+                self.measure(orders, space)?,
             ))
         }
     }
@@ -1478,7 +1576,7 @@ mod tests {
         })
     }
 
-    /// A box with a continuous range and, from Mild, a narrower one.
+    /// A box with a continuous range at each of its forms.
     fn ranged(id: &str, forms: Vec<(Level, f64, f64)>, height: f64) -> Rc<Forms> {
         Rc::new(Forms {
             id: Id::new(id),
@@ -1496,13 +1594,21 @@ mod tests {
         })
     }
 
-    /// Text that wraps: its height grows as its width shrinks.
+    /// Text that wraps: its height grows as its width shrinks. It answers
+    /// as the protocol asks: its least width is the least at which it fits
+    /// the offered height.
     struct Wrapping {
         id: Id,
         natural: f64,
         least: f64,
         line: f64,
         accepts: Accepts,
+    }
+
+    impl Wrapping {
+        fn height_at(&self, width: f64) -> f64 {
+            (self.natural / width).ceil() * self.line
+        }
     }
 
     impl LayoutBox<String> for Wrapping {
@@ -1514,20 +1620,31 @@ mod tests {
         }
         fn measure(&self, _: &Resolved, space: Size) -> Result<Answer, Unsupported> {
             let width = self.natural.min(space.width).max(self.least);
-            let height = (self.natural / width).ceil() * self.line;
+            let height = self.height_at(width);
+            let lines = (space.height / self.line).floor();
+            let least_width = if lines >= 1.0 {
+                (self.natural / lines).max(self.least)
+            } else {
+                self.natural
+            };
             Ok(Answer::of(
                 &self.id,
                 Size::new(self.natural, height),
-                Size::new(self.least, height),
+                Size::new(least_width, height),
                 space,
             ))
         }
-        fn arrange(&self, orders: &Resolved, bounds: Rect) -> Result<Node<String>, Unsupported> {
-            Ok(Node::leaf(
-                self.id.clone(),
-                orders.clone(),
-                bounds,
-                self.id.as_str().to_owned(),
+        fn arrange(
+            &self,
+            orders: &Resolved,
+            at: Point,
+            space: Size,
+        ) -> Result<Node<String>, Unsupported> {
+            Ok(leaf_node(
+                &self.id,
+                orders,
+                at,
+                self.measure(orders, space)?,
             ))
         }
     }
@@ -1542,6 +1659,61 @@ mod tests {
         })
     }
 
+    /// The second review's text (item 2): 120 wide on one line, or
+    /// narrower, down to 40, on three lines 30 high; from Mild a form 30 by
+    /// 10.
+    struct ReviewText {
+        id: Id,
+        accepts: Accepts,
+    }
+
+    impl LayoutBox<String> for ReviewText {
+        fn id(&self) -> &Id {
+            &self.id
+        }
+        fn accepts(&self) -> &Accepts {
+            &self.accepts
+        }
+        fn measure(&self, orders: &Resolved, space: Size) -> Result<Answer, Unsupported> {
+            if orders.level >= Level::Mild {
+                let size = Size::new(30.0, 10.0);
+                return Ok(Answer::of(&self.id, size, size, space));
+            }
+            let width = space.width.clamp(40.0, 120.0);
+            let height = if width >= 120.0 { 10.0 } else { 30.0 };
+            Ok(Answer::of(
+                &self.id,
+                Size::new(120.0, height),
+                Size::new(40.0, height),
+                space,
+            ))
+        }
+        fn arrange(
+            &self,
+            orders: &Resolved,
+            at: Point,
+            space: Size,
+        ) -> Result<Node<String>, Unsupported> {
+            Ok(leaf_node(
+                &self.id,
+                orders,
+                at,
+                self.measure(orders, space)?,
+            ))
+        }
+    }
+
+    /// The second review's row (item 2): `a` 60 wide, 30 from Mild, and
+    /// the text `b`.
+    fn review_row() -> Stack<String> {
+        Stack::row(Id::new("row"))
+            .child(compact("a", 60.0, 30.0, 20.0))
+            .child(Rc::new(ReviewText {
+                id: Id::new("b"),
+                accepts: Accepts::ordinary(),
+            }))
+    }
+
     fn all_permitted() -> Order {
         Order::NONE.with_level(Level::AllPermitted)
     }
@@ -1552,6 +1724,10 @@ mod tests {
 
     fn bounds_of(plan: &Node<String>, id: &str) -> Rect {
         plan.find(&Id::new(id)).expect(id).bounds
+    }
+
+    fn fits(root: &dyn LayoutBox<String>, space: Size) -> bool {
+        root.query(&all_permitted(), space).unwrap().fits()
     }
 
     /// Three buttons that go from 50 to 20 wide at Mild, as one list.
@@ -1590,20 +1766,27 @@ mod tests {
                 child: Id::new("actions"),
                 from: Level::Preferred,
                 to: Level::Mild,
-                // The plan arranges the row at the 160 it takes, and the
-                // reasons are the arrangement's.
                 showed: Showed::NoRoomForTheLeast {
                     needs: 250.0,
-                    has: 160.0
+                    has: 200.0
                 },
             }]
         );
         assert_eq!(plan.bounds.width, 160.0);
         // Asked in their order, the title gives first, and 60 + 150 is
-        // still too wide, so the actions give too.
+        // still too wide, so the actions give too; then the title comes
+        // back, since 100 + 60 fits.
         let plan = lay_out(&toolbar(vec![]), &all_permitted(), Size::new(200.0, 20.0)).unwrap();
-        assert_eq!(level_of(&plan, "title"), Level::Mild);
+        assert_eq!(level_of(&plan, "title"), Level::Preferred);
         assert_eq!(level_of(&plan, "button1"), Level::Mild);
+        assert_eq!(
+            plan.reasons.last(),
+            Some(&Reason::OrderedDown {
+                child: Id::new("title"),
+                from: Level::Mild,
+                to: Level::Preferred
+            })
+        );
         // The ceiling ordered from above is never passed.
         let refused = lay_out(
             &toolbar(vec![]),
@@ -1615,10 +1798,9 @@ mod tests {
 
     #[test]
     fn every_child_that_needs_it_reaches_mild_before_any_reaches_strong() {
-        // Review finding 3: the title is unchanged at Mild and 60 at
-        // Strong; the actions are 150 and 60 at Mild. In 200 the actions
-        // at Mild alone fit, so the title is not touched, although it is
-        // asked first.
+        // First review, finding 3: the title is unchanged at Mild and 60
+        // at Strong; the actions are 150 and 60 at Mild. In 200 the
+        // actions at Mild alone fit, so the title is not touched.
         let row = Stack::row(Id::new("toolbar"))
             .child(ranged(
                 "title",
@@ -1640,72 +1822,123 @@ mod tests {
     }
 
     #[test]
-    fn a_flexible_childs_own_levels_are_tried_after_the_others() {
-        // Review finding 4: fixed 50 beside a flexible plot whose least is
-        // 150 at Preferred and 80 at Mild, in 180: 50 + 80 fits.
-        let row = Stack::row(Id::new("chart"))
-            .child(fixed("fixed", 50.0, 20.0))
-            .member(
-                Member::new(ranged(
-                    "plot",
-                    vec![(Level::Preferred, 150.0, 150.0), (Level::Mild, 150.0, 80.0)],
-                    20.0,
-                ))
-                .flexible(),
-            );
-        let plan = lay_out(&row, &all_permitted(), Size::new(180.0, 20.0)).unwrap();
-        assert_eq!(level_of(&plan, "plot"), Level::Mild);
-        assert_eq!(bounds_of(&plan, "plot").width, 130.0);
-        assert!(plan.reasons.contains(&Reason::OrderedUp {
-            child: Id::new("plot"),
+    fn a_child_ordered_up_comes_back_down_when_the_whole_still_fits() {
+        // Second review, specification fault: A (100, 90 from Mild) and B
+        // (100, 40 from Mild) in 150. Both are ordered up, then A comes back
+        // to Preferred: 100 + 40 fits.
+        let row = Stack::row(Id::new("row"))
+            .child(compact("a", 100.0, 90.0, 20.0))
+            .child(compact("b", 100.0, 40.0, 20.0));
+        let plan = lay_out(&row, &all_permitted(), Size::new(150.0, 20.0)).unwrap();
+        assert_eq!(level_of(&plan, "a"), Level::Preferred);
+        assert_eq!(level_of(&plan, "b"), Level::Mild);
+        assert_eq!(plan.bounds.width, 140.0);
+        let up = |child: &str, needs: f64| Reason::OrderedUp {
+            child: Id::new(child),
             from: Level::Preferred,
             to: Level::Mild,
-            showed: Showed::NoRoomForTheLeast {
-                needs: 200.0,
-                has: 180.0
-            },
-        }));
-        assert!(plan.reasons.contains(&Reason::FlexibleSqueezed {
-            child: Id::new("plot"),
-            preferred: 150.0,
-            got: 130.0
-        }));
+            showed: Showed::NoRoomForTheLeast { needs, has: 150.0 },
+        };
+        assert_eq!(
+            plan.reasons,
+            vec![
+                up("a", 200.0),
+                up("b", 190.0),
+                Reason::OrderedDown {
+                    child: Id::new("a"),
+                    from: Level::Mild,
+                    to: Level::Preferred
+                },
+            ]
+        );
+    }
+
+    /// A plot that gives from 400 down to 200, beside an axis title of 60
+    /// that is abbreviated to 30 from Mild.
+    fn titled_plot() -> Stack<String> {
+        Stack::row(Id::new("chart"))
+            .child(compact("title", 60.0, 30.0, 20.0))
+            .member(
+                Member::new(ranged("plot", vec![(Level::Preferred, 400.0, 200.0)], 20.0))
+                    .flexible(),
+            )
     }
 
     #[test]
-    fn several_flexible_children_keep_their_preferred_lengths_and_then_share_the_squeeze() {
-        let row = || {
-            let plot = |id: &str| {
-                Member::new(ranged(id, vec![(Level::Preferred, 100.0, 40.0)], 20.0)).flexible()
-            };
-            Stack::row(Id::new("chart"))
-                .member(plot("one"))
-                .child(ranged(
-                    "label",
-                    vec![(Level::Preferred, 60.0, 50.0), (Level::Mild, 30.0, 30.0)],
-                    10.0,
+    fn a_plot_gives_room_by_weight_before_a_sibling_changes_form() {
+        // Second review, specification fault: in 430 the plot gives 30 and
+        // the title keeps its words; it is not abbreviated to save the plot
+        // its 400.
+        let plan = lay_out(&titled_plot(), &all_permitted(), Size::new(430.0, 20.0)).unwrap();
+        assert_eq!(level_of(&plan, "title"), Level::Preferred);
+        assert_eq!(bounds_of(&plan, "plot").width, 370.0);
+        assert!(plan.reasons.is_empty());
+        // How much each gives is its weight times its range: with a legend
+        // from 100 to 50 in 500, the plot (rate 200) and the legend (rate
+        // 50) share 60 as 48 and 12; at a weight of 4 the legend's rate is
+        // 200 too, and they give 30 each.
+        let with_legend = |weight: f64| {
+            titled_plot().member(
+                Member::new(ranged(
+                    "legend",
+                    vec![(Level::Preferred, 100.0, 50.0)],
+                    20.0,
                 ))
-                .member(plot("two"))
+                .with_weight(weight),
+            )
         };
-        let width = |plan: &Node<String>, id: &str| bounds_of(plan, id).width;
-        let plan = lay_out(&row(), &all_permitted(), Size::new(230.0, 20.0)).unwrap();
-        assert_eq!(level_of(&plan, "label"), Level::Mild);
-        assert_eq!((width(&plan, "one"), width(&plan, "two")), (100.0, 100.0));
-        let plan = lay_out(&row(), &all_permitted(), Size::new(200.0, 20.0)).unwrap();
-        assert_eq!((width(&plan, "one"), width(&plan, "two")), (85.0, 85.0));
-        for id in ["one", "two"] {
-            assert!(plan.reasons.contains(&Reason::FlexibleSqueezed {
-                child: Id::new(id),
-                preferred: 100.0,
-                got: 85.0
-            }));
-        }
+        let widths = |plan: &Node<String>| {
+            (
+                bounds_of(plan, "plot").width,
+                bounds_of(plan, "legend").width,
+            )
+        };
+        let even = lay_out(&with_legend(1.0), &all_permitted(), Size::new(500.0, 20.0)).unwrap();
+        let (plot, legend) = widths(&even);
+        assert!((plot - 352.0).abs() < 1e-9 && (legend - 88.0).abs() < 1e-9);
+        let heavy = lay_out(&with_legend(4.0), &all_permitted(), Size::new(500.0, 20.0)).unwrap();
+        let (plot, legend) = widths(&heavy);
+        assert!((plot - 370.0).abs() < 1e-9 && (legend - 70.0).abs() < 1e-9);
+        assert_eq!(level_of(&heavy, "title"), Level::Preferred);
+        // A weight of zero protects the preferred length: the legend keeps
+        // 100 and the plot gives all 60.
+        let protected =
+            lay_out(&with_legend(0.0), &all_permitted(), Size::new(500.0, 20.0)).unwrap();
+        assert_eq!(widths(&protected), (340.0, 100.0));
+        // The child that gives also grows: in 700 it takes the surplus.
+        let wide = lay_out(&titled_plot(), &all_permitted(), Size::new(700.0, 20.0)).unwrap();
+        assert_eq!(bounds_of(&wide, "plot"), Rect::new(60.0, 0.0, 640.0, 20.0));
+        assert_eq!(wide.bounds.width, 700.0);
+    }
+
+    #[test]
+    fn a_sibling_changes_form_only_when_the_least_lengths_do_not_fit() {
+        // In 260 the least lengths, 60 and 200, just fit.
+        let plan = lay_out(&titled_plot(), &all_permitted(), Size::new(260.0, 20.0)).unwrap();
+        assert_eq!(level_of(&plan, "title"), Level::Preferred);
+        assert_eq!(bounds_of(&plan, "plot").width, 200.0);
+        // In 250 they do not, and the title is abbreviated.
+        let plan = lay_out(&titled_plot(), &all_permitted(), Size::new(250.0, 20.0)).unwrap();
+        assert_eq!(level_of(&plan, "title"), Level::Mild);
+        assert_eq!(bounds_of(&plan, "plot").width, 220.0);
+        assert_eq!(
+            plan.reasons,
+            vec![Reason::OrderedUp {
+                child: Id::new("title"),
+                from: Level::Preferred,
+                to: Level::Mild,
+                showed: Showed::NoRoomForTheLeast {
+                    needs: 260.0,
+                    has: 250.0
+                },
+            }]
+        );
     }
 
     #[test]
     fn a_child_is_not_ordered_into_a_form_that_falls_short_across() {
-        // Review finding 4, second half: `a` is narrower at Mild but too
-        // tall for the row. It stays, and `b` gives at Strong instead.
+        // First review, finding 4: `a` is narrower at Mild but too tall for
+        // the row. It stays, and `b` gives at Strong instead.
         let row = Stack::row(Id::new("row"))
             .child(Rc::new(Forms {
                 id: Id::new("a"),
@@ -1732,9 +1965,9 @@ mod tests {
 
     #[test]
     fn whoever_holds_a_ceiling_over_a_list_works_up_from_preferred() {
-        // Review finding 1: a list under arrangements, ordered AllPermitted
-        // with unlimited room, keeps every member at Preferred; so does a
-        // list at the root of a plan.
+        // A list under arrangements, ordered AllPermitted with unlimited
+        // room, keeps every member at Preferred; so does a list at the
+        // root of a plan.
         let list: Child<String> = actions();
         let parent = Arrangements::new(Id::new("parent"), vec![Rc::clone(&list)]);
         for plan in [
@@ -1770,8 +2003,8 @@ mod tests {
 
     #[test]
     fn a_column_that_fits_mildly_is_taken_over_a_row_squeezed_at_strong() {
-        // Review finding 2: in 85 the row fits only with its gap squeezed
-        // at Strong; the column fits at Preferred.
+        // In 85 the row fits only with its gap squeezed at Strong; the
+        // column fits at Preferred.
         let (row, column) = row_and_column();
         let parent = Arrangements::new(Id::new("parent"), vec![row, column]);
         let plan = lay_out(&parent, &all_permitted(), Size::new(85.0, 40.0)).unwrap();
@@ -1791,9 +2024,9 @@ mod tests {
         assert!(plan.find(&Id::new("row")).is_some());
     }
 
-    #[test]
-    fn an_order_naming_a_tagged_kind_restricts_the_arrangements_and_reaches_the_chosen() {
-        // Review finding 2: "direction = turned" reaches the chart.
+    /// A chart that is `across` (upright) or `up` (turned), with `a` and
+    /// `b` 40 by 10.
+    fn upright_or_turned() -> Arrangements<String> {
         let upright = Presentation::default().with("direction", "upright");
         let turned = Presentation::default().with("direction", "turned");
         let both = || Accepts::new(upright.clone(), vec![upright.clone(), turned.clone()]);
@@ -1811,10 +2044,16 @@ mod tests {
                 .child(a)
                 .child(b),
         );
-        let chart = Arrangements::new(Id::new("chart"), vec![across, up])
+        Arrangements::new(Id::new("chart"), vec![across, up])
             .accepting(both())
             .tagged(&Id::new("across"), "direction", "upright")
-            .tagged(&Id::new("up"), "direction", "turned");
+            .tagged(&Id::new("up"), "direction", "turned")
+    }
+
+    #[test]
+    fn an_order_naming_a_tagged_kind_restricts_the_arrangements_and_reaches_the_chosen() {
+        let turned = Presentation::default().with("direction", "turned");
+        let chart = upright_or_turned();
         let free = lay_out(&chart, &all_permitted(), Size::INFINITE).unwrap();
         assert!(free.find(&Id::new("across")).is_some());
         let group = all_permitted().with("direction", "turned");
@@ -1831,34 +2070,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_node_records_the_arrangement_chosen_and_the_kind_it_stands_for() {
+        // Second review, specification fault: not ordered a direction, the
+        // chart takes the turned arrangement in 50 by 30, and its node says
+        // so, not the family's default.
+        let plan = lay_out(
+            &upright_or_turned(),
+            &all_permitted(),
+            Size::new(50.0, 30.0),
+        )
+        .unwrap();
+        assert_eq!(plan.children[0].id, Id::new("up"));
+        assert_eq!(
+            plan.orders.presentation,
+            Presentation::default().with("direction", "turned")
+        );
+        assert_eq!(
+            plan.reasons.last(),
+            Some(&Reason::ArrangementTaken {
+                arrangement: Id::new("up")
+            })
+        );
+        let wide = lay_out(
+            &upright_or_turned(),
+            &all_permitted(),
+            Size::new(100.0, 30.0),
+        )
+        .unwrap();
+        assert_eq!(
+            wide.orders.presentation,
+            Presentation::default().with("direction", "upright")
+        );
+    }
+
     /// A column of `w` (120 by 20, and 80 by 30 from Mild) and `f` (50 by
     /// 20).
     fn w_over_f() -> Stack<String> {
         Stack::column(Id::new("inner"))
-            .child(Rc::new(Forms {
-                id: Id::new("w"),
-                forms: vec![
-                    (
-                        Level::Preferred,
-                        Size::new(120.0, 20.0),
-                        Size::new(120.0, 20.0),
-                    ),
-                    (Level::Mild, Size::new(80.0, 30.0), Size::new(80.0, 30.0)),
-                ],
-                accepts: Accepts::ordinary(),
-            }))
+            .child(w())
             .child(fixed("f", 50.0, 20.0))
+    }
+
+    fn w() -> Rc<Forms> {
+        Rc::new(Forms {
+            id: Id::new("w"),
+            forms: vec![
+                (
+                    Level::Preferred,
+                    Size::new(120.0, 20.0),
+                    Size::new(120.0, 20.0),
+                ),
+                (Level::Mild, Size::new(80.0, 30.0), Size::new(80.0, 30.0)),
+            ],
+            accepts: Accepts::ordinary(),
+        })
     }
 
     #[test]
     fn a_composition_answers_what_it_would_do_in_the_space_offered() {
-        // Review finding 5: offered width 100, the column needs 50, not 40.
+        // First review, finding 5: offered width 100, the column needs 50,
+        // not 40.
         let answer = w_over_f()
             .query(&all_permitted(), Size::new(100.0, 100.0))
             .unwrap();
         assert_eq!(answer.preferred.height, 50.0);
         assert_eq!(answer.least.height, 50.0);
-        // In a parent, the answer of 40 ended in a false no fit.
+        assert_eq!(answer.taken, Size::new(80.0, 50.0));
         let outer = Stack::column(Id::new("outer"))
             .child(Rc::new(w_over_f()))
             .child(fixed("y", 50.0, 10.0));
@@ -1867,82 +2145,123 @@ mod tests {
         assert_eq!(level_of(&plan, "w"), Level::Mild);
     }
 
-    /// Every node's identity and level.
-    fn choices(plan: &Node<String>) -> Vec<(Id, Level)> {
+    /// Every node's identity, level and bounds.
+    fn choices(plan: &Node<String>) -> Vec<(Id, Level, Rect)> {
         plan.nodes()
             .into_iter()
-            .map(|node| (node.id.clone(), node.orders.level))
+            .map(|node| (node.id.clone(), node.orders.level, node.bounds))
             .collect()
     }
 
     #[test]
-    fn arranging_at_the_answered_size_makes_the_querys_choices() {
+    fn a_query_and_the_plan_in_the_same_space_make_the_same_choices() {
+        // Second review, item 2: offered 170 by 20, the query keeps `a` at
+        // Preferred and orders `b` to Mild, taking 90. The plan is made in
+        // the 170 offered, not the 90 taken, and makes the same choices.
+        let space = Size::new(170.0, 20.0);
+        let plan = lay_out(&review_row(), &all_permitted(), space).unwrap();
+        assert_eq!(level_of(&plan, "a"), Level::Preferred);
+        assert_eq!(level_of(&plan, "b"), Level::Mild);
+        assert_eq!(plan.bounds, Rect::new(0.0, 0.0, 90.0, 20.0));
+        let answer = review_row().query(&all_permitted(), space).unwrap();
+        assert!(answer.fits());
+        assert_eq!(answer.taken, plan.bounds.size());
+        // The same for other boxes, each asked and ordered afresh.
         let (row, column) = row_and_column();
-        let boxes: Vec<(Child<String>, Size)> = vec![
-            (Rc::new(w_over_f()), Size::new(100.0, 100.0)),
+        let arrangements: Child<String> =
+            Rc::new(Arrangements::new(Id::new("parent"), vec![row, column]));
+        type Maker = (Box<dyn Fn() -> Child<String>>, Size);
+        let makers: Vec<Maker> = vec![
+            (Box::new(|| Rc::new(review_row())), space),
+            (Box::new(|| Rc::new(w_over_f())), Size::new(100.0, 100.0)),
             (
-                Rc::new(Arrangements::new(Id::new("parent"), vec![row, column])),
+                Box::new(move || Rc::clone(&arrangements)),
                 Size::new(85.0, 40.0),
             ),
             (
-                Rc::new(
-                    Stack::row(Id::new("toolbar"))
-                        .child(compact("title", 100.0, 60.0, 20.0))
-                        .child(actions()),
-                ),
+                Box::new(|| {
+                    Rc::new(
+                        Stack::row(Id::new("toolbar"))
+                            .child(compact("title", 100.0, 60.0, 20.0))
+                            .child(actions()),
+                    )
+                }),
                 Size::new(170.0, 30.0),
             ),
         ];
-        for (root, space) in boxes {
-            let plan = lay_out(root.as_ref(), &all_permitted(), space).unwrap();
-            let at = Order::NONE.with_level(plan.orders.level);
-            let in_space = root
-                .order(&at, Rect::from_origin(Default::default(), space))
-                .unwrap();
-            assert_eq!(choices(&plan), choices(&in_space), "{}", root.id().as_str());
+        for (make, space) in makers {
+            let planned = lay_out(make().as_ref(), &all_permitted(), space).unwrap();
+            let at = Order::NONE.with_level(planned.orders.level);
+            let fresh = make();
+            fresh.forget();
+            let ordered = fresh.order(&at, Point::default(), space).unwrap();
+            assert_eq!(choices(&planned), choices(&ordered), "{:?}", planned.id);
+            fresh.forget();
+            let taken = fresh.query(&at, space).unwrap().taken;
+            assert_eq!(taken, planned.bounds.size(), "{:?}", planned.id);
         }
     }
 
     #[test]
-    fn a_box_offered_its_least_size_fits_and_offered_less_does_not() {
-        let fits = |root: &dyn LayoutBox<String>, space| {
-            root.query(&all_permitted(), space).unwrap().fits()
-        };
-        // Along a column, at the width offered.
+    fn a_box_offered_its_least_length_in_one_direction_fits_and_a_little_less_does_not() {
+        // Second review, item 3: W (120 by 20, 80 by 30 from Mild) beside F
+        // (50 by 20), offered 400 by 100. Its least width at height 100 is
+        // 130 and its least height at width 400 is 20.
+        let row = Stack::row(Id::new("row"))
+            .child(w())
+            .child(fixed("f", 50.0, 20.0));
+        let answer = row
+            .query(&all_permitted(), Size::new(400.0, 100.0))
+            .unwrap();
+        assert_eq!(answer.least, Size::new(130.0, 20.0));
+        assert_eq!(answer.preferred, Size::new(170.0, 20.0));
+        assert!(fits(&row, Size::new(130.0, 100.0)));
+        assert!(!fits(&row, Size::new(129.5, 100.0)));
+        assert!(fits(&row, Size::new(400.0, 20.0)));
+        assert!(!fits(&row, Size::new(400.0, 19.5)));
+        // The pair is not a size it is promised to fit: W is 80 wide only
+        // by being 30 high. At width 130 its least height is 30.
+        assert!(!fits(&row, Size::new(130.0, 20.0)));
+        let narrow = row
+            .query(&all_permitted(), Size::new(130.0, 100.0))
+            .unwrap();
+        assert_eq!(narrow.least.height, 30.0);
+        assert!(fits(&row, Size::new(130.0, 30.0)));
+        assert!(!fits(&row, Size::new(130.0, 29.5)));
+        // The same along and across a column.
         let column = w_over_f();
-        let least = column
+        let answer = column
             .query(&all_permitted(), Size::new(100.0, 100.0))
-            .unwrap()
-            .least;
-        assert!(fits(&column, Size::new(100.0, least.height)));
-        assert!(!fits(&column, Size::new(100.0, least.height - 0.5)));
-        // Across the column: W can be 80 wide.
-        assert_eq!(least.width, 80.0);
-        assert!(fits(&column, Size::new(least.width, 100.0)));
-        assert!(!fits(&column, Size::new(least.width - 0.5, 100.0)));
-        // Along a row with a flexible child (review finding 4's row).
-        let row = Stack::row(Id::new("chart"))
-            .child(fixed("fixed", 50.0, 20.0))
-            .member(
-                Member::new(ranged(
-                    "plot",
-                    vec![(Level::Preferred, 150.0, 150.0), (Level::Mild, 150.0, 80.0)],
-                    20.0,
-                ))
-                .flexible(),
-            );
-        let least = row
-            .query(&all_permitted(), Size::new(400.0, 20.0))
-            .unwrap()
-            .least;
-        assert_eq!(least, Size::new(130.0, 20.0));
-        assert!(fits(&row, least));
-        assert!(!fits(&row, Size::new(least.width - 0.5, 20.0)));
-        assert!(!fits(&row, Size::new(least.width, 19.5)));
+            .unwrap();
+        assert_eq!(answer.least, Size::new(80.0, 50.0));
+        assert!(fits(&column, Size::new(80.0, 100.0)));
+        assert!(!fits(&column, Size::new(79.5, 100.0)));
+        assert!(fits(&column, Size::new(100.0, 50.0)));
+        assert!(!fits(&column, Size::new(100.0, 49.5)));
     }
 
     #[test]
-    fn arrangements_report_a_least_size_of_one_arrangement() {
+    fn a_box_with_arrangements_fits_a_column_by_the_arrangement_it_takes() {
+        // Second review, item 1: a row (120 by 20) or a column (60 by 40),
+        // in a column offered 200 by 30. The row fits; its least height is
+        // the row's, not the column's.
+        let choice: Child<String> = Rc::new(Arrangements::new(
+            Id::new("choice"),
+            vec![fixed("row", 120.0, 20.0), fixed("column", 60.0, 40.0)],
+        ));
+        let answer = choice
+            .query(&Order::NONE, Size::new(200.0, f64::INFINITY))
+            .unwrap();
+        assert_eq!(answer.least, Size::new(60.0, 20.0));
+        assert_eq!(answer.preferred, Size::new(120.0, 20.0));
+        let outer = Stack::column(Id::new("outer")).child(choice);
+        let plan = lay_out(&outer, &all_permitted(), Size::new(200.0, 30.0)).unwrap();
+        assert_eq!(bounds_of(&plan, "row"), Rect::new(0.0, 0.0, 120.0, 20.0));
+        assert!(plan.find(&Id::new("column")).is_none());
+    }
+
+    #[test]
+    fn arrangements_report_each_least_over_the_arrangements_that_fit_the_other_direction() {
         let (a, b): (Child<String>, Child<String>) =
             (fixed("a", 100.0, 20.0), fixed("b", 100.0, 20.0));
         let row: Child<String> = Rc::new(
@@ -1952,12 +2271,27 @@ mod tests {
         );
         let column: Child<String> = Rc::new(Stack::column(Id::new("column")).child(a).child(b));
         let parent = Arrangements::new(Id::new("parent"), vec![row, column]);
+        // Both fit 300 by 50: the least width is the column's, the least
+        // height the row's.
         let answer = parent
             .query(&all_permitted(), Size::new(300.0, 50.0))
             .unwrap();
         assert_eq!(answer.preferred, Size::new(200.0, 20.0));
-        assert_eq!(answer.least, Size::new(100.0, 40.0));
-        assert!(parent.query(&all_permitted(), answer.least).unwrap().fits());
+        assert_eq!(answer.least, Size::new(100.0, 20.0));
+        // At height 30 only the row fits, so the least width is 200.
+        let low = parent
+            .query(&all_permitted(), Size::new(300.0, 30.0))
+            .unwrap();
+        assert_eq!(low.least.width, 200.0);
+        assert!(fits(&parent, Size::new(200.0, 30.0)));
+        assert!(!fits(&parent, Size::new(199.5, 30.0)));
+        // At width 150 only the column fits, so the least height is 40.
+        let narrow = parent
+            .query(&all_permitted(), Size::new(150.0, 50.0))
+            .unwrap();
+        assert_eq!(narrow.least.height, 40.0);
+        assert!(fits(&parent, Size::new(150.0, 40.0)));
+        assert!(!fits(&parent, Size::new(150.0, 39.5)));
     }
 
     /// A leaf with one size and a baseline.
@@ -1978,14 +2312,18 @@ mod tests {
         fn measure(&self, _: &Resolved, space: Size) -> Result<Answer, Unsupported> {
             Ok(Answer::of(&self.id, self.size, self.size, space).with_baseline(self.baseline))
         }
-        fn arrange(&self, orders: &Resolved, bounds: Rect) -> Result<Node<String>, Unsupported> {
-            Ok(Node::leaf(
-                self.id.clone(),
-                orders.clone(),
-                bounds,
-                self.id.as_str().to_owned(),
-            )
-            .with_baseline(Some(self.baseline)))
+        fn arrange(
+            &self,
+            orders: &Resolved,
+            at: Point,
+            space: Size,
+        ) -> Result<Node<String>, Unsupported> {
+            Ok(leaf_node(
+                &self.id,
+                orders,
+                at,
+                self.measure(orders, space)?,
+            ))
         }
     }
 
@@ -2059,6 +2397,12 @@ mod tests {
         assert_eq!(bounds_of(&plan, "one").width, 30.0);
         assert_eq!(bounds_of(&plan, "three"), Rect::new(30.0, 0.0, 50.0, 10.0));
         assert_eq!(bounds_of(&plan, "still").x, 80.0);
+        // A growing row takes the room offered; its preferred width is
+        // still what it would take with unlimited width.
+        let answer = row(true)
+            .query(&Order::NONE, Size::new(100.0, 10.0))
+            .unwrap();
+        assert_eq!((answer.taken.width, answer.preferred.width), (100.0, 60.0));
         // Without growing members the surplus is left.
         let plan = lay_out(&row(false), &Order::NONE, Size::new(100.0, 10.0)).unwrap();
         assert_eq!(plan.bounds.width, 60.0);
@@ -2163,8 +2507,13 @@ mod tests {
             self.count.set(self.count.get() + 1);
             self.inner.measure(orders, space)
         }
-        fn arrange(&self, orders: &Resolved, bounds: Rect) -> Result<Node<String>, Unsupported> {
-            self.inner.arrange(orders, bounds)
+        fn arrange(
+            &self,
+            orders: &Resolved,
+            at: Point,
+            space: Size,
+        ) -> Result<Node<String>, Unsupported> {
+            self.inner.arrange(orders, at, space)
         }
     }
 
@@ -2200,57 +2549,38 @@ mod tests {
     }
 
     #[test]
-    fn the_flexible_child_keeps_its_preferred_size_until_the_others_have_given_theirs() {
-        let row = || {
-            Stack::row(Id::new("chart"))
-                .member(
-                    Member::new(ranged("plot", vec![(Level::Preferred, 100.0, 40.0)], 20.0))
-                        .flexible(),
-                )
-                .child(ranged(
-                    "label",
-                    vec![(Level::Preferred, 60.0, 50.0), (Level::Mild, 30.0, 30.0)],
-                    10.0,
-                ))
-        };
-        let width = |plan: &Node<String>, id: &str| plan.find(&Id::new(id)).unwrap().bounds.width;
-
-        // The label gives what its level allows before anything else.
-        let wide = lay_out(&row(), &all_permitted(), Size::new(150.0, 20.0)).unwrap();
-        assert_eq!((width(&wide, "plot"), width(&wide, "label")), (100.0, 50.0));
-        assert_eq!(level_of(&wide, "label"), Level::Preferred);
-        assert!(wide.reasons.is_empty());
-
-        // Then it is ordered up, and the plot still has its preferred width.
-        let middle = lay_out(&row(), &all_permitted(), Size::new(130.0, 20.0)).unwrap();
+    fn adding_to_a_composition_after_it_was_asked_clears_what_it_remembered() {
+        // Second review, item 7: query, add a child, query again in the
+        // same space.
+        let space = Size::new(200.0, 20.0);
+        let row = Stack::row(Id::new("row")).child(fixed("a", 40.0, 10.0));
         assert_eq!(
-            (width(&middle, "plot"), width(&middle, "label")),
-            (100.0, 30.0)
+            row.query(&Order::NONE, space).unwrap().preferred.width,
+            40.0
         );
+        let row = row.child(fixed("b", 40.0, 10.0));
         assert_eq!(
-            middle.reasons,
-            vec![Reason::OrderedUp {
-                child: Id::new("label"),
-                from: Level::Preferred,
-                to: Level::Mild,
-                showed: Showed::TakesRoomFlexibleLacks {
-                    flexible: Id::new("plot"),
-                    lacks: 20.0
-                },
-            }]
+            row.query(&Order::NONE, space).unwrap().preferred.width,
+            80.0
         );
-
-        // Only when nothing more can be ordered up does the plot shrink.
-        let narrow = lay_out(&row(), &all_permitted(), Size::new(100.0, 20.0)).unwrap();
+        let row = row.gap(2.0, 10.0).child(fixed("c", 40.0, 10.0));
         assert_eq!(
-            (width(&narrow, "plot"), width(&narrow, "label")),
-            (70.0, 30.0)
+            row.query(&Order::NONE, space).unwrap().preferred.width,
+            130.0
         );
-        assert!(narrow.reasons.contains(&Reason::FlexibleSqueezed {
-            child: Id::new("plot"),
-            preferred: 100.0,
-            got: 70.0
+        // Told to forget, a box asks its children again.
+        let count = Rc::new(std::cell::Cell::new(0));
+        let counted = Stack::column(Id::new("column")).child(Rc::new(Counted {
+            inner: fixed("leaf", 10.0, 10.0),
+            count: Rc::clone(&count),
         }));
+        counted.query(&Order::NONE, space).unwrap();
+        let first = count.get();
+        counted.query(&Order::NONE, space).unwrap();
+        assert_eq!(count.get(), first);
+        counted.forget();
+        counted.query(&Order::NONE, space).unwrap();
+        assert!(count.get() > first);
     }
 
     #[test]
@@ -2262,10 +2592,9 @@ mod tests {
         let plan = lay_out(&row, &all_permitted(), Size::new(85.0, 20.0)).unwrap();
         assert_eq!(level_of(&plan, "fixed"), Level::Preferred);
         assert_eq!(level_of(&plan, "compact"), Level::Mild);
-        // The row takes 80 of the 85, and is arranged there.
         let showed = Showed::NoRoomForTheLeast {
             needs: 110.0,
-            has: 80.0,
+            has: 85.0,
         };
         assert_eq!(
             plan.reasons,
@@ -2290,10 +2619,7 @@ mod tests {
         let Err(Refusal::NoFit { .. }) = refused else {
             panic!("expected no fit, got {refused:?}");
         };
-        let answer = wider
-            .query(&all_permitted(), Size::new(50.0, 20.0))
-            .unwrap();
-        assert!(!answer.fits());
+        assert!(!fits(&wider, Size::new(50.0, 20.0)));
     }
 
     #[test]
@@ -2371,31 +2697,40 @@ mod tests {
         let row = Stack::row(Id::new("row"))
             .child(wrapping("text", 120.0, 40.0, 10.0))
             .child(fixed("mark", 30.0, 10.0));
-        // Too low: the text, at the 70 it gets, wraps to two lines.
-        assert_eq!(
-            lay_out(&row, &all_permitted(), Size::new(100.0, 15.0)),
-            Err(Refusal::NoFit {
-                short: vec![Shortfall {
-                    part: Id::new("text"),
-                    direction: Direction::Down,
-                    needs: 20.0,
-                    has: 15.0
-                }]
-            })
-        );
-        // Too narrow: the row names its own least width.
-        assert_eq!(
-            lay_out(&row, &all_permitted(), Size::new(50.0, 100.0)),
+        let row_short = |needs: f64, has: f64| {
             Err(Refusal::NoFit {
                 short: vec![Shortfall {
                     part: Id::new("row"),
                     direction: Direction::Across,
-                    needs: 70.0,
-                    has: 50.0
-                }]
+                    needs,
+                    has,
+                }],
+            })
+        };
+        // Too narrow: the row names its own least width, 40 + 30.
+        assert_eq!(
+            lay_out(&row, &all_permitted(), Size::new(50.0, 100.0)),
+            row_short(70.0, 50.0)
+        );
+        // At height 15 the text must be on one line, so the row needs 150.
+        assert_eq!(
+            lay_out(&row, &all_permitted(), Size::new(100.0, 15.0)),
+            row_short(150.0, 100.0)
+        );
+        // Lower than a line, each child names the height it needs.
+        let down = |part: &str| Shortfall {
+            part: Id::new(part),
+            direction: Direction::Down,
+            needs: 10.0,
+            has: 5.0,
+        };
+        assert_eq!(
+            lay_out(&row, &all_permitted(), Size::new(200.0, 5.0)),
+            Err(Refusal::NoFit {
+                short: vec![down("text"), down("mark")]
             })
         );
-        // With height to spare, the text wraps and fits.
+        // With height for two lines, the text wraps and fits.
         let fits = lay_out(&row, &all_permitted(), Size::new(100.0, 30.0)).unwrap();
         assert_eq!(
             fits.find(&Id::new("text")).unwrap().bounds,

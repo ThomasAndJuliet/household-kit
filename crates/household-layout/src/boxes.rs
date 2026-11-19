@@ -64,10 +64,17 @@ pub trait LayoutBox<C> {
     /// The box's answer under `orders` in `space`. Pure.
     fn measure(&self, orders: &Resolved, space: Size) -> Result<Answer, Unsupported>;
 
-    /// The box's part of the plan, placed at `bounds`, under `orders`.
-    /// The same `orders` and the size of `bounds` give the same choices
-    /// as [`measure`](Self::measure) at that size.
-    fn arrange(&self, orders: &Resolved, bounds: Rect) -> Result<Node<C>, Unsupported>;
+    /// The box's part of the plan under `orders` in the offered `space`,
+    /// with its top left corner at `at`. It makes the choices
+    /// [`measure`](Self::measure) makes under the same orders in the same
+    /// space, and its node's bounds are the size it takes there
+    /// ([`Answer::taken`]).
+    fn arrange(&self, orders: &Resolved, at: Point, space: Size) -> Result<Node<C>, Unsupported>;
+
+    /// Forget every answer remembered, this box's and its children's. A
+    /// box remembers answers only while it is unchanged; a box built for
+    /// one layout need never be told.
+    fn forget(&self) {}
 
     /// The parent's order for this box, resolved against the maker's
     /// request and the family's default.
@@ -80,23 +87,31 @@ pub trait LayoutBox<C> {
         self.measure(&self.resolve(order)?, space)
     }
 
-    /// Order the box: its part of the plan at `bounds`.
-    fn order(&self, order: &Order, bounds: Rect) -> Result<Node<C>, Unsupported> {
-        self.arrange(&self.resolve(order)?, bounds)
+    /// Order the box under the parent's `order` in the offered `space`,
+    /// placed at `at`: its part of the plan, with the query's choices.
+    fn order(&self, order: &Order, at: Point, space: Size) -> Result<Node<C>, Unsupported> {
+        self.arrange(&self.resolve(order)?, at, space)
     }
 }
 
-/// A box's answer to a query in an offered space.
+/// A box's answer to a query in an offered space. Each of the four
+/// lengths is for one direction with the other as offered:
 ///
-/// `preferred.width` is the width the box would take with room to spare;
-/// `least.width` is the narrowest it can be under these orders. Both
-/// heights are at the width the box would take in the offered space
-/// ([`Answer::taken`] across), since text wraps: `preferred.height` is
-/// the height it would like there, `least.height` the least it can be.
+/// - `preferred.width` is the width it would take with unlimited width at
+///   the offered height, `preferred.height` the height it would take with
+///   unlimited height at the offered width;
+/// - `least.width` is the least width it can take at the offered height,
+///   `least.height` the least height it can take at the offered width.
+///
+/// The pair `least` is not a size the box is promised to fit: a text is
+/// narrow only by being tall. `taken` is the size it takes in the space
+/// offered, and the size of its node when it is ordered there.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Answer {
     pub preferred: Size,
     pub least: Size,
+    /// The size the box takes in the space offered.
+    pub taken: Size,
     /// The baseline's distance from the box's top, if it has one.
     pub baseline: Option<f64>,
     /// What could not fit. Empty when the box fits.
@@ -107,8 +122,16 @@ pub struct Answer {
 
 impl Answer {
     /// The answer of a box that speaks only for itself: `part` falls short
-    /// in each direction where its least size exceeds `space`.
+    /// in each direction where its least size exceeds `space`, and takes
+    /// its preferred length in each direction, no more than offered and
+    /// never below its least.
     pub fn of(part: &Id, preferred: Size, least: Size, space: Size) -> Self {
+        let taken = |direction: Direction| {
+            direction
+                .length(preferred)
+                .min(direction.length(space))
+                .max(direction.length(least))
+        };
         let short = [Direction::Across, Direction::Down]
             .into_iter()
             .filter_map(|direction| {
@@ -123,6 +146,7 @@ impl Answer {
         Self {
             preferred,
             least,
+            taken: Size::new(taken(Direction::Across), taken(Direction::Down)),
             baseline: None,
             short,
             unshown: Vec::new(),
@@ -142,23 +166,6 @@ impl Answer {
     /// Whether the box fits the space it was offered.
     pub fn fits(&self) -> bool {
         self.short.is_empty()
-    }
-
-    /// The length the box takes in `direction` when `offered` that much:
-    /// its preferred length, no more than offered, never below its least.
-    pub fn taken(&self, direction: Direction, offered: f64) -> f64 {
-        direction
-            .length(self.preferred)
-            .min(offered)
-            .max(direction.length(self.least))
-    }
-
-    /// The size the box takes in `space`.
-    pub fn taken_size(&self, space: Size) -> Size {
-        Size::new(
-            self.taken(Direction::Across, space.width),
-            self.taken(Direction::Down, space.height),
-        )
     }
 }
 
@@ -292,9 +299,9 @@ pub enum Reason {
         showed: Showed,
         why: Kept,
     },
-    /// Nothing more could be ordered up, so the flexible child `child`
-    /// was given less than it prefers.
-    FlexibleSqueezed { child: Id, preferred: f64, got: f64 },
+    /// Once the whole fitted, `child` was tried one level lower, from
+    /// `from` to `to`, and the whole still fitted, so it was kept there.
+    OrderedDown { child: Id, from: Level, to: Level },
     /// An arrangement was tried from Preferred and did not fit.
     ArrangementRejected {
         arrangement: Id,
@@ -311,8 +318,6 @@ pub enum Reason {
 pub enum Showed {
     /// The child does not fit the room it got.
     DoesNotFitItsRoom { short: Vec<Shortfall> },
-    /// The child takes room that the flexible child `flexible` lacks.
-    TakesRoomFlexibleLacks { flexible: Id, lacks: f64 },
     /// The children's least lengths together exceed the room, so no child
     /// has room for its least length.
     NoRoomForTheLeast { needs: f64, has: f64 },
@@ -349,7 +354,9 @@ impl From<Unsupported> for Refusal {
 /// [takes its level exactly](LayoutBox::takes_level_exactly) is given each
 /// level from Preferred up to it and ordered the first at which it fits,
 /// so that nothing is ordered more compaction than it needs; any other
-/// root distributes the ceiling itself.
+/// root distributes the ceiling itself. The root is ordered in `space`,
+/// the space it was queried in, and its bounds are the size it takes
+/// there.
 pub fn plan<C>(root: &dyn LayoutBox<C>, order: &Order, space: Size) -> Result<Node<C>, Refusal> {
     let ceiling = root.resolve(order)?.level;
     let lowest = if root.takes_level_exactly() {
@@ -365,8 +372,7 @@ pub fn plan<C>(root: &dyn LayoutBox<C>, order: &Order, space: Size) -> Result<No
         let at = order.clone().with_level(level);
         let answer = root.query(&at, space)?;
         if answer.fits() {
-            let bounds = Rect::from_origin(Point::default(), answer.taken_size(space));
-            return Ok(root.order(&at, bounds)?);
+            return Ok(root.order(&at, Point::default(), space)?);
         }
         short = answer.short;
     }
@@ -390,20 +396,20 @@ mod tests {
         assert_eq!(
             answer.short,
             vec![Shortfall {
-                part,
+                part: part.clone(),
                 direction: Direction::Across,
                 needs: 60.0,
                 has: 50.0
             }]
         );
-        assert_eq!(
-            answer.taken_size(Size::new(70.0, 30.0)),
-            Size::new(70.0, 20.0)
+        assert_eq!(answer.taken, Size::new(60.0, 20.0));
+        let roomy = Answer::of(
+            &part,
+            Size::new(80.0, 20.0),
+            Size::new(60.0, 20.0),
+            Size::new(70.0, 30.0),
         );
-        assert_eq!(
-            answer.taken_size(Size::new(50.0, 30.0)),
-            Size::new(60.0, 20.0)
-        );
+        assert_eq!(roomy.taken, Size::new(70.0, 20.0));
     }
 
     #[test]
