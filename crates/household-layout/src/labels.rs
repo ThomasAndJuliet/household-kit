@@ -288,6 +288,9 @@ pub struct Pattern {
     pub place: Place,
     pub alignment: Alignment,
     pub gap: Gap,
+    /// Whether labels whose positions nearly agree share one line (U8).
+    /// Off by default; see the module's account of shared lines.
+    pub share_line: bool,
 }
 
 impl Pattern {
@@ -312,11 +315,19 @@ impl Pattern {
             place,
             alignment,
             gap: Gap::Related,
+            share_line: false,
         }
     }
 
     pub fn gap(mut self, gap: Gap) -> Self {
         self.gap = gap;
+        self
+    }
+
+    /// This pattern with labels whose positions nearly agree sharing one
+    /// line (U8).
+    pub fn sharing_lines(mut self) -> Self {
+        self.share_line = true;
         self
     }
 }
@@ -417,9 +428,56 @@ pub struct Placed {
     pub pattern: usize,
     pub preference: Preference,
     pub labels: Vec<PlacedLabel>,
+    /// Every group of labels whose positions nearly agreed, in the order
+    /// of the sides and then of their positions, and whether it shares a
+    /// line. Empty unless the pattern shares lines.
+    pub lines: Vec<SharedLine>,
     /// The record's revision when the set was judged: [`enter_set`] enters
     /// the set only into a record still at it.
     pub judged_at: Revision,
+}
+
+/// A group of labels on one side whose positions differ by less than the
+/// least distance (U8).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SharedLine {
+    /// The members, in order of position along their side, from the one
+    /// standing least far out.
+    pub members: Vec<Id>,
+    /// The side of their anchors they stand on.
+    pub side: Side,
+    pub outcome: LineOutcome,
+}
+
+/// What became of a group of labels whose positions nearly agree.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LineOutcome {
+    /// The group stands on one line: `at` is the coordinate of every
+    /// label's edge facing its mark (the feet of labels above their marks,
+    /// the left edges of labels to the right of theirs).
+    Shared { at: f64 },
+    /// The group keeps its own positions, for this reason.
+    Kept(KeptBecause),
+}
+
+/// Why a group of labels whose positions nearly agree keeps its own
+/// positions.
+#[derive(Clone, Debug, PartialEq)]
+pub enum KeptBecause {
+    /// No one line keeps every label of the group between the least
+    /// distance and near of its own mark: one would no longer clearly be
+    /// its mark's.
+    NoLine,
+    /// On the line, `member` would no longer lie inside its owner, the
+    /// least distance from its edges.
+    NotInside { member: Id },
+    /// On the line, `member` would lose its clearance: the record would
+    /// reject it (the finding is given), or it would take a less preferred
+    /// place than its own.
+    Clearance {
+        member: Id,
+        finding: Option<Finding>,
+    },
 }
 
 /// A judged set was not entered because the record changed after it was
@@ -492,7 +550,7 @@ pub fn place_set(
     Ok(placed)
 }
 
-/// The room a pattern needs beyond its owners on each side.
+/// Lengths on each side of a set's owners.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Room {
     pub above: f64,
@@ -513,22 +571,52 @@ impl Room {
     }
 }
 
-/// The room pattern `pattern` of `set` needs beyond its owners, along the
-/// side each label goes on: the gap and the label's depth, the most over
-/// the members. A label inside its owner needs none. A pure query that
-/// needs neither the record nor the owners, so a chart can reserve the room
-/// before anything is placed (design §9, semantics C9). How far a label
-/// wider than its owner reaches across depends on the owner's size and is
-/// not counted. A member with no end stops a pattern that follows the data.
+/// The room a pattern needs around its owners, from [`room_needed`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RoomNeeded {
+    /// Beyond the owners along the side each label stands on: the gap and
+    /// the label's depth, the most over the members. A label inside its
+    /// owner needs none.
+    pub beyond: Room,
+    /// How far the labels reach past their owners' sides across the side
+    /// they stand on: for a label above or below its owner, past the
+    /// owner's left and right; for one to its left or right, past its top
+    /// and bottom. The most over the members, and nothing where every
+    /// label lies within its owner's extent.
+    pub across: Room,
+}
+
+/// The room pattern `pattern` of `set` needs around its owners: beyond
+/// them along the side each label goes on, and past their sides across it.
+/// A pure query that needs neither the record nor the owners' places, so a
+/// chart can reserve the room before anything is placed (design §9,
+/// semantics C9). `owner_across` gives each member's owner's length across
+/// the side its label stands on: a bar's width for a label above or below
+/// it, a line's width at its end. A member with no end stops a pattern that
+/// follows the data.
+///
+/// Across, a centred label reaches past each side by half the amount it
+/// is wider than its owner, a label aligned with its owner's start reaches
+/// past the end by all of it, and one aligned with the end past the start.
+/// A bounded alignment counts as the alignment it starts from: what the
+/// region then shifts back is what the region could not give. A label
+/// inside its owner that reaches past it across will not lie within it,
+/// which judging reports as [`Reason::NotInside`].
+///
+/// Sharing lines (U8) needs no more room while the pattern's gap is at
+/// least the least distance: a group's line is then never beyond its
+/// outermost label, so no label goes beyond the outermost place a label of
+/// the set takes without it.
 pub fn room_needed(
     set: &LabelSet,
     pattern: usize,
     rules: &Rules,
     sizes: &Sizes,
-) -> Result<Room, Stopped> {
+    owner_across: impl Fn(&Member) -> f64,
+) -> Result<RoomNeeded, Stopped> {
     let pattern_ref = &set.patterns[pattern];
     let gap = pattern_ref.gap.resolve(rules, sizes);
-    let mut room = Room::default();
+    let mut room = RoomNeeded::default();
     for member in &set.members {
         let Some((side, inside)) = pattern_ref.place.side_for(member.end) else {
             return Err(Stopped {
@@ -537,20 +625,86 @@ pub fn room_needed(
                 reason: Reason::NoEnd,
             });
         };
-        if inside {
-            continue;
-        }
-        let depth = match side {
-            Side::Above | Side::Below => member.size.height,
-            Side::Left | Side::Right => member.size.width,
+        let (depth, breadth, start, end) = match side {
+            Side::Above | Side::Below => (
+                member.size.height,
+                member.size.width,
+                Side::Left,
+                Side::Right,
+            ),
+            Side::Left | Side::Right => (
+                member.size.width,
+                member.size.height,
+                Side::Above,
+                Side::Below,
+            ),
         };
-        room.widen(side, gap + depth);
+        let wider = (breadth - owner_across(member)).max(0.0);
+        let (past_start, past_end) = match pattern_ref.alignment {
+            Alignment::Start | Alignment::StartBounded => (0.0, wider),
+            Alignment::End => (wider, 0.0),
+            Alignment::Center | Alignment::CenterBounded => (wider / 2.0, wider / 2.0),
+        };
+        room.across.widen(start, past_start);
+        room.across.widen(end, past_end);
+        if !inside {
+            room.beyond.widen(side, gap + depth);
+        }
     }
     Ok(room)
 }
 
+/// One member's place by a pattern, worked out by the anchor equation
+/// before anything is judged.
+#[derive(Clone, Debug)]
+struct Spot<'a> {
+    owner: &'a Occupant,
+    /// The side of its anchor the label stands on.
+    side: Side,
+    /// The owner's edge the label is anchored on, where it stands inside.
+    inside: Option<Side>,
+    rect: Rect,
+}
+
+/// Works out where `member` goes by `pattern`, or why it cannot.
+fn spot<'a>(
+    record: &'a Record,
+    member: &Member,
+    pattern: &Pattern,
+    gap: f64,
+    region: Rect,
+) -> Result<Spot<'a>, Reason> {
+    let owner = record.get(&member.owner).ok_or(Reason::OwnerNotRecorded)?;
+    let (anchor, side, inside) = pattern
+        .place
+        .resolve(&owner.ink, member.end)
+        .ok_or(Reason::NoEnd)?;
+    let candidate = AnchorCandidate::new(side, pattern.alignment).gap(gap);
+    let offered = offer(region, anchor, candidate);
+    if !offered.is_some_and(|room| member.size.fits(room)) {
+        return Err(Reason::NoRoom { offered });
+    }
+    let rect = Rect::from_origin(origin(region, anchor, candidate, member.size), member.size);
+    Ok(Spot {
+        owner,
+        side,
+        inside,
+        rect,
+    })
+}
+
+/// What a set's label enters the record as.
+fn occupant(set: &LabelSet, member: &Member, rect: Rect) -> Occupant {
+    let mut label =
+        Occupant::new(member.id.clone(), set.kind, Ink::Rect(rect)).owned_by(member.owner.clone());
+    label.role = set.role.clone();
+    label
+}
+
 /// Judges every member by one pattern, each against the record and the
-/// members before it; stops at the first rejection.
+/// members before it; stops at the first rejection, in the members' order.
+/// Where the pattern shares lines, every member's place is worked out first
+/// and the lines are settled before any member is judged.
 fn judge_pattern(
     record: &Record,
     set: &LabelSet,
@@ -560,29 +714,31 @@ fn judge_pattern(
 ) -> Result<Placed, Stopped> {
     let pattern = &set.patterns[index];
     let gap = pattern.gap.resolve(record.rules(), record.sizes());
+    let mut spots: Vec<Result<Spot, Reason>> = set
+        .members
+        .iter()
+        .map(|member| spot(record, member, pattern, gap, region))
+        .collect();
+    let mut lines = Vec::new();
+    if pattern.share_line
+        && let Ok(mut ready) = spots.iter().cloned().collect::<Result<Vec<_>, _>>()
+    {
+        lines = share_lines(record, set, &mut ready, gap, level);
+        spots = ready.into_iter().map(Ok).collect();
+    }
     let mut labels: Vec<PlacedLabel> = Vec::with_capacity(set.members.len());
     let mut pending: Vec<Occupant> = Vec::with_capacity(set.members.len());
     let mut preference = Preference::InOrder;
-    for member in &set.members {
+    for (member, spot) in set.members.iter().zip(spots) {
         let stop = |reason| Stopped {
             pattern: index,
             member: member.id.clone(),
             reason,
         };
-        let Some(owner) = record.get(&member.owner) else {
-            return Err(stop(Reason::OwnerNotRecorded));
-        };
-        let Some((anchor, side, inside)) = pattern.place.resolve(&owner.ink, member.end) else {
-            return Err(stop(Reason::NoEnd));
-        };
-        let candidate = AnchorCandidate::new(side, pattern.alignment).gap(gap);
-        let offered = offer(region, anchor, candidate);
-        if !offered.is_some_and(|room| member.size.fits(room)) {
-            return Err(stop(Reason::NoRoom { offered }));
-        }
-        let rect = Rect::from_origin(origin(region, anchor, candidate, member.size), member.size);
-        if let Some(edge) = inside {
-            let within = inset_but(record, set.kind, owner, edge);
+        let spot = spot.map_err(stop)?;
+        let rect = spot.rect;
+        if let Some(edge) = spot.inside {
+            let within = inset_but(record, set.kind, spot.owner, edge);
             if !within.contains(rect) {
                 return Err(stop(Reason::NotInside {
                     label: rect,
@@ -590,9 +746,7 @@ fn judge_pattern(
                 }));
             }
         }
-        let mut label = Occupant::new(member.id.clone(), set.kind, Ink::Rect(rect))
-            .owned_by(member.owner.clone());
-        label.role = set.role.clone();
+        let label = occupant(set, member, rect);
         let judgement = record.judge_with(&label, &pending);
         if let Some(finding) = judgement.rejection_at(level) {
             return Err(stop(Reason::Rejected(finding.clone())));
@@ -610,8 +764,161 @@ fn judge_pattern(
         pattern: index,
         preference,
         labels,
+        lines,
         judged_at: record.revision(),
     })
+}
+
+/// A label's position along its side, measured away from its mark: the
+/// coordinate of its edge facing the mark, signed so that larger is
+/// farther from the mark. Labels on one line have the same position.
+fn away(side: Side, rect: Rect) -> f64 {
+    match side {
+        Side::Above => -rect.bottom(),
+        Side::Below => rect.y,
+        Side::Left => -rect.right(),
+        Side::Right => rect.x,
+    }
+}
+
+/// `rect` moved `by` away from its mark along `side`.
+fn moved_away(side: Side, rect: Rect, by: f64) -> Rect {
+    let by = match side {
+        Side::Above => Point::new(0.0, -by),
+        Side::Below => Point::new(0.0, by),
+        Side::Left => Point::new(-by, 0.0),
+        Side::Right => Point::new(by, 0.0),
+    };
+    rect.translated(by)
+}
+
+/// Settles the shared lines of a set whose every member has a place (U8),
+/// moving the members of each group that shares one. Groups are formed on
+/// each side separately, in order of position: a label joins the group
+/// before it while its position is less than the least distance from the
+/// group's first. A group whose positions already agree is left alone.
+fn share_lines(
+    record: &Record,
+    set: &LabelSet,
+    spots: &mut [Spot],
+    gap: f64,
+    level: Level,
+) -> Vec<SharedLine> {
+    let least = record
+        .rules()
+        .distances
+        .diagram
+        .least
+        .resolve(record.sizes());
+    let mut lines = Vec::new();
+    for side in [Side::Above, Side::Below, Side::Left, Side::Right] {
+        let mut order: Vec<usize> = (0..spots.len())
+            .filter(|&i| spots[i].side == side)
+            .collect();
+        order.sort_by(|&a, &b| away(side, spots[a].rect).total_cmp(&away(side, spots[b].rect)));
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for i in order {
+            let position = away(side, spots[i].rect);
+            match groups.last_mut() {
+                Some(group) if position - away(side, spots[group[0]].rect) < least => {
+                    group.push(i);
+                }
+                _ => groups.push(vec![i]),
+            }
+        }
+        for group in groups {
+            let first = away(side, spots[group[0]].rect);
+            let last = away(side, spots[group[group.len() - 1]].rect);
+            if group.len() < 2 || last <= first {
+                continue;
+            }
+            let outcome = share_line(record, set, spots, &group, side, gap, level);
+            lines.push(SharedLine {
+                members: group.iter().map(|&i| set.members[i].id.clone()).collect(),
+                side,
+                outcome,
+            });
+        }
+    }
+    lines
+}
+
+/// Puts one group on one line if it can, moving its members in `spots`.
+///
+/// Each label may stand between the least distance (for its kind and its
+/// owner's) and near from its own mark, so each allows a band of
+/// positions; the group's line must lie in every band. It is the position
+/// of the group's outermost label, brought back into the bands if it lies
+/// beyond them, so labels move away from their marks where they can. The
+/// group keeps its positions if the bands have nothing in common, if a
+/// label standing inside its owner would no longer lie inside it, or if any
+/// label on the line, judged against the record and every other label of
+/// the set, would be rejected at `level` or take a less preferred place
+/// than at its own position.
+fn share_line(
+    record: &Record,
+    set: &LabelSet,
+    spots: &mut [Spot],
+    group: &[usize],
+    side: Side,
+    gap: f64,
+    level: Level,
+) -> LineOutcome {
+    let spacing = &record.rules().distances.diagram;
+    let near = spacing.near.resolve(record.sizes());
+    let (mut low, mut high, mut outermost) = (f64::MIN, f64::MAX, f64::MIN);
+    for &i in group {
+        let position = away(side, spots[i].rect);
+        let mark = position - gap;
+        let (least, _) = spacing.least_between(set.kind, spots[i].owner.kind, record.sizes());
+        low = low.max(mark + least);
+        high = high.min(mark + near);
+        outermost = outermost.max(position);
+    }
+    if low > high {
+        return LineOutcome::Kept(KeptBecause::NoLine);
+    }
+    let line = outermost.clamp(low, high);
+    let mut trial: Vec<Rect> = spots.iter().map(|spot| spot.rect).collect();
+    for &i in group {
+        trial[i] = moved_away(side, trial[i], line - away(side, trial[i]));
+    }
+    for &i in group {
+        if let Some(edge) = spots[i].inside
+            && !inset_but(record, set.kind, spots[i].owner, edge).contains(trial[i])
+        {
+            return LineOutcome::Kept(KeptBecause::NotInside {
+                member: set.members[i].id.clone(),
+            });
+        }
+    }
+    let judge = |rects: &[Rect], i: usize| {
+        let others: Vec<Occupant> = (0..rects.len())
+            .filter(|&k| k != i)
+            .map(|k| occupant(set, &set.members[k], rects[k]))
+            .collect();
+        record.judge_with(&occupant(set, &set.members[i], rects[i]), &others)
+    };
+    let own: Vec<Rect> = spots.iter().map(|spot| spot.rect).collect();
+    for &i in group {
+        let on_line = judge(&trial, i);
+        let refused = on_line.rejection_at(level).cloned();
+        if refused.is_some() || on_line.preference() > judge(&own, i).preference() {
+            return LineOutcome::Kept(KeptBecause::Clearance {
+                member: set.members[i].id.clone(),
+                finding: refused,
+            });
+        }
+    }
+    for &i in group {
+        spots[i].rect = trial[i];
+    }
+    LineOutcome::Shared {
+        at: match side {
+            Side::Above | Side::Left => -line,
+            Side::Below | Side::Right => line,
+        },
+    }
 }
 
 /// The owner's ink less the table's least distance between a label of
@@ -1230,7 +1537,9 @@ mod tests {
         };
         let (_, set) = both_ways();
         assert_eq!(
-            room_needed(&set, 0, &rules, &sizes).unwrap(),
+            room_needed(&set, 0, &rules, &sizes, |_| 20.0)
+                .unwrap()
+                .beyond,
             Room {
                 above: RELATED + 11.0,
                 below: RELATED + 11.0,
@@ -1238,28 +1547,244 @@ mod tests {
             }
         );
         assert_eq!(
-            room_needed(&set, 1, &rules, &sizes).unwrap(),
+            room_needed(&set, 1, &rules, &sizes, |_| 20.0)
+                .unwrap()
+                .beyond,
             Room::default()
         );
         let mut beside = value_labels(2);
         beside.patterns[0] = Pattern::new("right", Attach::Whole, Side::Right, Alignment::Center)
             .gap(Gap::Unrelated);
         assert_eq!(
-            room_needed(&beside, 0, &rules, &sizes).unwrap(),
+            room_needed(&beside, 0, &rules, &sizes, |_| 20.0)
+                .unwrap()
+                .beyond,
             Room {
                 right: 0.66 * 11.0 + 14.0,
                 ..Room::default()
             }
         );
         assert_eq!(
-            room_needed(&beside, 1, &rules, &sizes).unwrap(),
+            room_needed(&beside, 1, &rules, &sizes, |_| 20.0)
+                .unwrap()
+                .beyond,
             Room::default()
         );
         let (_, mut set) = both_ways();
         set.members[0].end = None;
         assert_eq!(
-            room_needed(&set, 0, &rules, &sizes).unwrap_err().reason,
+            room_needed(&set, 0, &rules, &sizes, |_| 20.0)
+                .unwrap_err()
+                .reason,
             Reason::NoEnd
         );
+    }
+
+    // ----- labels whose positions nearly agree share one line (U8) -----
+
+    /// Value labels beyond the ends of a chart's bars, sharing lines.
+    fn sharing(count: usize) -> LabelSet {
+        let mut set = value_labels(count);
+        set.patterns.truncate(1);
+        set.patterns[0] = set.patterns[0].clone().sharing_lines();
+        set
+    }
+
+    fn feet(placed: &Placed) -> Vec<f64> {
+        placed.labels.iter().map(|l| l.rect.bottom()).collect()
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn worked_example_value_labels_on_two_bars() {
+        // The module's worked example. Her 11 px text: least 2.2, related
+        // 3.696, near 5.478.
+        let r = chart(&[100.0, 101.5]);
+        let own = judge_set(&r, &value_labels(2), PLOT, Level::Preferred).unwrap();
+        assert_eq!(
+            own.labels[0].rect,
+            Rect::new(13.0, 100.0 - RELATED - 11.0, 14.0, 11.0)
+        );
+        let f = feet(&own);
+        assert!(close(f[0], 96.304) && close(f[1], 97.804));
+        assert_eq!(own.lines, []);
+        // Sharing lines: 1.5 px apart, less than 2.2, so one group, on the
+        // outermost foot, 96.304; b1's label moves up 1.5 px and is 5.196
+        // from its bar, within near.
+        let shared = judge_set(&r, &sharing(2), PLOT, Level::Preferred).unwrap();
+        let f = feet(&shared);
+        assert!(close(f[0], 96.304) && close(f[1], 96.304));
+        assert!(close(101.5 - f[1], 5.196));
+        let [line] = &shared.lines[..] else {
+            panic!("{:?}", shared.lines)
+        };
+        assert_eq!(line.members, [Id::new("b1/value"), Id::new("b0/value")]);
+        assert_eq!(line.side, Side::Above);
+        assert!(matches!(line.outcome, LineOutcome::Shared { at } if close(at, 96.304)));
+        assert_eq!(shared.preference, Preference::InOrder);
+        // 3 px apart is not less than the least distance: each its own.
+        let r = chart(&[100.0, 103.0]);
+        let kept = judge_set(&r, &sharing(2), PLOT, Level::Preferred).unwrap();
+        let f = feet(&kept);
+        assert!(close(f[0], 96.304) && close(f[1], 99.304));
+        assert_eq!(kept.lines, []);
+        // The room the pattern needs: 3.696 + 11 above the bars, and 14 px
+        // labels on 20 px bars reach nothing across. 30 px labels reach 5
+        // past each side of their bars.
+        let rules = Rules::default();
+        let sizes = *r.sizes();
+        let room = room_needed(&sharing(2), 0, &rules, &sizes, |_| 20.0).unwrap();
+        assert!(close(room.beyond.above, 14.696));
+        assert_eq!(room.across, Room::default());
+        let mut wide = sharing(2);
+        for member in &mut wide.members {
+            member.size.width = 30.0;
+        }
+        let room = room_needed(&wide, 0, &rules, &sizes, |_| 20.0).unwrap();
+        assert_eq!(
+            room.across,
+            Room {
+                left: 5.0,
+                right: 5.0,
+                ..Room::default()
+            }
+        );
+    }
+
+    #[test]
+    fn sharing_lines_is_off_by_default() {
+        let set = value_labels(2);
+        assert!(set.patterns.iter().all(|p| !p.share_line));
+        let r = chart(&[100.0, 101.5]);
+        let placed = judge_set(&r, &set, PLOT, Level::Preferred).unwrap();
+        assert!(close(feet(&placed)[1] - feet(&placed)[0], 1.5));
+    }
+
+    #[test]
+    fn a_group_that_would_leave_a_label_too_near_its_bars_edge_keeps_its_positions() {
+        // Inside their bars' tops: a's bar is 17 px tall, b's starts 1.5 px
+        // lower. The line is b's label's top, 105.196; on it a's label
+        // would end at 116.196, 0.804 from its bar's foot at 117, nearer
+        // than the least distance, 2.2.
+        let mut r = bars(&[]);
+        for (name, rect) in [
+            ("a", Rect::new(10.0, 100.0, 20.0, 17.0)),
+            ("b", Rect::new(50.0, 101.5, 20.0, 98.5)),
+        ] {
+            r.enter(Occupant::new(
+                Id::new(name),
+                Kind::DataMark,
+                Ink::Rect(rect),
+            ));
+        }
+        let member =
+            |owner: &str| Member::new(Id::new(format!("{owner}/value")), Id::new(owner), LABEL);
+        let set = LabelSet {
+            id: Id::new("values"),
+            kind: Kind::Number,
+            role: None,
+            members: vec![member("a"), member("b")],
+            patterns: vec![
+                Pattern::new(
+                    "inside",
+                    Attach::Edge(Side::Above),
+                    Side::Below,
+                    Alignment::Center,
+                )
+                .sharing_lines(),
+            ],
+        };
+        let placed = judge_set(&r, &set, PLOT, Level::Preferred).unwrap();
+        let tops: Vec<_> = placed.labels.iter().map(|l| l.rect.y).collect();
+        assert!(close(tops[0], 103.696) && close(tops[1], 105.196));
+        assert_eq!(
+            placed.lines[0].outcome,
+            LineOutcome::Kept(KeptBecause::NotInside {
+                member: Id::new("a/value")
+            })
+        );
+    }
+
+    #[test]
+    fn a_group_that_would_lose_its_clearance_keeps_its_positions() {
+        // A note 1 px above where b1's label would stand on the shared line
+        // (its top, 85.304): there it is below the least distance from the
+        // note; at its own place, 2.5 px off, it is only squeezed, which
+        // the strong level permits.
+        let mut r = chart(&[100.0, 101.5]);
+        r.enter(Occupant::new(
+            Id::new("note"),
+            Kind::Words,
+            Ink::Rect(Rect::new(53.0, 70.0, 14.0, 85.304 - 1.0 - 70.0)),
+        ));
+        let placed = judge_set(&r, &sharing(2), PLOT, Level::Strong).unwrap();
+        assert!(close(feet(&placed)[1], 97.804));
+        assert!(matches!(
+            &placed.lines[0].outcome,
+            LineOutcome::Kept(KeptBecause::Clearance {
+                member,
+                finding: Some(Finding::BelowLeast { .. }),
+            }) if member.as_str() == "b1/value"
+        ));
+    }
+
+    #[test]
+    fn a_group_with_no_line_within_near_of_every_mark_keeps_its_positions() {
+        // With near set below the least distance no line keeps a label
+        // between the two: ownership comes before sharing a line.
+        let mut r = chart(&[100.0, 101.5]);
+        r.rules_mut().distances.diagram.near = crate::rules::Measure::em(0.1);
+        let placed = judge_set(&r, &sharing(2), PLOT, Level::Preferred).unwrap();
+        assert!(close(feet(&placed)[1], 97.804));
+        assert_eq!(
+            placed.lines[0].outcome,
+            LineOutcome::Kept(KeptBecause::NoLine)
+        );
+    }
+
+    #[test]
+    fn labels_reach_past_their_owners_across_by_their_alignment() {
+        let rules = Rules::default();
+        let sizes = Sizes {
+            label_size: 11.0,
+            word_space: 3.7,
+            line_width: 1.0,
+        };
+        let mut set = value_labels(1);
+        set.members[0].size = Size::new(30.0, 11.0);
+        let across = |set: &LabelSet, pattern, owner: f64| {
+            room_needed(set, pattern, &rules, &sizes, |_| owner)
+                .unwrap()
+                .across
+        };
+        // Centred, on a 20 px bar: 5 past each side, also when inside.
+        let both = Room {
+            left: 5.0,
+            right: 5.0,
+            ..Room::default()
+        };
+        assert_eq!(across(&set, 0, 20.0), both);
+        assert_eq!(across(&set, 1, 20.0), both);
+        // Aligned with the bar's start, it reaches 10 past the end; with
+        // its end, 10 past the start.
+        set.patterns[0].alignment = Alignment::Start;
+        assert_eq!(across(&set, 0, 20.0).right, 10.0);
+        set.patterns[0].alignment = Alignment::End;
+        assert_eq!(across(&set, 0, 20.0).left, 10.0);
+        // Beside a bar 8 px tall, an 11 px label reaches 1.5 above and below.
+        set.patterns[0] = Pattern::new("right", Attach::Whole, Side::Right, Alignment::Center);
+        assert_eq!(
+            across(&set, 0, 8.0),
+            Room {
+                above: 1.5,
+                below: 1.5,
+                ..Room::default()
+            }
+        );
+        // On a 40 px bar it reaches nothing.
+        assert_eq!(across(&set, 0, 40.0), Room::default());
     }
 }
