@@ -267,7 +267,7 @@ fn compact_with_tip<'a, Message: Clone + 'static>(
     let label = hovered
         .map(|index| model.items[index].label.clone())
         .unwrap_or_default();
-    crate::tooltip_unless(
+    crate::native_tooltip(
         native_bar(
             if compact { &model.compact } else { &model.full },
             if compact {

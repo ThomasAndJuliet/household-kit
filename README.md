@@ -16,9 +16,10 @@ Apps depend on this repository's git URL for every crate, as in the next section
 |---|---|
 | `household-settings` | The shared settings (rule 33). There is one `shared.toml` and one file per app, looked up app file → shared → default. Writes take a lock, are atomic and keep comments. It also has the folder watch, moving a file, migration with seeding, and Open making a missing shared file. |
 | `household-tones` | The tone maths: OKLab/OKLCH, the 0.94 surface cap, coloured text, the muted accent and what goes on it, and a held surface's hover/selected/pressed. It has Juliet's seven tones and arrangements A/B (rule 25d), APCA-W3 0.0.98G-4g contrast, and APCA's font lookup table (`required_lc`, `passes`). |
-| `household-highlight` | Code colours by token class (rule 25b): scope → class, and class → colour role. The parser stays in the app. |
+| `household-highlight` | Code colours by token class (rule 25b): scope → class, and class → colour role. The parser is `household-content`'s `highlight`. |
 | `household-type` | How the rendered views set prose: the **Paper view** and the **Text view**, as the terminal's conversations set them. Fonts, sizes, line spacing, block spacing, indents, measure, code, maths and tables, as plain data, and a sample with where the terminal sets each line, for the apps' drift tests. |
 | `household-wait` | Waiting without freezing (rules 40–43). It covers tiers, deadlines, stalls, cancellation, keyed waits, debounce, coalescing, ordered queues, time slices and timings. |
+| `household-content` | The content model (Stage 2): Markdown with maths as source ranges. Maths recognition with its map back to the source, Cerea's analysis kept up to date edit by edit, the shown text of each leaf, document snapshots (streaming is an append), inline content for titles, anchors and annotations, RaTeX maths as SVG with the formula cache's rules, and syntect highlighting tokens. |
 
 ## The base crates do not depend on libcosmic or iced
 
@@ -44,7 +45,7 @@ Each app keeps a thin layer in its `ui` module that turns crate results into its
 - **Colours.** `fn c(s: Srgb) -> Color { Color::from_rgb(s.r, s.g, s.b) }` and the reverse.
 - **Tones.** `with_surfaces(theme)` stays in the app. It walks the theme's saved JSON as the copies do now, and for each container component calls `household_tones::held_component(component, washes, !is_dark)`, writing back what it returns. The muted accent is `muted_accent(accent, dark)` and `on_muted(muted)`. Surfaces and text come from `Arrangement::tone(Surface::Card, mode)` and `Role::tone`.
 - **Contrast in CI.** Each app's theme tests judge every text style (its colour, the colour behind it, its size in px and its weight) with `household_tones::passes_for(fg, bg, size, weight, TextUse::…)`. There is no flat threshold: the level comes from APCA's table by size and weight.
-- **Highlight.** The app keeps syntect (or its own parser). For each token it passes the scope names, outermost first, to `household_highlight::class_of`. It then turns `colour(class)` into a colour: `Fixed { light, dark }` by `is_dark(plate)`, and `Muted`, `LinkStrong`, `Added` and `Removed` from its own typography. `italic(class)` sets comments in italic.
+- **Highlight.** `household_content::highlight::lines(code, lang)` gives each line's tokens with their classes (an app with its own parser passes each token's scope names, outermost first, to `household_highlight::class_of`). The app then turns `colour(class)` into a colour: `Fixed { light, dark }` by `is_dark(plate)`, and `Muted`, `LinkStrong`, `Added` and `Removed` from its own typography. `italic(class)` sets comments in italic.
 - **Settings.** The app calls the `Store` functions from a background task, never from `update` or `view` (they block). It turns `Store::watch`'s callback into a message.
 - **Waits.** `let (id, events) = waits.start(spec, work);` then `Task::stream(events.map(Message::Wait))`, and in `update`, `waits.apply(event)`. The view reads `waits.get(id)` or `waits.showing()`. For `Tier::Spinner` it draws a 16 px spinner and the label. For `Tier::Bar` it draws the label, Cancel (the app's own Secondary button, if `cancellable`), a determinate bar from `fraction()` or a moving one, and `caption()` beneath. For `Tier::Person` it draws the label and Cancel. `Debounce::poke` and `Coalesce::push` give futures to run as `Task::future`.
 
@@ -68,7 +69,22 @@ This is household-ui's `reference/household_settings.rs` at 514be8f (the 15 Oct 
 
 ### household-highlight
 
-The table is the same in household-ui, Cerea's prose-render and cosmic-term's thread view. The crate takes cosmic-term's one extra scope (`punctuation.definition.comment` → Comment). The language aliases, `#!` clues and file-name rules differ between the copies (cosmic-term's are the richest). They need syntect, so they stay in the apps for now.
+The table is the same in household-ui, Cerea's prose-render and cosmic-term's thread view. The crate takes cosmic-term's one extra scope (`punctuation.definition.comment` → Comment). The language aliases, `#!` clues and file-name rules differ between the copies (cosmic-term's are the richest). Terminal's, with syntect, are `household-content`'s `highlight`.
+
+### household-content
+
+The source text is the document; everything else is derived from it and addressed into it by byte range. The design is the Stage 2 study (`content-boxes.md`, 18 Nov); this is its first step, M1. The boxes that shape and draw content are household-widgets' (M2, M3), not here.
+
+- `maths`: Terminal PR 145's recognition (`\(…\)`, `\[…\]`, `$$…$$` and 26 bare environments including `cases`; a display formula's lines are joined so that Markdown never reads them, with a marker absent from the text for each line break). Every rewrite is recorded, so every range maps back to the bytes written, and the quotation marks and indent of a joined line are prefixes. It also says which lines start inside something (a fence, a formula, the lines a formula's opening mark looked through), which the incremental analysis needs.
+- `syntax`, `blocks`, `display`: Cerea's analysis (leaves, containers, inline elements), its re-parse a block at a time with the differential test, and each leaf's shown text with source offsets mapped to shown ones and back. Moved from Cerea, which uses them from here. A display formula on lines of its own is a leaf of its own.
+- `Dialect`: `Document` (Cerea: front matter, a line break in a paragraph a space, `<u>`, `<mark>`, `==…==`) and `Chat` (Terminal: line breaks kept, GitHub's blockquote tags, no front matter).
+- `document`: `Source`, `SourceRange`, `Edit` and `DocumentSnapshot` (parse, edit, append, blocks).
+- `inline`: `InlineContent` for titles and labels: the body's inline rules, block syntax as written (D2).
+- `anchor`: `Anchor` (with affinity) and `Annotations` (author and version ids) that follow edits.
+- `math`: RaTeX (the household's one pin) to SVG with its size and baseline, and `FormulaCache<T>`, the byte-bounded cache holding whatever the app makes of a formula (Terminal keeps an iced handle in it).
+- `highlight`: Terminal's highlighter (aliases, file names, first-line clues, the token cache and limits), classes from `household-highlight`.
+
+The tests include the differential test in both dialects (`CEREA_FUZZ=<n>` runs more scripts), an append test (streaming), and PR 145's formula tests on the analysis.
 
 ### household-wait
 

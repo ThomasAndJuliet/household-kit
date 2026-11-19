@@ -1,0 +1,1123 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Live source geometry is collected during native overlay traversal. Pure
+//! staged-engine measurements only invoke layout, so disposable probes never
+//! publish geometry into this registry.
+
+use cosmic::iced::advanced::widget::{Id, Operation, Tree, tree};
+use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
+use cosmic::iced::{Event, Length, Rectangle, Size, Vector, keyboard};
+use cosmic::{Element, Renderer, Theme};
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use crate::window::Owner;
+
+/// Pointer and keyboard targeting share this discovery delay.
+pub const INFORMATION_DELAY: Duration = Duration::from_millis(500);
+
+std::thread_local! {
+    static FROZEN: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The time the information delay counts from: the wall clock, unless this
+/// thread holds a [`FrozenClock`]
+fn now() -> Instant {
+    FROZEN
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(Instant::now)
+}
+
+/// The time a redraw's own `at` counts as: itself, or on a stopped clock only
+/// how far ahead of now it is, since a stopped clock has no "now" to compare
+/// a past time with
+fn redraw_time(at: Instant) -> Instant {
+    match FROZEN.with(std::cell::Cell::get) {
+        Some(frozen) => frozen + at.saturating_duration_since(Instant::now()),
+        None => at,
+    }
+}
+
+/// A test thread's information delay counted on a stopped clock, for as
+/// long as this is held. Events that carry no time of their own (moves,
+/// presses, keys) then never let the delay run out, however slow the machine
+/// is; only a redraw dated ahead (`RedrawRequested(now + delay)`) does, as a test says.
+/// Without it a loaded test thread passes 500 ms between a pointer resting
+/// on a control and the next key, and a card the pointer opened takes that
+/// key (Escape) from what the test is doing.
+#[must_use = "the clock runs again when this is dropped"]
+pub struct FrozenClock(Option<Instant>);
+
+impl FrozenClock {
+    pub fn new() -> Self {
+        Self(FROZEN.with(|frozen| frozen.replace(Some(Instant::now()))))
+    }
+}
+
+impl Default for FrozenClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for FrozenClock {
+    fn drop(&mut self) {
+        FROZEN.with(|frozen| frozen.set(self.0));
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Anchors(Rc<RefCell<Registry>>);
+
+#[derive(Clone)]
+struct Registry {
+    visible: HashMap<SourceKey, Source>,
+    present: HashSet<SourceKey>,
+    information: HashMap<SourceKey, crate::layout::SourceReport>,
+    open: HashSet<SourceKey>,
+    surfaces: Vec<Rectangle>,
+    hovered: Option<Id>,
+    pointer_owner: bool,
+    deadline: Option<Instant>,
+    opened: bool,
+    suppressed: bool,
+    active: bool,
+    help: HashSet<SourceKey>,
+    focus_sources: HashMap<SourceKey, Id>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            visible: HashMap::new(),
+            present: HashSet::new(),
+            information: HashMap::new(),
+            open: HashSet::new(),
+            surfaces: Vec::new(),
+            hovered: None,
+            pointer_owner: false,
+            deadline: None,
+            opened: false,
+            suppressed: false,
+            active: true,
+            help: HashSet::new(),
+            focus_sources: HashMap::new(),
+        }
+    }
+}
+
+// The pinned native Custom ID compares by name but hashes its allocation
+// number. Keep that upstream inconsistency out of registry hash collections;
+// focus operations and widget events still receive the original native IDs.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum SourceKey {
+    Named(Cow<'static, str>),
+    Unique(u64),
+    Set(Vec<SourceKey>),
+}
+impl SourceKey {
+    fn of(id: &Id) -> Self {
+        Self::internal(&id.0)
+    }
+    fn internal(id: &cosmic::iced::core::id::Internal) -> Self {
+        use cosmic::iced::core::id::Internal;
+        match id {
+            Internal::Custom(_, name) => Self::Named(name.clone()),
+            Internal::Unique(number) => Self::Unique(*number),
+            Internal::Set(ids) => Self::Set(ids.iter().map(Self::internal).collect()),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Source {
+    bounds: Rectangle,
+    /// The source's whole bounds before clipping, for a region within it
+    full: Rectangle,
+    trigger: bool,
+    /// A right press on it opens a menu of its own (a context menu)
+    context: bool,
+    /// What the source draws within `bounds`, when its traversal says so
+    content: Option<Rectangle>,
+}
+
+/// The union of the text a source's native traversal reports as drawn.
+/// Fill-width text reports its whole box, so it is as wide as it is told:
+/// narrow content must be laid out narrow to be found narrow.
+#[derive(Default)]
+struct ContentProbe {
+    union: Option<Rectangle>,
+}
+impl Operation for ContentProbe {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self);
+    }
+    fn text(&mut self, _: Option<&Id>, bounds: Rectangle, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        self.add(bounds);
+    }
+    fn custom(&mut self, _: Option<&Id>, bounds: Rectangle, state: &mut dyn std::any::Any) {
+        if state.is::<DrawnMark>() {
+            self.add(bounds);
+        }
+    }
+}
+impl ContentProbe {
+    fn add(&mut self, bounds: Rectangle) {
+        if bounds.width <= 0.0 || bounds.height <= 0.0 {
+            return;
+        }
+        self.union = Some(match self.union {
+            Some(union) => union.union(&bounds),
+            None => bounds,
+        });
+    }
+}
+
+/// What [`drawn`] reports to a source's traversal
+struct DrawnMark;
+
+/// `content` as drawn content of the source it is in: icons and pictures
+/// report nothing to a traversal, so an information card would attach to
+/// the text beside them alone. Wrap a source's icon with its text, as wide
+/// as they are drawn.
+pub fn drawn<'a, Message: 'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    Element::new(Drawn {
+        content: content.into(),
+    })
+}
+
+struct Drawn<'a, Message> {
+    content: Element<'a, Message>,
+}
+impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Drawn<'a, Message> {
+    forward_widget!(Message, Theme, Renderer; children, diff, size, size_hint, layout, update, draw, mouse_interaction, overlay, drag_destinations);
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        operation.custom(None, layout.bounds(), &mut DrawnMark);
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+}
+
+impl Anchors {
+    /// Native trial traversals discover clipped descendant sources without
+    /// publishing rejected geometry, source reports, or hover ownership.
+    pub(crate) fn snapshot(&self) -> RegistrySnapshot {
+        RegistrySnapshot(self.0.borrow().clone())
+    }
+    pub(crate) fn restore(&self, snapshot: &RegistrySnapshot) {
+        *self.0.borrow_mut() = snapshot.0.clone();
+    }
+    pub(crate) fn transaction(&self, base: &RegistrySnapshot) -> RegistryTransaction {
+        let saved = self.0.borrow().clone();
+        self.restore(base);
+        RegistryTransaction {
+            anchors: self.clone(),
+            saved: Some(saved),
+        }
+    }
+    /// Register arbitrary content as a source for menus or informational hover.
+    ///
+    /// With an explicit registry, for the host tests; windows use
+    /// [`crate::window::anchor`].
+    #[cfg(test)]
+    pub(crate) fn anchor<'a, Message: 'a>(
+        &self,
+        id: impl Into<Id>,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        self.wrap(id.into(), content.into(), false)
+    }
+    /// A menu-opening source. Outside presses over other visible triggers may
+    /// reach their native children, allowing a single press to switch menus.
+    /// Give a focusable trigger child the same native ID for focus restoration.
+    ///
+    /// With an explicit registry, for the host tests; windows use
+    /// [`crate::window::trigger`].
+    #[cfg(test)]
+    pub(crate) fn trigger<'a, Message: 'a>(
+        &self,
+        id: impl Into<Id>,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        self.wrap(id.into(), content.into(), true)
+    }
+    #[cfg(test)]
+    fn wrap<'a, Message: 'a>(
+        &self,
+        id: Id,
+        content: Element<'a, Message>,
+        trigger: bool,
+    ) -> Element<'a, Message> {
+        source(Owner::Anchors(self.clone()), id, content, trigger, None)
+    }
+    /// Register a source and collect its current, verified layout-box report.
+    /// The revision must identify the prepared content used by the caller.
+    /// Wrap this in `trigger` too when it opens a menu.
+    ///
+    /// With an explicit registry, for the host tests; windows use
+    /// [`crate::window::reported_anchor`].
+    #[cfg(test)]
+    pub(crate) fn reported_anchor<'a, Message: 'a>(
+        &self,
+        id: impl Into<Id>,
+        source: crate::layout::SourceId,
+        revision: u64,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        self::source(
+            Owner::Anchors(self.clone()),
+            id.into(),
+            content.into(),
+            false,
+            Some((source, revision)),
+        )
+    }
+    /// Information loss reported by the currently accepted source layout.
+    /// Absence is not a claim that all information is visible.
+    pub fn information(&self, id: &Id) -> Option<crate::layout::SourceReport> {
+        self.0.borrow().information.get(&SourceKey::of(id)).cloned()
+    }
+    /// The source exists in the native traversal, even when clipped out of view.
+    pub(crate) fn present(&self, id: &Id) -> bool {
+        self.0.borrow().present.contains(&SourceKey::of(id))
+    }
+    /// The positive-area intersection of the source and its native clip viewport.
+    pub fn visible(&self, id: &Id) -> Option<Rectangle> {
+        self.0
+            .borrow()
+            .visible
+            .get(&SourceKey::of(id))
+            .map(|source| source.bounds)
+    }
+    /// `region`, given relative to the source's top-left corner, where it
+    /// is visible: a context menu's pointer or focused control. None when
+    /// that part of the source is clipped out of view.
+    pub fn visible_region(&self, id: &Id, region: Rectangle) -> Option<Rectangle> {
+        let registry = self.0.borrow();
+        let source = registry.visible.get(&SourceKey::of(id))?;
+        let region = Rectangle {
+            x: source.full.x + region.x,
+            y: source.full.y + region.y,
+            ..region
+        };
+        // A point region has no area of its own: it must lie in view
+        let inside = |r: &Rectangle| {
+            r.x >= source.bounds.x
+                && r.y >= source.bounds.y
+                && r.x <= source.bounds.x + source.bounds.width
+                && r.y <= source.bounds.y + source.bounds.height
+        };
+        if region.width <= 1.0 && region.height <= 1.0 {
+            return inside(&region).then_some(region);
+        }
+        region
+            .intersection(&source.bounds)
+            .filter(|visible| visible.width > 0.0 && visible.height > 0.0)
+    }
+    /// Where an information card attaches: the visible content the source
+    /// draws (its text), clipped to the source's visible region, or that
+    /// region itself when the source reports no content. The hover area is
+    /// always the whole source (Juliet, 18 Nov: "tying it to the actual
+    /// text shown would be more intuitive").
+    pub fn information_anchor(&self, id: &Id) -> Option<Rectangle> {
+        self.0
+            .borrow()
+            .visible
+            .get(&SourceKey::of(id))
+            .map(|source| source.content.unwrap_or(source.bounds))
+    }
+    /// State comes from the actual host chain, rather than per-tooltip booleans.
+    pub fn is_open(&self, id: &Id) -> bool {
+        self.0.borrow().open.contains(&SourceKey::of(id))
+    }
+    /// Existing committed panel rectangles, in paint order, for hover avoidance.
+    pub fn surfaces(&self) -> Vec<Rectangle> {
+        self.0.borrow().surfaces.clone()
+    }
+    pub fn hovered(&self) -> Option<Id> {
+        let registry = self.0.borrow();
+        registry
+            .hovered
+            .as_ref()
+            .filter(|id| {
+                let key = SourceKey::of(id);
+                registry.visible.contains_key(&key) && !registry.open.contains(&key)
+            })
+            .cloned()
+    }
+    fn target_at(&self, id: &Id, pointer: bool, now: Instant) -> bool {
+        let mut registry = self.0.borrow_mut();
+        let source = registry
+            .focus_sources
+            .get(&SourceKey::of(id))
+            .cloned()
+            .unwrap_or_else(|| id.clone());
+        let key = SourceKey::of(&source);
+        if !registry.active
+            || registry.open.contains(&key)
+            || (pointer && !registry.visible.contains_key(&key))
+            || (!pointer && !registry.present.contains(&key))
+            || !registry.help.contains(&key)
+        {
+            if registry.hovered.as_ref() == Some(&source) {
+                Self::clear_target(&mut registry);
+            }
+            return false;
+        }
+        if registry.hovered.as_ref() != Some(&source) || registry.pointer_owner != pointer {
+            registry.hovered = Some(source);
+            registry.pointer_owner = pointer;
+            registry.deadline = Some(now + INFORMATION_DELAY);
+            registry.opened = false;
+            registry.suppressed = false;
+        }
+        true
+    }
+    /// A deliberate navigation action targets information without moving or
+    /// activating the control. Ordinary typing must not call this operation.
+    pub fn keyboard_target(&self, id: &Id) {
+        if !self.target_at(id, false, now()) {
+            Self::clear_target(&mut self.0.borrow_mut());
+        }
+    }
+    pub(crate) fn claim_hover(&self, id: &Id) -> bool {
+        self.target_at(id, true, now())
+    }
+    fn clear_target(registry: &mut Registry) {
+        registry.hovered = None;
+        registry.deadline = None;
+        registry.opened = false;
+        registry.suppressed = false;
+    }
+    pub(crate) fn release_hover(&self, id: &Id) {
+        let mut registry = self.0.borrow_mut();
+        if registry.pointer_owner && registry.hovered.as_ref() == Some(id) {
+            Self::clear_target(&mut registry);
+        }
+    }
+    pub(crate) fn leave_keyboard_target(&self) {
+        let mut registry = self.0.borrow_mut();
+        if !registry.pointer_owner {
+            Self::clear_target(&mut registry);
+        }
+    }
+    /// Run after the accepted native traversal, never during a trial query.
+    pub(crate) fn prune_information(&self) {
+        let mut registry = self.0.borrow_mut();
+        let invalid = registry.hovered.as_ref().is_some_and(|id| {
+            let key = SourceKey::of(id);
+            !registry.visible.contains_key(&key)
+                || !registry.help.contains(&key)
+                || registry.open.contains(&key)
+        });
+        if invalid {
+            Self::clear_target(&mut registry);
+        }
+    }
+    pub(crate) fn hover_is_owner(&self, id: &Id) -> bool {
+        self.hovered().as_ref() == Some(id)
+    }
+    /// The source's information is shown: it owns the hover and its delay has passed.
+    pub fn information_visible(&self, id: &Id) -> bool {
+        self.hover_is_owner(id) && self.0.borrow().opened
+    }
+    pub(crate) fn register_information(&self, source: &Id, focus: impl IntoIterator<Item = Id>) {
+        let mut registry = self.0.borrow_mut();
+        registry.help.insert(SourceKey::of(source));
+        for id in focus {
+            registry
+                .focus_sources
+                .insert(SourceKey::of(&id), source.clone());
+        }
+    }
+    /// Suppress automatic reopening for this unchanged target. Alt+H or a new
+    /// deliberate targeting action can reopen it. Returns whether a card was open.
+    pub fn dismiss_information(&self) -> bool {
+        let mut registry = self.0.borrow_mut();
+        let opened = registry.opened;
+        registry.opened = false;
+        registry.deadline = None;
+        registry.suppressed = true;
+        opened
+    }
+    /// Escape dismisses a card the keyboard owns before any control sees the
+    /// key, even an editor: the keyboard asked for it. A card the pointer
+    /// owns waits for the controls (see `Host::update`).
+    pub(crate) fn dismiss_keyboard_card<Message>(
+        &self,
+        event: &Event,
+        shell: &mut Shell<'_, Message>,
+    ) -> bool {
+        let keyboard_card = self.hovered().is_some() && {
+            let registry = self.0.borrow();
+            registry.opened && !registry.pointer_owner
+        };
+        if keyboard_card && is_escape(event) {
+            self.dismiss_information();
+            shell.invalidate_layout();
+            shell.request_redraw();
+            shell.capture_event();
+            return true;
+        }
+        false
+    }
+    /// Cancel ownership and every pending opening when the native window leaves
+    /// focus. A later activation starts with no information target.
+    pub fn deactivate(&self) {
+        let mut registry = self.0.borrow_mut();
+        registry.active = false;
+        Self::clear_target(&mut registry);
+    }
+    pub(crate) fn activate(&self) {
+        self.0.borrow_mut().active = true;
+    }
+    pub(crate) fn advance(&self, now: Instant) -> (bool, Option<Instant>) {
+        let mut registry = self.0.borrow_mut();
+        if !registry.active {
+            return (false, None);
+        }
+        if registry.deadline.is_some_and(|at| now >= at) {
+            registry.deadline = None;
+            registry.opened = registry.hovered.as_ref().is_some_and(|id| {
+                let key = SourceKey::of(id);
+                registry.visible.contains_key(&key) && !registry.open.contains(&key)
+            });
+            return (registry.opened, None);
+        }
+        (false, registry.deadline)
+    }
+    pub(crate) fn update_timer<Message>(&self, event: &Event, shell: &mut Shell<'_, Message>) {
+        let now = match event {
+            Event::Window(cosmic::iced::window::Event::RedrawRequested(at)) => redraw_time(*at),
+            _ => now(),
+        };
+        let (changed, deadline) = self.advance(now);
+        if changed {
+            shell.invalidate_layout();
+            shell.request_redraw();
+        }
+        if let Some(at) = deadline {
+            shell.request_redraw_at(at);
+        }
+    }
+    /// Opens the information of the focused control's source at once; false
+    /// when the control has none.
+    fn open_information_for(&self, id: &Id) -> bool {
+        let source = {
+            let registry = self.0.borrow();
+            registry
+                .focus_sources
+                .get(&SourceKey::of(id))
+                .cloned()
+                .or_else(|| {
+                    registry
+                        .help
+                        .contains(&SourceKey::of(id))
+                        .then(|| id.clone())
+                })
+        };
+        let Some(source) = source else {
+            return false;
+        };
+        self.target_at(&source, false, now());
+        let mut registry = self.0.borrow_mut();
+        if registry.hovered.as_ref() == Some(&source) && registry.active {
+            registry.deadline = None;
+            registry.opened = true;
+            registry.suppressed = false;
+            return true;
+        }
+        false
+    }
+    pub(crate) fn information_key<Message>(
+        &self,
+        event: &Event,
+        focused: Option<&Id>,
+        shell: &mut Shell<'_, Message>,
+    ) -> bool {
+        let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else {
+            return false;
+        };
+        let information = modifiers.alt()
+            && !modifiers.control()
+            && !modifiers.logo()
+            && matches!(key, keyboard::Key::Character(value) if value.eq_ignore_ascii_case("h"));
+        if information {
+            // A shortcut must not swallow a key it does not use: only an
+            // Alt+H that opened information is handled
+            let opened = focused.is_some_and(|id| self.open_information_for(id));
+            if opened {
+                shell.invalidate_layout();
+                shell.request_redraw();
+                shell.capture_event();
+            }
+            return opened;
+        }
+        if is_escape(event) && self.dismiss_information() {
+            shell.invalidate_layout();
+            shell.request_redraw();
+            shell.capture_event();
+            return true;
+        }
+        false
+    }
+    pub(crate) fn begin(&self, open: impl IntoIterator<Item = Id>) {
+        let mut registry = self.0.borrow_mut();
+        registry.visible.clear();
+        registry.present.clear();
+        registry.information.clear();
+        registry.help.clear();
+        registry.focus_sources.clear();
+        registry.open = open.into_iter().map(|id| SourceKey::of(&id)).collect();
+    }
+    pub(crate) fn set_surfaces(&self, surfaces: Vec<Rectangle>) {
+        self.0.borrow_mut().surfaces = surfaces;
+    }
+    pub(crate) fn focused_trigger(&self, id: &Id) -> bool {
+        let registry = self.0.borrow();
+        let source = registry.focus_sources.get(&SourceKey::of(id)).unwrap_or(id);
+        registry
+            .visible
+            .get(&SourceKey::of(source))
+            .is_some_and(|source| source.trigger)
+    }
+    /// Whether a press at `point` is on another root's trigger, so that it
+    /// switches roots in one press. A right press (`context`) also counts a
+    /// context menu's source, the open root's own included: right-clicking
+    /// again opens the menu where the pointer is now.
+    pub(crate) fn trigger_at(
+        &self,
+        point: cosmic::iced::Point,
+        excluded: Option<&Id>,
+        context: bool,
+    ) -> bool {
+        let registry = self.0.borrow();
+        if context
+            && registry
+                .visible
+                .values()
+                .any(|source| source.context && source.bounds.contains(point))
+        {
+            return true;
+        }
+        let excluded = excluded.map(SourceKey::of);
+        // Closing the already-open root consumes its press. Otherwise its
+        // native pressed state could survive the close rebuild and reopen the
+        // menu on release using the new view's opening callback.
+        if excluded
+            .as_ref()
+            .and_then(|id| registry.visible.get(id))
+            .is_some_and(|source| source.bounds.contains(point))
+        {
+            return false;
+        }
+        registry.visible.iter().any(|(id, source)| {
+            Some(id) != excluded.as_ref() && source.trigger && source.bounds.contains(point)
+        })
+    }
+    #[cfg(test)]
+    fn record(&self, id: Id, bounds: Rectangle, viewport: Rectangle, trigger: bool) {
+        self.record_content(id, bounds, viewport, (trigger, false), None);
+    }
+    fn record_content(
+        &self,
+        id: Id,
+        bounds: Rectangle,
+        viewport: Rectangle,
+        (trigger, context): (bool, bool),
+        content: Option<Rectangle>,
+    ) {
+        self.0.borrow_mut().present.insert(SourceKey::of(&id));
+        let full_bounds = bounds;
+        if let Some(bounds) = bounds
+            .intersection(&viewport)
+            .filter(|bounds| bounds.width > 0.0 && bounds.height > 0.0)
+        {
+            let mut registry = self.0.borrow_mut();
+            let key = SourceKey::of(&id);
+            let earlier = registry.visible.get(&key);
+            let trigger = trigger || earlier.is_some_and(|source| source.trigger);
+            let context = context || earlier.is_some_and(|source| source.context);
+            let full = full_bounds;
+            // A source that draws no information of its own (a menu's)
+            // keeps what another source of the same id found
+            let content = content
+                .and_then(|content| content.intersection(&bounds))
+                .filter(|content| content.width > 0.0 && content.height > 0.0)
+                .or(earlier.and_then(|source| source.content));
+            registry.visible.insert(
+                key,
+                Source {
+                    bounds,
+                    full,
+                    trigger,
+                    context,
+                    content,
+                },
+            );
+        }
+    }
+}
+
+pub(crate) fn is_escape(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(keyboard::key::Named::Escape),
+            ..
+        })
+    )
+}
+
+#[derive(Clone)]
+pub(crate) struct RegistrySnapshot(Registry);
+
+pub(crate) struct RegistryTransaction {
+    anchors: Anchors,
+    saved: Option<Registry>,
+}
+impl Drop for RegistryTransaction {
+    fn drop(&mut self) {
+        if let Some(saved) = self.saved.take() {
+            *self.anchors.0.borrow_mut() = saved;
+        }
+    }
+}
+
+/// A source's identity as its widgets read it: the declared id, or for a
+/// legacy source the one its tree retains ([`retained_source`]).
+#[derive(Clone)]
+pub(crate) struct Ident(Rc<RefCell<Id>>);
+
+impl Ident {
+    pub(crate) fn new(id: Id) -> Self {
+        Self(Rc::new(RefCell::new(id)))
+    }
+    pub(crate) fn get(&self) -> Id {
+        self.0.borrow().clone()
+    }
+    pub(crate) fn set(&self, id: Id) {
+        *self.0.borrow_mut() = id;
+    }
+}
+
+/// Register `content` as source `id` of the registry `owner` resolves to.
+pub(crate) fn source<'a, Message: 'a>(
+    owner: Owner,
+    id: Id,
+    content: Element<'a, Message>,
+    trigger: bool,
+    information: Option<(crate::layout::SourceId, u64)>,
+) -> Element<'a, Message> {
+    Element::new(SourceWidget {
+        id: Ident::new(id),
+        retained: None,
+        at: None,
+        content,
+        owner,
+        trigger,
+        context: false,
+        probe: true,
+        information,
+    })
+}
+
+/// A source whose identity `id` its declaring widget sets before each
+/// traversal (a declared menu's), a click `trigger` or a `context` menu's.
+pub(crate) fn declared_source<'a, Message: 'a>(
+    id: Ident,
+    content: Element<'a, Message>,
+    trigger: bool,
+    context: bool,
+) -> Element<'a, Message> {
+    Element::new(SourceWidget {
+        id,
+        retained: None,
+        at: None,
+        content,
+        owner: Owner::Window,
+        trigger,
+        context,
+        probe: false,
+        information: None,
+    })
+}
+
+/// A source whose identity is retained by its place in the widget tree: it
+/// keeps the one it first had while the tree keeps the widget, and takes a
+/// new one when `content_key` changes, so another occupant of the place is
+/// a new source with its own delay. `id` is what the declaring widgets read.
+pub(crate) fn retained_source<'a, Message: 'a>(
+    owner: Owner,
+    id: Ident,
+    content_key: u64,
+    at: Option<f32>,
+    content: Element<'a, Message>,
+) -> Element<'a, Message> {
+    Element::new(SourceWidget {
+        id,
+        retained: Some(content_key),
+        at,
+        content,
+        owner,
+        trigger: false,
+        context: false,
+        probe: true,
+        information: None,
+    })
+}
+
+/// What a retained source's tree keeps.
+struct Retained {
+    id: Id,
+    content_key: u64,
+}
+
+struct SourceWidget<'a, Message> {
+    id: Ident,
+    retained: Option<u64>,
+    /// The source is the point this far from its content's left edge
+    at: Option<f32>,
+    content: Element<'a, Message>,
+    owner: Owner,
+    trigger: bool,
+    context: bool,
+    /// Look for the content it draws, for information anchored to it; a
+    /// declared menu's source (a whole conversation, say) has none of its
+    /// own, and is not walked for it on every traversal
+    probe: bool,
+    information: Option<(crate::layout::SourceId, u64)>,
+}
+impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for SourceWidget<'a, Message> {
+    forward_widget!(Message, Theme, Renderer; children, size, layout, draw, update, operate, mouse_interaction, drag_destinations);
+    fn tag(&self) -> tree::Tag {
+        match self.retained {
+            Some(_) => tree::Tag::of::<Retained>(),
+            None => tree::Tag::stateless(),
+        }
+    }
+    fn state(&self) -> tree::State {
+        match self.retained {
+            Some(content_key) => tree::State::new(Retained {
+                id: self.id.get(),
+                content_key,
+            }),
+            None => tree::State::None,
+        }
+    }
+    fn diff(&mut self, tree: &mut Tree) {
+        if let Some(content_key) = self.retained {
+            let kept = tree.state.downcast_mut::<Retained>();
+            if kept.content_key != content_key {
+                *kept = Retained {
+                    id: Id::unique(),
+                    content_key,
+                };
+            }
+            *self.id.0.borrow_mut() = kept.id.clone();
+        }
+        tree.diff_children(std::slice::from_mut(&mut self.content));
+    }
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        let mut bounds = Rectangle {
+            x: layout.bounds().x + translation.x,
+            y: layout.bounds().y + translation.y,
+            ..layout.bounds()
+        };
+        if let Some(at) = self.at {
+            bounds = Rectangle {
+                x: bounds.x + at - 0.5,
+                width: 1.0,
+                ..bounds
+            };
+        }
+        let Some(anchors) = self.owner.resolve() else {
+            return self.content.as_widget_mut().overlay(
+                &mut tree.children[0],
+                layout,
+                renderer,
+                viewport,
+                translation,
+            );
+        };
+        let id = self.id.get();
+        // The content drawn inside the source, for information cards; a
+        // point source (`at`) is already exact
+        let content = (self.at.is_none() && self.probe).then(|| {
+            let mut probe = ContentProbe::default();
+            self.content.as_widget_mut().operate(
+                &mut tree.children[0],
+                layout,
+                renderer,
+                &mut probe,
+            );
+            probe.union.map(|content| Rectangle {
+                x: content.x + translation.x,
+                y: content.y + translation.y,
+                ..content
+            })
+        });
+        anchors.record_content(
+            id.clone(),
+            bounds,
+            *viewport,
+            (self.trigger, self.context),
+            content.flatten(),
+        );
+        if let Some((source, revision)) = self.information {
+            let mut reports = crate::layout::SourceReports::default();
+            self.content.as_widget_mut().operate(
+                &mut tree.children[0],
+                layout,
+                renderer,
+                &mut reports,
+            );
+            let mut matching = reports.into_reports().into_iter().filter(|accepted| {
+                accepted.report.source == source && accepted.report.revision == revision
+            });
+            let report = matching.next();
+            let unique = matching.next().is_none();
+            let key = SourceKey::of(&id);
+            let mut registry = anchors.0.borrow_mut();
+            registry.information.remove(&key);
+            if unique
+                && registry.visible.contains_key(&key)
+                && let Some(report) = report
+            {
+                registry.information.insert(key, report.report);
+            }
+        }
+        self.content.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+    #[cfg(feature = "a11y")]
+    fn a11y_nodes(
+        &self,
+        layout: Layout<'_>,
+        tree: &Tree,
+        cursor: mouse::Cursor,
+    ) -> iced_accessibility::A11yTree {
+        self.content
+            .as_widget()
+            .a11y_nodes(layout, &tree.children[0], cursor)
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use cosmic::iced::{Point, Size};
+
+    #[test]
+    fn rebuilt_named_ids_resolve_the_same_source_without_aliasing_other_ids() {
+        let anchors = Anchors::default();
+        let bounds = Rectangle::new(Point::new(20.0, 30.0), Size::new(40.0, 20.0));
+        let window = Rectangle::with_size(Size::new(300.0, 200.0));
+        anchors.record(Id::new("source"), bounds, window, true);
+        assert_eq!(
+            anchors.visible(&Id::new("source")),
+            Some(bounds),
+            "fresh native IDs with the same custom name resolve after view rebuilding"
+        );
+        assert_eq!(anchors.visible(&Id::new("different-source")), None);
+        // Source/hover wrappers may register the same name independently.
+        anchors.record(Id::new("source"), bounds, window, false);
+        assert!(
+            anchors.trigger_at(Point::new(30.0, 40.0), None, false),
+            "duplicate named source registration preserves its trigger marker"
+        );
+        let first = Id::unique();
+        let second = Id::unique();
+        anchors.record(first.clone(), bounds, window, false);
+        assert_eq!(anchors.visible(&first), Some(bounds));
+        assert_eq!(
+            anchors.visible(&second),
+            None,
+            "distinct unique IDs remain distinct"
+        );
+    }
+
+    #[test]
+    fn named_open_and_hover_ownership_use_the_same_canonical_source_key() {
+        let anchors = Anchors::default();
+        let bounds = Rectangle::with_size(Size::new(40.0, 20.0));
+        anchors.record(Id::new("source"), bounds, bounds, true);
+        anchors.register_information(&Id::new("source"), []);
+        assert!(anchors.claim_hover(&Id::new("source")));
+        assert!(anchors.hover_is_owner(&Id::new("source")));
+        anchors.release_hover(&Id::new("other"));
+        assert!(anchors.hover_is_owner(&Id::new("source")));
+        anchors.begin([Id::new("source")]);
+        anchors.record(Id::new("source"), bounds, bounds, true);
+        assert!(anchors.is_open(&Id::new("source")));
+        assert!(!anchors.is_open(&Id::new("other")));
+        assert!(
+            !anchors.claim_hover(&Id::new("source")),
+            "the live open source suppresses only its own hover card"
+        );
+        assert_eq!(anchors.hovered(), None);
+    }
+}
+
+#[cfg(test)]
+mod information_state_tests {
+    use super::*;
+    use cosmic::iced::Point;
+
+    fn sources() -> (Anchors, Id, Id) {
+        let anchors = Anchors::default();
+        let first = Id::new("first-info");
+        let second = Id::new("second-info");
+        let window = Rectangle::with_size(Size::new(400.0, 300.0));
+        for (id, x) in [(&first, 0.0), (&second, 100.0)] {
+            anchors.record(
+                id.clone(),
+                Rectangle::new(Point::new(x, 0.0), Size::new(80.0, 40.0)),
+                window,
+                false,
+            );
+            anchors.register_information(id, []);
+        }
+        (anchors, first, second)
+    }
+
+    #[test]
+    fn pointer_and_keyboard_share_delay_and_target_change_restarts_it() {
+        let (anchors, first, second) = sources();
+        let start = Instant::now();
+        assert!(anchors.target_at(&first, true, start));
+        assert!(!anchors.advance(start + INFORMATION_DELAY / 2).0);
+        assert!(anchors.target_at(&second, false, start + INFORMATION_DELAY / 2));
+        assert!(!anchors.advance(start + INFORMATION_DELAY).0);
+        assert!(!anchors.information_visible(&first));
+        assert!(
+            anchors
+                .advance(start + INFORMATION_DELAY + INFORMATION_DELAY / 2)
+                .0
+        );
+        assert!(anchors.information_visible(&second));
+    }
+
+    #[test]
+    fn dismissed_target_stays_suppressed_until_leave_and_new_target() {
+        let (anchors, first, _) = sources();
+        let start = Instant::now();
+        anchors.target_at(&first, true, start);
+        anchors.advance(start + INFORMATION_DELAY);
+        assert!(anchors.dismiss_information());
+        // Motion inside the same source is not entering another target.
+        anchors.target_at(&first, true, start + INFORMATION_DELAY * 2);
+        assert!(!anchors.advance(start + INFORMATION_DELAY * 3).0);
+        assert!(!anchors.information_visible(&first));
+        anchors.release_hover(&first);
+        anchors.target_at(&first, true, start + INFORMATION_DELAY * 4);
+        assert!(anchors.advance(start + INFORMATION_DELAY * 5).0);
+    }
+
+    #[test]
+    fn latest_owner_leaving_does_not_resurrect_earlier_keyboard_target() {
+        let (anchors, first, second) = sources();
+        let start = Instant::now();
+        anchors.target_at(&first, false, start);
+        anchors.target_at(&second, true, start + INFORMATION_DELAY);
+        anchors.release_hover(&second);
+        assert_eq!(anchors.hovered(), None);
+        assert_eq!(
+            anchors.advance(start + INFORMATION_DELAY * 3),
+            (false, None)
+        );
+        // Leaving a nonowner pointer source cannot dismiss the keyboard owner.
+        anchors.target_at(&first, false, start + INFORMATION_DELAY * 4);
+        anchors.release_hover(&first);
+        assert_eq!(anchors.hovered(), Some(first));
+    }
+
+    #[test]
+    fn deactivation_and_disappearing_source_cancel_pending_openings() {
+        let (anchors, first, _) = sources();
+        let start = Instant::now();
+        anchors.target_at(&first, false, start);
+        anchors.deactivate();
+        anchors.activate();
+        assert_eq!(
+            anchors.advance(start + INFORMATION_DELAY * 3),
+            (false, None)
+        );
+        assert_eq!(anchors.hovered(), None);
+        anchors.target_at(&first, false, start + INFORMATION_DELAY * 4);
+        anchors.begin([]);
+        anchors.prune_information();
+        assert_eq!(
+            anchors.advance(start + INFORMATION_DELAY * 6),
+            (false, None)
+        );
+    }
+
+    #[test]
+    fn rejected_native_probe_cannot_publish_information_ownership_or_timer() {
+        let (anchors, first, second) = sources();
+        let start = Instant::now();
+        anchors.target_at(&first, false, start);
+        let snapshot = anchors.snapshot();
+        {
+            let _trial = anchors.transaction(&snapshot);
+            anchors.target_at(&second, true, start + INFORMATION_DELAY);
+            anchors.advance(start + INFORMATION_DELAY * 3);
+            anchors.deactivate();
+        }
+        assert_eq!(anchors.hovered(), Some(first.clone()));
+        assert!(anchors.advance(start + INFORMATION_DELAY).0);
+        assert!(anchors.information_visible(&first));
+    }
+
+    #[test]
+    fn a_frozen_clock_ignores_the_time_a_slow_thread_takes() {
+        let clock = FrozenClock::new();
+        let (anchors, first, _) = sources();
+        anchors.claim_hover(&first);
+        std::thread::sleep(INFORMATION_DELAY + INFORMATION_DELAY / 2);
+        // Neither an event with no time of its own nor a frame dated now
+        // lets the delay run out
+        let key = Event::Keyboard(keyboard::Event::ModifiersChanged(
+            keyboard::Modifiers::empty(),
+        ));
+        let frame = Event::Window(cosmic::iced::window::Event::RedrawRequested(Instant::now()));
+        for event in [&key, &frame] {
+            let (changed, _) = anchors.advance(match event {
+                Event::Window(cosmic::iced::window::Event::RedrawRequested(at)) => redraw_time(*at),
+                _ => now(),
+            });
+            assert!(!changed);
+        }
+        // A frame dated past the delay does
+        let ahead = redraw_time(Instant::now() + INFORMATION_DELAY * 2);
+        assert!(anchors.advance(ahead).0);
+        drop(clock);
+        assert!(now() >= Instant::now() - Duration::from_secs(1));
+    }
+}

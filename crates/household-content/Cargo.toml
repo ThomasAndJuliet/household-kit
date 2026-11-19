@@ -1,0 +1,25 @@
+[package]
+name = "household-content"
+description = "The household's content model: Markdown with maths as source ranges (Cerea's analysis, kept up to date edit by edit), maths recognition with its map back to the source, inline content, anchors, RaTeX maths as SVG and syntect highlighting tokens"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-only"
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false }
+# Link labels compared as pulldown-cmark compares them (Unicode case folding)
+unicase = "2"
+# List bullets, as the rendered views set them
+household-type = { path = "../household-type" }
+# The household's one RaTeX pin: LaTeX laid out as KaTeX lays it out, to SVG
+ratex-parser = "=0.1.14"
+ratex-layout = "=0.1.14"
+ratex-types = "=0.1.14"
+ratex-svg = { version = "=0.1.14", features = ["embed-fonts"] }
+# Code split by language, with Sublime Text's grammars, in pure Rust
+syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
+# Token classes by scope (household rule 25b)
+household-highlight = { path = "../household-highlight" }
