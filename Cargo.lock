@@ -1739,6 +1739,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "household-layout"
+version = "0.1.0"
+
+[[package]]
 name = "household-settings"
 version = "0.1.0"
 dependencies = [
