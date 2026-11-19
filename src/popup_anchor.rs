@@ -19,6 +19,56 @@ use crate::window::Owner;
 /// Pointer and keyboard targeting share this discovery delay.
 pub const INFORMATION_DELAY: Duration = Duration::from_millis(500);
 
+std::thread_local! {
+    static FROZEN: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The time the information delay counts from: the wall clock, unless this
+/// thread holds a [`FrozenClock`]
+fn now() -> Instant {
+    FROZEN
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(Instant::now)
+}
+
+/// The time a redraw's own `at` counts as: itself, or on a stopped clock only
+/// how far ahead of now it is, since a stopped clock has no "now" to compare
+/// a past time with
+fn redraw_time(at: Instant) -> Instant {
+    match FROZEN.with(std::cell::Cell::get) {
+        Some(frozen) => frozen + at.saturating_duration_since(Instant::now()),
+        None => at,
+    }
+}
+
+/// A test thread's information delay counted on a stopped clock, for as
+/// long as this is held. Events that carry no time of their own (moves,
+/// presses, keys) then never let the delay run out, however slow the machine
+/// is; only a redraw dated ahead (`RedrawRequested(now + delay)`) does, as a test says.
+/// Without it a loaded test thread passes 500 ms between a pointer resting
+/// on a control and the next key, and a card the pointer opened takes that
+/// key (Escape) from what the test is doing.
+#[must_use = "the clock runs again when this is dropped"]
+pub struct FrozenClock(Option<Instant>);
+
+impl FrozenClock {
+    pub fn new() -> Self {
+        Self(FROZEN.with(|frozen| frozen.replace(Some(Instant::now()))))
+    }
+}
+
+impl Default for FrozenClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for FrozenClock {
+    fn drop(&mut self) {
+        FROZEN.with(|frozen| frozen.set(self.0));
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Anchors(Rc<RefCell<Registry>>);
 
@@ -339,12 +389,12 @@ impl Anchors {
     /// A deliberate navigation action targets information without moving or
     /// activating the control. Ordinary typing must not call this operation.
     pub fn keyboard_target(&self, id: &Id) {
-        if !self.target_at(id, false, Instant::now()) {
+        if !self.target_at(id, false, now()) {
             Self::clear_target(&mut self.0.borrow_mut());
         }
     }
     pub(crate) fn claim_hover(&self, id: &Id) -> bool {
-        self.target_at(id, true, Instant::now())
+        self.target_at(id, true, now())
     }
     fn clear_target(registry: &mut Registry) {
         registry.hovered = None;
@@ -451,8 +501,8 @@ impl Anchors {
     }
     pub(crate) fn update_timer<Message>(&self, event: &Event, shell: &mut Shell<'_, Message>) {
         let now = match event {
-            Event::Window(cosmic::iced::window::Event::RedrawRequested(now)) => *now,
-            _ => Instant::now(),
+            Event::Window(cosmic::iced::window::Event::RedrawRequested(at)) => redraw_time(*at),
+            _ => now(),
         };
         let (changed, deadline) = self.advance(now);
         if changed {
@@ -482,7 +532,7 @@ impl Anchors {
         let Some(source) = source else {
             return false;
         };
-        self.target_at(&source, false, Instant::now());
+        self.target_at(&source, false, now());
         let mut registry = self.0.borrow_mut();
         if registry.hovered.as_ref() == Some(&source) && registry.active {
             registry.deadline = None;
@@ -1043,5 +1093,31 @@ mod information_state_tests {
         assert_eq!(anchors.hovered(), Some(first.clone()));
         assert!(anchors.advance(start + INFORMATION_DELAY).0);
         assert!(anchors.information_visible(&first));
+    }
+
+    #[test]
+    fn a_frozen_clock_ignores_the_time_a_slow_thread_takes() {
+        let clock = FrozenClock::new();
+        let (anchors, first, _) = sources();
+        anchors.claim_hover(&first);
+        std::thread::sleep(INFORMATION_DELAY + INFORMATION_DELAY / 2);
+        // Neither an event with no time of its own nor a frame dated now
+        // lets the delay run out
+        let key = Event::Keyboard(keyboard::Event::ModifiersChanged(
+            keyboard::Modifiers::empty(),
+        ));
+        let frame = Event::Window(cosmic::iced::window::Event::RedrawRequested(Instant::now()));
+        for event in [&key, &frame] {
+            let (changed, _) = anchors.advance(match event {
+                Event::Window(cosmic::iced::window::Event::RedrawRequested(at)) => redraw_time(*at),
+                _ => now(),
+            });
+            assert!(!changed);
+        }
+        // A frame dated past the delay does
+        let ahead = redraw_time(Instant::now() + INFORMATION_DELAY * 2);
+        assert!(anchors.advance(ahead).0);
+        drop(clock);
+        assert!(now() >= Instant::now() - Duration::from_secs(1));
     }
 }
