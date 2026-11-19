@@ -439,7 +439,10 @@ impl<'a, Message: 'a> overlay::Overlay<Message, Theme, Renderer> for Card<'_, 'a
                 surface_box(content),
             )];
         }
-        let attachment = Attachment::new(anchor, self.candidates.to_vec());
+        let mut attachment = Attachment::new(anchor, self.candidates.to_vec());
+        // The card's layout box holds its shadow: it is the drawn surface
+        // that sits flush with the source, as a menu's does
+        attachment.surface_insets = crate::popup_surface::shadow_padding();
         let children = commit_hover_retaining(
             self.stages,
             renderer,
@@ -1039,6 +1042,36 @@ mod report_preparation_tests {
             &mut texts,
         );
         texts.0
+    }
+
+    #[test]
+    fn the_drawn_card_is_flush_with_its_source_and_centred_on_it() {
+        let renderer = renderer();
+        let anchors = Anchors::default();
+        let source = Id::new("flush-source");
+        let snapshot = Snapshot {
+            revision: 1,
+            expected_revision: 1,
+            full: "Full one",
+            extra: "Extra one",
+        };
+        let mut hover = hover(&anchors, source.clone(), snapshot, Inputs::default());
+        let mut tree = Tree::new(&hover as &dyn Widget<(), Theme, Renderer>);
+        let size = Size::new(400.0, 200.0);
+        let node = accepted_overlay(&mut hover, &mut tree, &renderer, size).unwrap();
+        let card = node.children()[0].bounds();
+        let anchor = anchors.information_anchor(&source).unwrap();
+        let insets = crate::popup_surface::shadow_padding();
+        // Below the source: the drawn surface (the box less its shadow) starts
+        // where the source's drawn bounds end
+        assert_eq!(card.y + insets.top, anchor.y + anchor.height, "gap");
+        let surface_centre = card.x + insets.left + (card.width - insets.left - insets.right) / 2.0;
+        let centre = anchor.x + anchor.width / 2.0;
+        assert!(
+            (surface_centre - centre).abs() <= 0.5
+                || card.x == 0.0
+                || card.x + card.width == size.width
+        );
     }
 
     #[test]

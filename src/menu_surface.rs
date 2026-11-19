@@ -1356,11 +1356,7 @@ mod presentation_tests {
 
     #[test]
     fn a_scrolling_menus_scrollbar_does_not_cover_the_inline_frames_right_border() {
-        use cosmic::iced::advanced::{
-            Layout, mouse,
-            renderer::Headless,
-            widget::Tree,
-        };
+        use cosmic::iced::advanced::{Layout, mouse, renderer::Headless, widget::Tree};
         use cosmic::iced::{Color, Font, Pixels};
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
@@ -1397,13 +1393,10 @@ mod presentation_tests {
             hover: None,
         };
         let (w, h) = (240usize, 150usize);
-        let mut renderer =
-            cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-                Font::default(),
-                Pixels(14.0),
-                Some("tiny-skia"),
-            ))
-            .expect("native renderer");
+        let mut renderer = cosmic::iced::futures::executor::block_on(
+            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
+        )
+        .expect("native renderer");
         let theme = cosmic::Theme::light();
         let mut element = content.view(true, 1);
         let mut tree = Tree::new(element.as_widget());
@@ -1432,7 +1425,9 @@ mod presentation_tests {
         // Down the middle of the title and its rows, the border colour is
         // drawn at both the left and the right of the frame
         let row = h / 2;
-        let xs: Vec<usize> = (0..w).filter(|x| near(&pixels[(row * w + x) * 4..][..4])).collect();
+        let xs: Vec<usize> = (0..w)
+            .filter(|x| near(&pixels[(row * w + x) * 4..][..4]))
+            .collect();
         assert!(
             xs.iter().any(|x| *x < w / 4) && xs.iter().any(|x| *x > w / 2),
             "the frame's border shows on both sides: {xs:?}"
