@@ -229,7 +229,8 @@
 //! this module asks a [`Leaf`]. What is about live widgets is left out:
 //! views and their elements, the verified commit, speculative measuring,
 //! native state, decorators, popups, hovers, navigation regions and
-//! presentations. household-widgets' test `layout_port_equality` builds
+//! presentations (whose resolution is ported on its own, in
+//! [`crate::presentation`]). household-widgets' test `layout_port_equality` builds
 //! trees in both and requires the same results over sweeps of width and
 //! height.
 //!

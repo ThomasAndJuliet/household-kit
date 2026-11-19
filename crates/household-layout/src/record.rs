@@ -2,29 +2,70 @@
 
 //! The record of occupied space (design §7 and §11).
 //!
-//! Everything drawn is entered with its ink, its kind, its identity and its
-//! owner's identity. Everything placed later asks the record first: a
-//! candidate is judged against everything it would meet or come too near,
-//! by the covering table and the distance table, and every finding names
-//! the occupant and the row of the table that gave it, so a caller can
-//! report why a place was rejected. Judging changes nothing; entering is a
-//! separate step. Nothing entered is ever moved.
+//! The engine says where the boxes of a chart go; the record keeps what
+//! has been drawn inside them, so that what is placed later does not land
+//! on it or come too near it. Everything drawn is entered with its ink (a
+//! rectangle or a line of some width), its [`Kind`], its identity, and the
+//! identity of its owner if it has one: a value label is its bar's, a
+//! series' name is its line's. Nothing entered is ever moved.
 //!
-//! A thing is another's own only when one owns the other (semantics C1).
-//! The order of drawing is data (C5): a candidate standing on a mark is not
-//! judged against a line the rules draw beneath that mark and that passes
-//! under it. A pair the caller joins by a text gap is judged by that text's
-//! spacing (C6). A pair the covering table says are meant to meet keeps no
-//! distance (C7).
+//! Anything placed later asks the record first. [`Record::judge`] takes a
+//! candidate and returns a [`Judgement`]: one [`Finding`] for each thing
+//! the candidate meets or comes too near, each naming that thing and the
+//! row of the tables that gave it, so that a caller can say why a place
+//! was refused. The tables are the rules' data ([`Rules`]):
 //!
-//! Not in this slice: Juliet's "clearly belongs" test (near and far), so a
-//! related distance has no upper bound yet; halo geometry.
+//! - Where the candidate **meets** something, the covering table gives the
+//!   verdict: never, allowed, allowed in the toggle's ink, last in order,
+//!   and so on. Only `Never` rejects; the others say what the caller must
+//!   do (draw a halo, use the toggle's ink) or how far down its list of
+//!   places this one goes ([`Judgement::preference`]).
+//! - Where it comes **near** without meeting, the distance table applies.
+//!   Things that are each other's own keep the related ideal and other
+//!   things the unrelated ideal. Below the least distance a place is
+//!   rejected at every level. Between the least distance and the ideal it
+//!   is squeezed: permitted from the rules' squeeze level (`Strong` by
+//!   default) and flagged, so that squeezing is always a choice.
 //!
-//! The record also answers what is at a point, innermost first, and which
-//! lines pass under a rectangle.
+//! Judging changes nothing. Entering is a separate step
+//! ([`Record::enter`]), and every change to the record gives it a new
+//! [`Revision`], so a judgement made before a change cannot be entered
+//! after it by mistake (the label sets check this).
 //!
-//! This slice searches a list. An index for many marks can replace it
-//! behind the same methods.
+//! Some pairs are judged otherwise. A thing is another's own only when one
+//! owns the other (semantics C1); two labels of one bar are not each
+//! other's own. The order of drawing is data (C5): a candidate standing on
+//! a mark is not judged against a gridline the rules draw beneath that
+//! mark and that passes under it. A pair the caller joins by a text gap is
+//! judged by that text's own spacing instead (C6). A pair the covering
+//! table says are meant to meet keeps no distance (C7). The record also
+//! answers what is at a point, innermost first ([`Record::at`]), and which
+//! lines pass under a rectangle ([`Record::lines_under`]).
+//!
+//! # A worked example
+//!
+//! Her 11 px text gives a least distance of 2.2 px and ideals of 3.696 px
+//! (related) and 7.26 px (unrelated). A bar stands from (10, 100), 20 px
+//! wide and 100 px tall, and is entered.
+//!
+//! - Its value label, 14 by 11 px and owned by the bar, centred 3.696 px
+//!   above it at (13, 85.304): the label and the bar are each other's own,
+//!   the gap is the related ideal, and there are no findings.
+//! - The same label 0.8 px above the bar is below the least distance: a
+//!   `BelowLeast` finding against the bar, which rejects it at every
+//!   level.
+//! - Once the label is entered at its ideal, a note of the same size 3 px
+//!   above it is unrelated to it and is squeezed: 3 px is below the
+//!   unrelated ideal of 7.26 px and above the least distance. The place is
+//!   rejected at `Preferred` and permitted at `Strong`, flagged.
+//!
+//! (Checked by the test `worked_example_a_bar_its_label_and_a_note`.)
+//!
+//! Not yet here: the record's judging puts no upper bound on a related
+//! distance (Juliet's "clearly belongs" test, near and far; label sets
+//! that share lines use near), and a halo has no geometry. This version
+//! searches a list; an index for many marks can replace it behind the
+//! same methods.
 
 use crate::geometry::{FIT_EPSILON, Point, Rect};
 use crate::identity::Id;
@@ -1206,5 +1247,54 @@ mod tests {
         assert!(line.meets(&Ink::Rect(Rect::new(-1.0, -1.0, 2.0, 2.0))));
         let far = Ink::segment(Point::new(0.0, 10.0), Point::new(10.0, 10.0), 0.0);
         assert_eq!(line.gap(&far), 9.0);
+    }
+
+    #[test]
+    fn worked_example_a_bar_its_label_and_a_note() {
+        // The module's worked example.
+        let mut r = record();
+        let bar = Occupant::new(
+            id("bar"),
+            Kind::DataMark,
+            Ink::Rect(Rect::new(10.0, 100.0, 20.0, 100.0)),
+        );
+        r.enter(bar);
+        let value = |y: f64| {
+            Occupant::new(
+                id("value"),
+                Kind::Number,
+                Ink::Rect(Rect::new(13.0, y, 14.0, 11.0)),
+            )
+            .owned_by(id("bar"))
+        };
+        let at_ideal = value(100.0 - 3.696 - 11.0);
+        assert_eq!(r.judge(&at_ideal).findings, []);
+        let too_near = r.judge(&value(100.0 - 0.8 - 11.0));
+        assert!(matches!(
+            too_near.rejection_at(Level::AllPermitted),
+            Some(Finding::BelowLeast { against: Against::Occupant(on), .. }) if on == &id("bar")
+        ));
+        r.enter(at_ideal);
+        let note = label(
+            "note",
+            Rect::new(13.0, 100.0 - 3.696 - 11.0 - 3.0 - 11.0, 14.0, 11.0),
+        );
+        let judged = r.judge(&note);
+        let [
+            Finding::Squeezed {
+                against,
+                gap,
+                ideal,
+                ..
+            },
+        ] = &judged.findings[..]
+        else {
+            panic!("{judged:?}")
+        };
+        assert_eq!(against, &Against::Occupant(id("value")));
+        assert!((gap - 3.0).abs() < 1e-9 && (ideal - 7.26).abs() < 1e-9);
+        assert!(judged.rejection_at(Level::Preferred).is_some());
+        assert_eq!(judged.rejection_at(Level::Strong), None);
+        assert_eq!(judged.squeezes().count(), 1);
     }
 }

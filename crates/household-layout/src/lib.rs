@@ -2,31 +2,71 @@
 
 //! Arrangement for the household's apps, charts and diagrams.
 //!
-//! This crate holds only arrangement: boxes that a parent queries and
-//! orders, compaction levels, the sharing of a shortage, anchors with
-//! ordered places, and a record of occupied space. It draws nothing and
-//! measures nothing, and it names no type of iced, libcosmic or figkit:
-//! a leaf answers with numbers, and its user supplies the leaves.
+//! This crate decides where things go. It draws nothing and measures
+//! nothing, and it names no type of iced, libcosmic or figkit: the caller
+//! measures its own content and answers with numbers, in `f64`.
 //!
-//! The design is Juliet's, agreed 19 November 2026 (`layout-design.md`
-//! in the design conversation). Charts and diagrams use the crate first;
-//! household-widgets' layout moves onto it later.
+//! It has two parts, used one after the other.
 //!
-//! - [`geometry`]: points, sizes and rectangles, in `f64`.
-//! - [`identity`]: a box's stable identity and the input field it draws.
+//! **The engine** ([`engine`]) arranges boxes. A window or a chart is a
+//! tree of boxes in rows, columns and wraps, and each component lists, in
+//! order, the arrangements it accepts as room runs short: a row with full
+//! labels, then a row of icons, then a wrap, for example. The engine takes
+//! the first that fits the room given and says where every box goes, or,
+//! when none fits, what failed at each. It is the household apps' own
+//! layout engine, ported without the toolkit and with the same names, so a
+//! chart lays out as a window does; household-widgets' test
+//! `layout_port_equality` holds the two to the same answers. The port adds
+//! only an identity on boxes and plan nodes, what failed at each stage
+//! when nothing fits, and a box's report of what its form does not show.
+//! How a component is presented (its emphasis and detail) is resolved
+//! before it is laid out and never changes with the room
+//! ([`presentation`]). The long comment at the top of [`engine`] explains
+//! how the engine is meant to work, with worked examples.
+//!
+//! **The record and the labels** ([`record`], [`labels`]) place the
+//! things that must not collide inside a box once its size is known: a
+//! chart's value labels, end labels and notes. The record keeps what has
+//! been drawn, with its kind and its owner, and judges a candidate place
+//! against it by two tables of data ([`rules`]): what may stand on what,
+//! and how far apart things must stand. Label sets are placed by pattern:
+//! one place for every member, tried in the caller's order, the first
+//! pattern that every member can take winning. A set can say before
+//! anything is placed how much room its pattern needs, so that the chart
+//! can reserve it when it lays out.
+//!
+//! A caller uses them together in three steps:
+//!
+//! 1. Lay out with the engine: build the tree of boxes from leaves it
+//!    measures, with the room each label pattern needs counted in, and
+//!    take the first stage that fits ([`engine::choose_stage`]).
+//! 2. Draw into the boxes the plan gives, and enter what was drawn in a
+//!    [`record::Record`]: bars, lines, gridlines, each with its identity
+//!    and owner.
+//! 3. Place each label set against the record ([`labels::place_set`]),
+//!    most important first. Each placed set enters the record, so later
+//!    sets are judged against it; nothing placed is moved. A set with no
+//!    pattern left says which member stopped each pattern and why, and the
+//!    chart takes its next stage or form.
+//!
+//! Rules and numbers are data: the distance table, the covering table and
+//! the order of drawing are plain values whose [`Default`] holds the agreed
+//! numbers, and nowhere else does. The design is Juliet's
+//! (`layout-design.md` in the design conversation of 19 November 2026);
+//! her decision of that day is to work within the apps' engine before
+//! assuming an extension.
+//!
+//! - [`engine`]: the apps' layout engine, with leaves the caller measures
+//!   in place of widgets.
+//! - [`presentation`]: emphasis and detail, resolved apart from compaction.
 //! - [`level`]: the four compaction levels.
-//! - [`kinds`]: the kinds of thing that occupy space.
-//! - [`rules`]: the distance table and the covering table, as data.
+//! - [`geometry`]: points, sizes and rectangles.
+//! - [`identity`]: a box's stable identity and the input field it draws.
+//! - [`kinds`]: the kinds of thing that occupy space, and roles.
+//! - [`rules`]: the distance table, the covering table and the order of
+//!   drawing.
 //! - [`record`]: the record of occupied space, and what it answers.
-//! - [`labels`]: anchors, ordered places, and sets placed by pattern.
-//! - [`engine`]: the apps' layout engine (household-widgets' `layout.rs`),
-//!   ported as it is, with leaves the caller measures in place of widgets.
-//!
-//! Juliet's decision of 19 November 2026 is to work within that engine
-//! before assuming an extension: [`engine`] is the same engine, with the
-//! same names, so that a chart lays out as a window does. It adds only an
-//! identity on children and plan nodes, what failed at each stage when
-//! nothing fits, and a child's report of what its form does not show.
+//! - [`labels`]: anchors, and label sets placed by pattern.
 
 pub mod engine;
 pub mod geometry;

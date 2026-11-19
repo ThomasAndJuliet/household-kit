@@ -2,27 +2,98 @@
 
 //! Anchors, and sets of labels placed by pattern (design §9).
 //!
-//! The anchor equation is household-widgets' (`layout_popup.rs`: `Side`,
-//! `Alignment`, `AnchorCandidate`, `offer`, `origin`) in `f64`, bounded by
-//! a region the caller gives rather than a window.
+//! # Anchors
+//!
+//! A label is placed beside an anchor: a rectangle, often its owner's ink
+//! or one edge of it. An [`AnchorCandidate`] names a side of the anchor
+//! (above, below, left, right), an alignment along that side (start, end,
+//! centre, or one of these kept inside a region) and a gap. [`offer`] says
+//! how much room a region leaves there and [`origin`] where a thing of a
+//! given size goes. This is household-widgets' popup anchor equation
+//! (`layout_popup.rs`) in `f64`, bounded by a region the caller gives
+//! rather than a window.
+//!
+//! # Sets placed by pattern
 //!
 //! A set of labels (value labels, end labels, slice labels, empty-slot
 //! notes) takes one pattern for every member: "it is just really
 //! inconsistent to have some labels to the left and some to the right". A
 //! [`Pattern`] is one place, applied to each member's owner, so a mixed set
-//! cannot be expressed; a place can follow the data ("beyond the end"), so
-//! bars above and below zero share one pattern. The patterns are tried in
-//! the caller's order. If any member is rejected, the pattern is; the first
-//! pattern with no rejection is taken. A pattern that some member can take
-//! only with a halo it could have moved away from, at a less preferred
-//! place, or last in order, waits behind every pattern that needs none of
-//! these. A set with no pattern left says which member stopped each pattern
-//! and why, so that its owner can take its next form.
+//! cannot be expressed. A place can follow the data: "beyond the end" puts
+//! a bar's label above it when it rises from zero and below it when it
+//! falls, so both share one pattern. The pattern's gap is an entry of the
+//! distance table ([`Gap`]), so tuning the table moves the labels.
+//!
+//! The patterns are tried in the caller's order. Each member's label is
+//! placed by the anchor equation and judged by the record, against what is
+//! already drawn and the members before it. If any member is rejected, the
+//! pattern is; the first pattern with no rejection is taken. A pattern that
+//! some member can take only with a halo it could have moved away from, at
+//! a less preferred place, or last in order, waits behind every pattern
+//! that needs none of these. A set with no pattern left says which member
+//! stopped each pattern and why ([`NoPattern`]), so that its owner can take
+//! its next form.
 //!
 //! Judging a set ([`judge_set`]) changes nothing; [`enter_set`] enters the
-//! result; [`place_set`] does both. [`room_needed`] says, before anything is
-//! placed, how much room a pattern needs beyond its owners. Nothing is moved
-//! after it is placed.
+//! result into the record it was judged against; [`place_set`] does both.
+//! Nothing is moved after it is placed.
+//!
+//! # Labels whose positions nearly agree share one line (U8)
+//!
+//! Juliet's rule, approved 8 November: value labels whose positions differ
+//! by less than the least distance stand on one line, "since a step that
+//! small reads as an error, not as data". A pattern does this when it is
+//! asked to ([`Pattern::sharing_lines`]; off by default). The lines are
+//! part of the pattern: every member's place is worked out by the anchor
+//! equation, the lines are settled, and only then is any member judged.
+//!
+//! A label's position is its edge facing its mark: the foot of a label
+//! above a bar, the left edge of a label to the right of one. On each side,
+//! labels are taken in order of position, and a label joins the group
+//! before it while its position is less than the least distance from the
+//! group's first. Every label may stand no nearer its own mark than the
+//! least distance and no farther than near (halfway between the related
+//! and the unrelated ideal by default), both from the rules' distance
+//! table. The group's line is the outermost label's position, brought back
+//! within every label's range if it lies beyond one, so labels move away
+//! from their marks. A group keeps its own positions when no line lies
+//! within every label's range, when a label inside its owner would no
+//! longer lie inside it, or when a label on the line would be rejected or
+//! take a less preferred place than its own. Each group, shared or kept
+//! and why, is reported in [`Placed::lines`].
+//!
+//! # The room a pattern needs
+//!
+//! [`room_needed`] says, before anything is placed, how much room a
+//! pattern needs around its owners: beyond them, along the side each label
+//! stands on, and across that side, where a label is wider than its owner
+//! and reaches past the owner's sides. A chart reserves the first, and
+//! compares the second with the room between its outermost owners and the
+//! plot's edges, to know before placing that a label will not fit.
+//!
+//! # A worked example
+//!
+//! Her 11 px text gives a least distance of 2.2 px, a related ideal of
+//! 3.696 px and near at 5.478 px. Two bars 20 px wide stand at x = 10 and
+//! x = 50 on a zero line at y = 200; their tops are at 100 and 101.5.
+//! Their value labels are 14 by 11 px, beyond the end, centred, at the
+//! related gap.
+//!
+//! - Placed alone, the labels stand at (13, 85.304) and (53, 86.804): their
+//!   feet are 1.5 px apart, at 96.304 and 97.804.
+//! - Sharing lines, the two feet differ by less than 2.2 px and form one
+//!   group. The first label's foot may lie between 97.8 and 94.522 (2.2 to
+//!   5.478 px above its bar), the second's between 99.3 and 96.022. The
+//!   outermost foot, 96.304, lies in both, so the second label moves up
+//!   1.5 px and stands 5.196 px above its bar. The report is one shared
+//!   line at 96.304.
+//! - With tops at 100 and 103 the feet are 3 px apart, not less than the
+//!   least distance, and each label keeps its own position.
+//! - The pattern needs 3.696 + 11 = 14.696 px above the bars. A 14 px label
+//!   on a 20 px bar reaches nothing past its sides; a 30 px one reaches 5 px
+//!   past each.
+//!
+//! (Checked by the test `worked_example_value_labels_on_two_bars`.)
 
 use crate::geometry::{Point, Rect, Size};
 use crate::identity::Id;
