@@ -296,24 +296,32 @@ fn a_disabled_switch_publishes_nothing() {
 /// Marginalium's presenter console: `.label(..).spacing(..)`
 #[test]
 fn a_labelled_switch_keeps_its_layout_and_label() {
-    fn labelled(toggler: widget::Toggler<'static, Message>) -> Element<'static, Message> {
-        toggler
+    fn labelled(toggler: impl Into<Element<'static, Message>>) -> Element<'static, Message> {
+        toggler.into()
+    }
+    let ours_on = |on| {
+        toggler(on)
             .label("Pointer".to_string())
             .spacing(8)
             .on_toggle(|on| on)
-            .into()
-    }
+    };
+    let reference_on = |on| {
+        widget::toggler(on)
+            .label("Pointer".to_string())
+            .spacing(8)
+            .on_toggle(|on| on)
+    };
     for (theme, accent, _, dark) in themes() {
         let [r, g, b] = accent;
         let expected = rgb8(muted_accent(Srgb::from_rgb8(r, g, b), dark));
         // Off: exactly libcosmic's, label and all
-        let ours = draw(|| labelled(toggler(false)), &theme, None, &[]);
-        let libcosmic = draw(|| labelled(widget::toggler(false)), &theme, None, &[]);
+        let ours = draw(|| labelled(ours_on(false)), &theme, None, &[]);
+        let libcosmic = draw(|| labelled(reference_on(false)), &theme, None, &[]);
         assert!(ours.rgba == libcosmic.rgba, "the frames differ");
         // On: libcosmic's, with the muted fill
-        let ours = draw(|| labelled(toggler(true)), &theme, None, &[]);
+        let ours = draw(|| labelled(ours_on(true)), &theme, None, &[]);
         let reference = draw(
-            || labelled(widget::toggler(true)),
+            || labelled(reference_on(true)),
             &accent_muted(&theme),
             None,
             &[],
@@ -324,6 +332,51 @@ fn a_labelled_switch_keeps_its_layout_and_label() {
             .filter(|&at| distance(ours.at(at), expected) <= 1)
             .count();
         assert!(fill > 10, "no muted fill in the labelled switch");
+    }
+}
+
+/// A labelled switch has the standard label gap without being told
+#[test]
+fn a_labelled_switch_has_the_standard_label_gap_itself() {
+    let gap = cosmic::theme::spacing().space_xs;
+    assert!(gap > 0);
+    for (theme, ..) in themes() {
+        let ours = draw(
+            || {
+                toggler(false)
+                    .label("Pointer".to_string())
+                    .on_toggle(|on| on)
+                    .into()
+            },
+            &theme,
+            None,
+            &[],
+        );
+        let reference = draw(
+            || {
+                widget::toggler(false)
+                    .label("Pointer".to_string())
+                    .spacing(gap)
+                    .on_toggle(|on| on)
+                    .into()
+            },
+            &theme,
+            None,
+            &[],
+        );
+        assert!(ours.rgba == reference.rgba, "the label gap differs");
+        let bare = draw(
+            || {
+                widget::toggler(false)
+                    .label("Pointer".to_string())
+                    .on_toggle(|on| on)
+                    .into()
+            },
+            &theme,
+            None,
+            &[],
+        );
+        assert!(ours.rgba != bare.rgba, "no gap was added");
     }
 }
 

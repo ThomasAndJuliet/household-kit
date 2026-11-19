@@ -25,9 +25,9 @@
 
 #[macro_use]
 mod forward;
-pub mod dropdown;
 #[cfg(feature = "content")]
 pub mod content;
+pub mod dropdown;
 pub mod focus_regions;
 #[doc(hidden)]
 pub mod history;
@@ -67,7 +67,7 @@ pub use level::{LEVEL_CAP, Level};
 pub use look::Look;
 pub use scroll::horizontal_scroll;
 pub use short_text_box::{PasswordBox, ShortTextBox};
-pub use switch::{SwitchItem, muted_colours, switch, switch_maybe, toggler};
+pub use switch::{SwitchItem, Toggler, muted_colours, switch, switch_maybe, toggler};
 pub use text_box::TextBox;
 pub use text_button::{BUTTON_HEIGHT, Tertiary, TextButton, button_padding};
 pub use text_menu::{TextMenu, TextMenuHistory, TextMenuWords, text_menu};

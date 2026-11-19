@@ -13,15 +13,22 @@ pub fn choose_hover<'a, Message: 'a>(
     attachment: &Attachment,
     obstacles: &[Rectangle],
 ) -> Result<AttachedPlan, NoFit> {
-    let clear = regions(window, obstacles);
     for fallback in [false, true] {
         for (stage_index, candidate_index) in pairs(stages.len(), attachment) {
             let a = single_attachment(attachment, candidate_index);
+            let obstacles = &flush_obstacles(obstacles, &a);
             let stage = &stages[stage_index..=stage_index];
             let offers = if fallback {
                 vec![window]
             } else {
-                ordered_regions(stage, renderer, window, &a, &clear, obstacles)
+                ordered_regions(
+                    stage,
+                    renderer,
+                    window,
+                    &a,
+                    &regions(window, obstacles),
+                    obstacles,
+                )
             };
             for region in offers {
                 if let Ok(mut plan) =
@@ -64,15 +71,22 @@ pub(crate) fn commit_hover_retaining<'a, Message: 'a>(
     tree: &mut Tree,
     retained: &mut HoverRetained,
 ) -> Result<(AttachedPlan, layout::Node), NoFit> {
-    let clear = regions(window, obstacles);
     for fallback in [false, true] {
         for (stage_index, candidate_index) in pairs(stages.len(), attachment) {
             let a = single_attachment(attachment, candidate_index);
+            let obstacles = &flush_obstacles(obstacles, &a);
             let stage = &stages[stage_index..=stage_index];
             let offers = if fallback {
                 vec![window]
             } else {
-                ordered_regions(stage, renderer, window, &a, &clear, obstacles)
+                ordered_regions(
+                    stage,
+                    renderer,
+                    window,
+                    &a,
+                    &regions(window, obstacles),
+                    obstacles,
+                )
             };
             for region in offers {
                 // A retained one-stage plan uses a local stage index of zero;
@@ -157,14 +171,54 @@ fn pairs(count: usize, attachment: &Attachment) -> Vec<(usize, usize)> {
     }
     pairs
 }
+/// Every information card is placed by one rule, whatever its source declared:
+/// flush with the control (no gap), centred on it along the attached side,
+/// and shifted only as far as needed to stay inside the window.
 fn single_attachment(attachment: &Attachment, candidate: usize) -> Attachment {
-    let mut a = Attachment::new(attachment.anchor, vec![attachment.candidates[candidate]]);
+    let declared = attachment.candidates[candidate];
+    let placed = AnchorCandidate::new(declared.side, Alignment::CenterBounded);
+    let mut a = Attachment::new(attachment.anchor, vec![placed]);
     a.surface_insets = attachment.surface_insets;
     if attachment.fill_width {
         a.fill_width()
     } else {
         a
     }
+}
+
+/// A surface holding the source (a menu round its row) is an obstacle to a
+/// card only beyond the source's own edge on the card's side: the margin
+/// between the control and its surface's edge is where a flush card sits.
+fn flush_obstacles(obstacles: &[Rectangle], attachment: &Attachment) -> Vec<Rectangle> {
+    let anchor = attachment.anchor;
+    let contains = |o: &Rectangle| {
+        o.x <= anchor.x
+            && o.y <= anchor.y
+            && o.x + o.width >= anchor.x + anchor.width
+            && o.y + o.height >= anchor.y + anchor.height
+    };
+    obstacles
+        .iter()
+        .map(|&o| {
+            if !contains(&o) {
+                return o;
+            }
+            let mut o = o;
+            match attachment.candidates[0].side {
+                Side::Left => {
+                    o.width -= anchor.x - o.x;
+                    o.x = anchor.x;
+                }
+                Side::Right => o.width = anchor.x + anchor.width - o.x,
+                Side::Above => {
+                    o.height -= anchor.y - o.y;
+                    o.y = anchor.y;
+                }
+                Side::Below => o.height = anchor.y + anchor.height - o.y,
+            }
+            o
+        })
+        .collect()
 }
 
 fn intersects(a: Rectangle, b: Rectangle) -> bool {
@@ -265,7 +319,8 @@ mod tests {
             choose_hover(&stages, &renderer, window, &attachment(source), &[obstacle]).unwrap();
         assert_eq!(plan.candidate_index, 0);
         assert!(!intersects(plan.bounds, obstacle));
-        assert_eq!(plan.bounds.position(), Point::new(120.0, 120.0));
+        // Right of the source, centred on it vertically
+        assert_eq!(plan.bounds.position(), Point::new(120.0, 115.0));
     }
     #[test]
     fn native_wrapped_card_falls_back_over_menu_when_clear_width_is_below_floor() {
@@ -386,7 +441,7 @@ mod tests {
         assert_eq!(fallback.bounds.y, 70.0);
     }
     #[test]
-    fn left_corridor_keeps_hover_aligned_with_menu_row() {
+    fn left_corridor_keeps_hover_flush_and_centred_on_menu_row() {
         let renderer = renderer();
         let stages: Vec<Stage<'_, ()>> = vec![Stage::new(
             Level::Preferred,
@@ -410,7 +465,8 @@ mod tests {
         );
         let selected = choose_hover(&stages, &renderer, window, &attachment, &[menu]).unwrap();
         assert_eq!(selected.candidate_index, 1);
-        assert_eq!(selected.bounds, r(104.0, 447.0, 168.0, 40.0));
+        // flush with the row (not the menu), centred on it
+        assert_eq!(selected.bounds, r(108.0, 441.0, 168.0, 40.0));
         let mut body = widget::space().into();
         let (committed, node) = commit_hover_retaining(
             &stages,
@@ -425,5 +481,79 @@ mod tests {
         .unwrap();
         assert_eq!(committed, selected);
         assert_eq!(node.bounds(), selected.bounds);
+    }
+    fn card(width: f32, height: f32) -> Vec<Stage<'static, ()>> {
+        vec![Stage::new(
+            Level::Preferred,
+            child(move |_| widget::space().width(width).height(height).into())
+                .minimum_width(move |_, _| width),
+        )]
+    }
+    fn placed(source: Rectangle, side: Side, declared: Alignment, gap: f32) -> Rectangle {
+        let a = Attachment::new(source, vec![AnchorCandidate::new(side, declared).gap(gap)]);
+        choose_hover(
+            &card(60.0, 30.0),
+            &renderer(),
+            r(0.0, 0.0, 400.0, 300.0),
+            &a,
+            &[],
+        )
+        .unwrap()
+        .bounds
+    }
+    #[test]
+    fn a_card_above_a_control_is_centred_on_it_and_flush() {
+        let source = r(100.0, 150.0, 40.0, 20.0);
+        // whatever the source declared, and even with a declared gap
+        for declared in [Alignment::Start, Alignment::StartBounded, Alignment::Center] {
+            let bounds = placed(source, Side::Above, declared, 4.0);
+            assert_eq!(bounds.x + bounds.width / 2.0, 120.0, "{declared:?}");
+            assert_eq!(bounds.y + bounds.height, source.y, "no gap: {declared:?}");
+            let below = placed(source, Side::Below, declared, 4.0);
+            assert_eq!(below.x + below.width / 2.0, 120.0);
+            assert_eq!(below.y, source.y + source.height);
+        }
+    }
+    #[test]
+    fn a_card_near_the_window_edge_shifts_inward_only_as_far_as_needed() {
+        let left = placed(
+            r(0.0, 150.0, 20.0, 20.0),
+            Side::Above,
+            Alignment::StartBounded,
+            0.0,
+        );
+        assert_eq!(left.x, 0.0);
+        let right = placed(
+            r(370.0, 150.0, 20.0, 20.0),
+            Side::Above,
+            Alignment::StartBounded,
+            0.0,
+        );
+        assert_eq!(right.x + right.width, 400.0);
+        // a little off centre shifts by just the overflow
+        let near = placed(
+            r(10.0, 150.0, 20.0, 20.0),
+            Side::Below,
+            Alignment::Start,
+            0.0,
+        );
+        assert_eq!(near.x, 0.0);
+        let near = placed(
+            r(30.0, 150.0, 20.0, 20.0),
+            Side::Below,
+            Alignment::Start,
+            0.0,
+        );
+        assert_eq!(near.x + near.width / 2.0, 40.0);
+    }
+    #[test]
+    fn a_card_beside_a_control_is_centred_vertically_and_flush() {
+        let source = r(200.0, 100.0, 40.0, 20.0);
+        let right = placed(source, Side::Right, Alignment::StartBounded, 4.0);
+        assert_eq!(right.x, source.x + source.width);
+        assert_eq!(right.y + right.height / 2.0, 110.0);
+        let left = placed(source, Side::Left, Alignment::Start, 4.0);
+        assert_eq!(left.x + left.width, source.x);
+        assert_eq!(left.y + left.height / 2.0, 110.0);
     }
 }

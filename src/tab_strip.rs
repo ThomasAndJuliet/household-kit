@@ -529,7 +529,7 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
                 engine::column_child(card, 4.0),
                 vec![AnchorCandidate::new(
                     engine::Side::Below,
-                    engine::Alignment::StartBounded,
+                    engine::Alignment::CenterBounded,
                 )],
             );
             let element = match &self.decorate {
