@@ -140,6 +140,16 @@ impl Role {
         Self::new("comparison")
     }
 
+    /// A gridline, in either direction.
+    pub fn gridline() -> Self {
+        Self::new("gridline")
+    }
+
+    /// The zero line.
+    pub fn zero_line() -> Self {
+        Self::new("zero line")
+    }
+
     /// A comment's words.
     pub fn comment() -> Self {
         Self::new("comment")

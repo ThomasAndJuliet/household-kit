@@ -171,7 +171,9 @@ pub struct Occupant {
     pub ink: Ink,
     pub kind: Kind,
     pub id: Id,
-    pub owner: Option<Id>,
+    /// Who owns this thing. A connector is both its text's own and its
+    /// target's own, so there may be several (semantics C1).
+    pub owners: Vec<Id>,
     pub role: Option<Role>,
 }
 
@@ -181,14 +183,28 @@ impl Occupant {
             ink,
             kind,
             id,
-            owner: None,
+            owners: Vec::new(),
             role: None,
         }
     }
 
+    /// This occupant owned by `owner` alone.
     pub fn owned_by(mut self, owner: Id) -> Self {
-        self.owner = Some(owner);
+        self.owners = vec![owner];
         self
+    }
+
+    /// This occupant also owned by `owner`, besides any it has.
+    pub fn also_owned_by(mut self, owner: Id) -> Self {
+        if !self.owners.contains(&owner) {
+            self.owners.push(owner);
+        }
+        self
+    }
+
+    /// The first owner, if any.
+    pub fn owner(&self) -> Option<&Id> {
+        self.owners.first()
     }
 
     pub fn with_role(mut self, role: Role) -> Self {
@@ -199,7 +215,7 @@ impl Occupant {
     /// Whether `other` is this occupant's own: one owns the other. Two
     /// things with the same owner are not each other's own (semantics C1).
     pub fn is_own(&self, other: &Occupant) -> bool {
-        self.owner.as_ref() == Some(&other.id) || other.owner.as_ref() == Some(&self.id)
+        self.owners.contains(&other.id) || other.owners.contains(&self.id)
     }
 }
 
@@ -319,7 +335,14 @@ pub struct Record {
     occupants: Vec<Occupant>,
     declared: Vec<(Id, Id, Relation)>,
     joined: Vec<Join>,
+    revision: Revision,
 }
+
+/// Which state of a record a judgement was made against: it changes with
+/// every change that could alter what the record would judge (semantics
+/// C9). A record's states, one after another, never share one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Revision(u64);
 
 /// A pair joined by a text gap, with that text's metrics.
 #[derive(Clone, Debug)]
@@ -346,12 +369,23 @@ impl Record {
             occupants: Vec::new(),
             declared: Vec::new(),
             joined: Vec::new(),
+            revision: Revision::default(),
         }
+    }
+
+    /// The record's current revision.
+    pub fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    fn changed(&mut self) {
+        self.revision.0 += 1;
     }
 
     /// The figure's edge: a candidate not wholly inside it meets the edge.
     pub fn with_bounds(mut self, bounds: Rect) -> Self {
         self.bounds = Some(bounds);
+        self.changed();
         self
     }
 
@@ -361,6 +395,7 @@ impl Record {
 
     /// The tables, to change a row or a number.
     pub fn rules_mut(&mut self) -> &mut Rules {
+        self.changed();
         &mut self.rules
     }
 
@@ -376,6 +411,7 @@ impl Record {
     /// or not they are entered yet). A later declaration for the same pair
     /// replaces an earlier one.
     pub fn declare(&mut self, a: Id, b: Id, relation: Relation) {
+        self.changed();
         self.declared
             .retain(|(x, y, _)| !((x == &a && y == &b) || (x == &b && y == &a)));
         self.declared.push((a, b, relation));
@@ -387,6 +423,7 @@ impl Record {
     /// diagram spacing, and is not flagged as squeezed (semantics C6). A
     /// later join for the same pair replaces an earlier one.
     pub fn join(&mut self, a: Id, b: Id, gap: TextGap, metrics: TextMetrics) {
+        self.changed();
         self.joined.retain(|j| !j.is(&a, &b));
         self.joined.push(Join { a, b, gap, metrics });
     }
@@ -416,6 +453,7 @@ impl Record {
 
     /// Enters a drawn thing. It is never moved.
     pub fn enter(&mut self, occupant: Occupant) {
+        self.changed();
         self.occupants.push(occupant);
     }
 
@@ -491,12 +529,15 @@ impl Record {
             if gap >= ideal - FIT_EPSILON {
                 continue;
             }
+            let (least, least_row) =
+                spacing.least_between(candidate.kind, occupant.kind, &self.sizes);
             if let Some(index) = covering.row_for(placed, met, own) {
                 let row = &covering.rows[index];
                 if row.verdict == Verdict::MeantToMeet {
                     continue;
                 }
-                if row.near {
+                // Near applies between the least distance and the ideal.
+                if row.near && gap >= least - FIT_EPSILON {
                     findings.push(Finding::Near {
                         against: against(),
                         gap,
@@ -506,8 +547,6 @@ impl Record {
                     continue;
                 }
             }
-            let (least, least_row) =
-                spacing.least_between(candidate.kind, occupant.kind, &self.sizes);
             if gap < least - FIT_EPSILON {
                 findings.push(Finding::BelowLeast {
                     against: against(),
@@ -553,6 +592,7 @@ impl Record {
 
     /// Enters everything placed by a judged set or free place, in order.
     pub fn enter_all(&mut self, occupants: impl IntoIterator<Item = Occupant>) {
+        self.changed();
         self.occupants.extend(occupants);
     }
 
@@ -925,7 +965,7 @@ mod tests {
         assert_eq!(verdict_on(&r, &twenty, "grid-40").0, Verdict::Never);
         // Owned by the line itself, it is that line's value.
         let forty = Occupant {
-            owner: Some(id("grid-40")),
+            owners: vec![id("grid-40")],
             ..twenty
         };
         assert_eq!(
@@ -938,7 +978,7 @@ mod tests {
     fn a_label_on_its_bar_does_not_meet_a_gridline_the_bar_covers() {
         // Review 7, C5: the gridline at y = 50 is drawn beneath the bar.
         let mut r = record();
-        r.enter(hline("grid", Kind::ValueLine, 50.0));
+        r.enter(hline("grid", Kind::ValueLine, 50.0).with_role(Role::gridline()));
         r.enter(bar("bar", Rect::new(100.0, 40.0, 20.0, 100.0)));
         let value = |x: f64, y: f64| {
             Occupant::new(
@@ -969,9 +1009,15 @@ mod tests {
             verdict_on(&r, &value(103.0, 45.0), "series").0,
             Verdict::Never
         );
+        // A comparison line across the bar is drawn over it and is judged.
+        r.enter(hline("target", Kind::ValueLine, 52.0).with_role(Role::comparison()));
+        assert_eq!(
+            verdict_on(&r, &value(103.0, 45.0), "target").0,
+            Verdict::Never
+        );
         // The order of drawing is data: without it the gridline stops it too.
         let mut r = record();
-        r.enter(hline("grid", Kind::ValueLine, 50.0));
+        r.enter(hline("grid", Kind::ValueLine, 50.0).with_role(Role::gridline()));
         r.enter(bar("bar", Rect::new(100.0, 40.0, 20.0, 100.0)));
         r.rules_mut().drawing_order.clear();
         assert_eq!(
@@ -1081,6 +1127,15 @@ mod tests {
                 ..
             }]
         ));
+        // Below the least distance (2.2 px at 11 px) it is rejected like
+        // any other pair: 0.3 px from the line, edge to edge.
+        let touching = connector(Point::new(20.0, 119.2), Point::new(100.0, 119.2));
+        let j = r.judge(&touching);
+        assert!(matches!(
+            j.findings[..],
+            [Finding::BelowLeast { gap, least, .. }] if (gap - 0.3).abs() < 1e-9 && least > 2.0
+        ));
+        assert!(j.rejection_at(Level::AllPermitted).is_some());
         let crossing = connector(Point::new(20.0, 100.0), Point::new(20.0, 140.0));
         assert_eq!(r.judge(&crossing).preference(), Preference::LessPreferred);
         // Its own target does not reject it; another data mark does.
@@ -1097,6 +1152,34 @@ mod tests {
             row_name(&r, row),
             "a connector through a data mark not its target"
         );
+    }
+
+    #[test]
+    fn a_connector_is_the_own_of_its_text_and_its_target() {
+        // Second review, item 4: with one owner one of the two landed on a
+        // Never row.
+        let mut r = record();
+        r.enter(label("comment", Rect::new(100.0, 100.0, 40.0, 11.0)));
+        r.enter(bar("target", Rect::new(130.0, 105.0, 20.0, 100.0)));
+        let arrow = Occupant::new(
+            id("arrow"),
+            Kind::Connector,
+            Ink::segment(Point::new(120.0, 105.0), Point::new(140.0, 105.0), 1.0),
+        )
+        .owned_by(id("comment"))
+        .also_owned_by(id("target"));
+        assert_eq!(arrow.owners, [id("comment"), id("target")]);
+        assert_eq!(arrow.owner(), Some(&id("comment")));
+        let j = r.judge(&arrow);
+        assert_eq!(j.rejection_at(Level::Preferred), None);
+        assert_eq!(
+            j.verdicts().collect::<Vec<_>>(),
+            [Verdict::MeantToMeet, Verdict::MeantToMeet]
+        );
+        // `owned_by` still sets the one owner.
+        let single = arrow.clone().owned_by(id("target"));
+        assert_eq!(single.owners, [id("target")]);
+        assert!(r.judge(&single).rejection_at(Level::Preferred).is_some());
     }
 
     #[test]
