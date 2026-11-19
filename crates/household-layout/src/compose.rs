@@ -55,7 +55,7 @@ use crate::level::Level;
 use crate::order::{Accepts, Order, Resolved, Unsupported};
 
 /// A child, shared so that several arrangements can hold the same box.
-pub type Child<C> = Rc<dyn LayoutBox<C>>;
+pub type Child<'a, C> = Rc<dyn LayoutBox<C> + 'a>;
 
 /// A size with `along` in `direction` and `across` in the other.
 fn size_in(direction: Direction, along: f64, across: f64) -> Size {
@@ -246,8 +246,8 @@ pub enum Align {
 }
 
 /// A child of a row, column or list, with what its parent orders of it.
-pub struct Member<C> {
-    pub child: Child<C>,
+pub struct Member<'a, C> {
+    pub child: Child<'a, C>,
     /// The parent's order for this child, in every kind but the level; a
     /// row or column sets the level itself. A list passes every member
     /// what the list was ordered and ignores this.
@@ -265,8 +265,8 @@ pub struct Member<C> {
     pub grow: f64,
 }
 
-impl<C> Member<C> {
-    pub fn new(child: Child<C>) -> Self {
+impl<'a, C> Member<'a, C> {
+    pub fn new(child: Child<'a, C>) -> Self {
         Self {
             child,
             order: Order::NONE,
@@ -306,7 +306,7 @@ impl<C> Member<C> {
     }
 }
 
-impl<C> Clone for Member<C> {
+impl<C> Clone for Member<'_, C> {
     fn clone(&self) -> Self {
         Self {
             child: Rc::clone(&self.child),
@@ -327,7 +327,7 @@ struct GapAt {
 }
 
 /// A row, a column or a list of immediate children.
-pub struct Stack<C> {
+pub struct Stack<'a, C> {
     id: Id,
     source: Option<Source>,
     maker: Order,
@@ -335,7 +335,7 @@ pub struct Stack<C> {
     direction: Direction,
     /// A list: every member takes the list's own order.
     together: bool,
-    members: Vec<Member<C>>,
+    members: Vec<Member<'a, C>>,
     asked_first: Vec<Id>,
     gaps: Vec<GapAt>,
     squeezed_from: Level,
@@ -345,7 +345,7 @@ pub struct Stack<C> {
     answered: Remembered<Answer>,
 }
 
-impl<C> Stack<C> {
+impl<'a, C> Stack<'a, C> {
     fn new(id: Id, direction: Direction, together: bool) -> Self {
         Self {
             id,
@@ -431,18 +431,18 @@ impl<C> Stack<C> {
         self.direction
     }
 
-    pub fn members(&self) -> &[Member<C>] {
+    pub fn members(&self) -> &[Member<'a, C>] {
         &self.members
     }
 }
 
-impl<C: 'static> Stack<C> {
-    pub fn child(self, child: Child<C>) -> Self {
+impl<'a, C> Stack<'a, C> {
+    pub fn child(self, child: Child<'a, C>) -> Self {
         self.member(Member::new(child))
     }
 
     /// Add a member. What the composition remembered is cleared.
-    pub fn member(mut self, member: Member<C>) -> Self {
+    pub fn member(mut self, member: Member<'a, C>) -> Self {
         self.members.push(member);
         self.name_gaps();
         self.changed()
@@ -460,7 +460,7 @@ impl<C: 'static> Stack<C> {
     /// child. It is named by the children it separates.
     pub fn relaxed_gap(mut self, least: f64, ideal: f64, relaxed: f64) -> Self {
         let index = self.members.len();
-        let placeholder: Child<C> =
+        let placeholder: Child<'a, C> =
             Rc::new(Gap::new(self.id.child("gap"), self.direction, least, ideal));
         self.members.push(Member::new(placeholder));
         self.gaps.push(GapAt {
@@ -562,7 +562,7 @@ fn note(reasons: &mut Vec<Reason>, reason: Reason) {
     }
 }
 
-impl<C> Stack<C> {
+impl<'a, C> Stack<'a, C> {
     fn across(&self) -> Direction {
         self.direction.other()
     }
@@ -1087,7 +1087,7 @@ impl<C> Stack<C> {
     }
 }
 
-impl<C> LayoutBox<C> for Stack<C> {
+impl<C> LayoutBox<C> for Stack<'_, C> {
     fn id(&self) -> &Id {
         &self.id
     }
@@ -1212,20 +1212,20 @@ struct Decision {
 /// arrangements that fit the other direction as offered (B2, second
 /// round), and its preferred and taken sizes are those of the
 /// arrangement it would choose.
-pub struct Arrangements<C> {
+pub struct Arrangements<'a, C> {
     id: Id,
     source: Option<Source>,
     maker: Order,
     accepts: Accepts,
-    options: Vec<Child<C>>,
+    options: Vec<Child<'a, C>>,
     tags: Vec<BTreeMap<String, String>>,
     passes: Vec<Level>,
     asked: Asked,
     answered: Remembered<Answer>,
 }
 
-impl<C> Arrangements<C> {
-    pub fn new(id: Id, options: Vec<Child<C>>) -> Self {
+impl<'a, C> Arrangements<'a, C> {
+    pub fn new(id: Id, options: Vec<Child<'a, C>>) -> Self {
         let tags = vec![BTreeMap::new(); options.len()];
         Self {
             id,
@@ -1462,7 +1462,7 @@ impl<C> Arrangements<C> {
     }
 }
 
-impl<C> LayoutBox<C> for Arrangements<C> {
+impl<C> LayoutBox<C> for Arrangements<'_, C> {
     fn id(&self) -> &Id {
         &self.id
     }
@@ -1748,7 +1748,7 @@ mod tests {
 
     /// The second review's row (item 2): `a` 60 wide, 30 from Mild, and
     /// the text `b`.
-    fn review_row() -> Stack<String> {
+    fn review_row() -> Stack<'static, String> {
         Stack::row(Id::new("row"))
             .child(compact("a", 60.0, 30.0, 20.0))
             .child(Rc::new(ReviewText {
@@ -1774,7 +1774,7 @@ mod tests {
     }
 
     /// Three buttons that go from 50 to 20 wide at Mild, as one list.
-    fn actions() -> Rc<Stack<String>> {
+    fn actions() -> Rc<Stack<'static, String>> {
         Rc::new((1..=3).fold(
             Stack::list(Id::new("actions"), Direction::Across),
             |list, n| list.child(compact(&format!("button{n}"), 50.0, 20.0, 20.0)),
@@ -1898,7 +1898,7 @@ mod tests {
 
     /// A plot that gives from 400 down to 200, beside an axis title of 60
     /// that is abbreviated to 30 from Mild.
-    fn titled_plot() -> Stack<String> {
+    fn titled_plot() -> Stack<'static, String> {
         Stack::row(Id::new("chart"))
             .child(compact("title", 60.0, 30.0, 20.0))
             .member(
@@ -2011,7 +2011,7 @@ mod tests {
         // A list under arrangements, ordered AllPermitted with unlimited
         // room, keeps every member at Preferred; so does a list at the
         // root of a plan.
-        let list: Child<String> = actions();
+        let list: Child<'static, String> = actions();
         let parent = Arrangements::new(Id::new("parent"), vec![Rc::clone(&list)]);
         for plan in [
             lay_out(&parent, &all_permitted(), Size::INFINITE).unwrap(),
@@ -2026,16 +2026,16 @@ mod tests {
     }
 
     /// `a`, a gap and `b` in a row, and the same in a column.
-    fn row_and_column() -> (Child<String>, Child<String>) {
-        let a: Child<String> = fixed("a", 40.0, 10.0);
-        let b: Child<String> = fixed("b", 40.0, 10.0);
-        let row: Child<String> = Rc::new(
+    fn row_and_column() -> (Child<'static, String>, Child<'static, String>) {
+        let a: Child<'static, String> = fixed("a", 40.0, 10.0);
+        let b: Child<'static, String> = fixed("b", 40.0, 10.0);
+        let row: Child<'static, String> = Rc::new(
             Stack::row(Id::new("row"))
                 .child(Rc::clone(&a))
                 .gap(2.0, 10.0)
                 .child(Rc::clone(&b)),
         );
-        let column: Child<String> = Rc::new(
+        let column: Child<'static, String> = Rc::new(
             Stack::column(Id::new("column"))
                 .child(a)
                 .gap(2.0, 10.0)
@@ -2069,19 +2069,19 @@ mod tests {
 
     /// A chart that is `across` (upright) or `up` (turned), with `a` and
     /// `b` 40 by 10.
-    fn upright_or_turned() -> Arrangements<String> {
+    fn upright_or_turned() -> Arrangements<'static, String> {
         let upright = Presentation::default().with("direction", "upright");
         let turned = Presentation::default().with("direction", "turned");
         let both = || Accepts::new(upright.clone(), vec![upright.clone(), turned.clone()]);
-        let (a, b): (Child<String>, Child<String>) =
+        let (a, b): (Child<'static, String>, Child<'static, String>) =
             (fixed("a", 40.0, 10.0), fixed("b", 40.0, 10.0));
-        let across: Child<String> = Rc::new(
+        let across: Child<'static, String> = Rc::new(
             Stack::row(Id::new("across"))
                 .accepting(both())
                 .child(Rc::clone(&a))
                 .child(Rc::clone(&b)),
         );
-        let up: Child<String> = Rc::new(
+        let up: Child<'static, String> = Rc::new(
             Stack::column(Id::new("up"))
                 .accepting(both())
                 .child(a)
@@ -2149,7 +2149,7 @@ mod tests {
 
     /// A column of `w` (120 by 20, and 80 by 30 from Mild) and `f` (50 by
     /// 20).
-    fn w_over_f() -> Stack<String> {
+    fn w_over_f() -> Stack<'static, String> {
         Stack::column(Id::new("inner"))
             .child(w())
             .child(fixed("f", 50.0, 20.0))
@@ -2211,9 +2211,9 @@ mod tests {
         assert_eq!(answer.taken, plan.bounds.size());
         // The same for other boxes, each asked and ordered afresh.
         let (row, column) = row_and_column();
-        let arrangements: Child<String> =
+        let arrangements: Child<'static, String> =
             Rc::new(Arrangements::new(Id::new("parent"), vec![row, column]));
-        type Maker = (Box<dyn Fn() -> Child<String>>, Size);
+        type Maker = (Box<dyn Fn() -> Child<'static, String>>, Size);
         let makers: Vec<Maker> = vec![
             (Box::new(|| Rc::new(review_row())), space),
             (Box::new(|| Rc::new(w_over_f())), Size::new(100.0, 100.0)),
@@ -2288,7 +2288,7 @@ mod tests {
         // Second review, item 1: a row (120 by 20) or a column (60 by 40),
         // in a column offered 200 by 30. The row fits; its least height is
         // the row's, not the column's.
-        let choice: Child<String> = Rc::new(Arrangements::new(
+        let choice: Child<'static, String> = Rc::new(Arrangements::new(
             Id::new("choice"),
             vec![fixed("row", 120.0, 20.0), fixed("column", 60.0, 40.0)],
         ));
@@ -2305,14 +2305,15 @@ mod tests {
 
     #[test]
     fn arrangements_report_each_least_over_the_arrangements_that_fit_the_other_direction() {
-        let (a, b): (Child<String>, Child<String>) =
+        let (a, b): (Child<'static, String>, Child<'static, String>) =
             (fixed("a", 100.0, 20.0), fixed("b", 100.0, 20.0));
-        let row: Child<String> = Rc::new(
+        let row: Child<'static, String> = Rc::new(
             Stack::row(Id::new("row"))
                 .child(Rc::clone(&a))
                 .child(Rc::clone(&b)),
         );
-        let column: Child<String> = Rc::new(Stack::column(Id::new("column")).child(a).child(b));
+        let column: Child<'static, String> =
+            Rc::new(Stack::column(Id::new("column")).child(a).child(b));
         let parent = Arrangements::new(Id::new("parent"), vec![row, column]);
         // Both fit 300 by 50: the least width is the column's, the least
         // height the row's.
@@ -2485,7 +2486,7 @@ mod tests {
 
     #[test]
     fn a_gap_is_named_by_what_it_separates() {
-        let ids = |stack: &Stack<String>| -> Vec<String> {
+        let ids = |stack: &Stack<'static, String>| -> Vec<String> {
             stack
                 .members()
                 .iter()
@@ -2561,7 +2562,11 @@ mod tests {
     }
 
     /// Rows and columns in turn, three children each, `depth` deep.
-    fn tree(depth: usize, path: &str, count: &Rc<std::cell::Cell<usize>>) -> Child<String> {
+    fn tree(
+        depth: usize,
+        path: &str,
+        count: &Rc<std::cell::Cell<usize>>,
+    ) -> Child<'static, String> {
         if depth == 0 {
             return Rc::new(Counted {
                 inner: compact(path, 30.0, 20.0, 10.0),
@@ -2667,14 +2672,15 @@ mod tests {
 
     #[test]
     fn each_arrangement_starts_from_preferred_and_the_first_that_fits_wins() {
-        let a: Child<String> = compact("a", 80.0, 60.0, 20.0);
-        let b: Child<String> = fixed("b", 80.0, 20.0);
-        let row: Child<String> = Rc::new(
+        let a: Child<'static, String> = compact("a", 80.0, 60.0, 20.0);
+        let b: Child<'static, String> = fixed("b", 80.0, 20.0);
+        let row: Child<'static, String> = Rc::new(
             Stack::row(Id::new("row"))
                 .child(Rc::clone(&a))
                 .child(Rc::clone(&b)),
         );
-        let column: Child<String> = Rc::new(Stack::column(Id::new("column")).child(a).child(b));
+        let column: Child<'static, String> =
+            Rc::new(Stack::column(Id::new("column")).child(a).child(b));
         let parent = Arrangements::new(Id::new("parent"), vec![row, column]);
 
         // The row orders `a` up and still does not fit; the column starts
@@ -2801,7 +2807,7 @@ mod tests {
 
     /// A title 30 high (15 from Mild), a gap relaxed at 24 with an ideal of
     /// 12 and a least of 4, and a plot from 200 high down to 150.
-    fn titled_column() -> Stack<String> {
+    fn titled_column() -> Stack<'static, String> {
         let tall =
             |preferred: f64, least: f64| (Size::new(100.0, preferred), Size::new(100.0, least));
         let (title, short) = (tall(30.0, 30.0), tall(15.0, 15.0));
@@ -2902,6 +2908,70 @@ mod tests {
                 detail: "end labels placed beside the lines".to_owned()
             }]
         );
+    }
+
+    /// A measuring service a text box borrows: it measures only what it is
+    /// asked, and counts.
+    struct Measurer {
+        advance: f64,
+        asked: std::cell::Cell<usize>,
+    }
+
+    /// A text that borrows the service rather than measuring every line
+    /// count when it is made.
+    struct Borrowing<'s> {
+        id: Id,
+        text: &'s str,
+        measurer: &'s Measurer,
+        accepts: Accepts,
+    }
+
+    impl LayoutBox<String> for Borrowing<'_> {
+        fn id(&self) -> &Id {
+            &self.id
+        }
+        fn accepts(&self) -> &Accepts {
+            &self.accepts
+        }
+        fn measure(&self, _: &Resolved, space: Size) -> Result<Answer, Unsupported> {
+            self.measurer.asked.set(self.measurer.asked.get() + 1);
+            let size = Size::new(self.text.len() as f64 * self.measurer.advance, 10.0);
+            Ok(Answer::of(&self.id, size, size, space))
+        }
+        fn arrange(
+            &self,
+            orders: &Resolved,
+            at: Point,
+            space: Size,
+        ) -> Result<Node<String>, Unsupported> {
+            Ok(leaf_node(
+                &self.id,
+                orders,
+                at,
+                self.measure(orders, space)?,
+            ))
+        }
+    }
+
+    #[test]
+    fn a_composition_can_hold_children_that_borrow() {
+        let measurer = Measurer {
+            advance: 6.0,
+            asked: std::cell::Cell::new(0),
+        };
+        let text = String::from("Revenue");
+        let title: Child<'_, String> = Rc::new(Borrowing {
+            id: Id::new("title"),
+            text: &text,
+            measurer: &measurer,
+            accepts: Accepts::ordinary(),
+        });
+        let column = Stack::column(Id::new("column"))
+            .child(title)
+            .child(fixed("plot", 100.0, 50.0));
+        let plan = lay_out(&column, &Order::NONE, Size::new(200.0, 100.0)).unwrap();
+        assert_eq!(bounds_of(&plan, "title"), Rect::new(0.0, 0.0, 42.0, 10.0));
+        assert!(measurer.asked.get() > 0);
     }
 
     #[test]
