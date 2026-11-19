@@ -248,10 +248,9 @@ impl Place {
     /// the owner: for the room a pattern needs.
     fn side_for(self, end: Option<Side>) -> Option<(Side, bool)> {
         match self {
-            Self::Beside { on, side } => Some((
-                side,
-                matches!(on, Attach::Edge(e) if e == side.opposite()),
-            )),
+            Self::Beside { on, side } => {
+                Some((side, matches!(on, Attach::Edge(e) if e == side.opposite())))
+            }
             Self::BeyondEnd => end.map(|end| (end, false)),
             Self::InsideEnd => end.map(|end| (end.opposite(), true)),
         }
@@ -697,6 +696,17 @@ mod tests {
     /// Her 11 px text, columns 20 px wide on a 40 px pitch, and the zero
     /// line along their feet.
     fn chart(tops: &[f64]) -> Record {
+        let mut r = bars(tops);
+        r.enter(Occupant::new(
+            Id::new("zero"),
+            Kind::ValueLine,
+            Ink::segment(Point::new(0.0, BASELINE), Point::new(200.0, BASELINE), 1.0),
+        ));
+        r
+    }
+
+    /// The columns alone, with no zero line.
+    fn bars(tops: &[f64]) -> Record {
         let mut r = Record::new(
             Rules::default(),
             Sizes {
@@ -714,11 +724,6 @@ mod tests {
                 Ink::Rect(Rect::new(x, top, 20.0, BASELINE - top)),
             ));
         }
-        r.enter(Occupant::new(
-            Id::new("zero"),
-            Kind::ValueLine,
-            Ink::segment(Point::new(0.0, BASELINE), Point::new(200.0, BASELINE), 1.0),
-        ));
         r
     }
 
@@ -899,5 +904,276 @@ mod tests {
         set.members[0].owner = Id::new("missing");
         let failure = place_set(&mut r, &set, PLOT, Level::Preferred).unwrap_err();
         assert_eq!(failure.stopped[0].reason, Reason::OwnerNotRecorded);
+    }
+
+    // ----- review findings 7, 8, 9 and the interface risk of C9 -----
+
+    const RELATED: f64 = 0.336 * 11.0;
+
+    fn inside_only(count: usize) -> LabelSet {
+        let mut set = value_labels(count);
+        set.patterns.remove(0);
+        set
+    }
+
+    fn gridline(r: &mut Record, name: &str, kind: Kind, y: f64) {
+        r.enter(Occupant::new(
+            Id::new(name),
+            kind,
+            Ink::segment(Point::new(0.0, y), Point::new(200.0, y), 1.0),
+        ));
+    }
+
+    #[test]
+    fn an_inside_label_must_lie_within_its_bar() {
+        // Review 7: an 11 px label inside an 8 px bar hung 6.7 px outside
+        // and was accepted (C2).
+        let mut r = bars(&[192.0]);
+        let failure = place_set(&mut r, &inside_only(1), PLOT, Level::AllPermitted).unwrap_err();
+        let Reason::NotInside { label, within } = failure.stopped[0].reason else {
+            panic!("{failure:?}")
+        };
+        assert!((label.bottom() - BASELINE - 6.696).abs() < 1e-9);
+        // The least distance (2.2 px) from the bar's other edges.
+        assert!((within.bottom() - (BASELINE - 2.2)).abs() < 1e-9);
+        assert!((within.x - 12.2).abs() < 1e-9 && within.y == 192.0);
+        // A bar 18 px tall holds it: 3.696 + 11 + 2.2 < 18.
+        let mut r = bars(&[182.0]);
+        assert!(place_set(&mut r, &inside_only(1), PLOT, Level::Preferred).is_ok());
+        // A bar 16 px tall does not.
+        let mut r = bars(&[184.0]);
+        assert!(place_set(&mut r, &inside_only(1), PLOT, Level::Preferred).is_err());
+    }
+
+    #[test]
+    fn a_label_inside_its_bar_crosses_only_gridlines_the_bar_covers() {
+        // Review 7, C5: a value label inside its bar at a gridline's height
+        // was rejected. The gridline at 110 runs under b0 (top 100) and b1.
+        let mut r = chart(&[100.0, 60.0, 120.0]);
+        gridline(&mut r, "grid-110", Kind::ValueLine, 110.0);
+        let placed = judge_set(&r, &inside_only(3), PLOT, Level::Preferred).unwrap();
+        assert_eq!(placed.labels[0].rect.y, 100.0 + RELATED);
+        assert_eq!(placed.preference, Preference::InOrder);
+        // A series' line is not drawn beneath the bars: it stops the set.
+        gridline(&mut r, "series", Kind::DataLine, 108.0);
+        let failure = judge_set(&r, &inside_only(3), PLOT, Level::Preferred).unwrap_err();
+        assert!(matches!(
+            &failure.stopped[0],
+            Stopped {
+                member,
+                reason: Reason::Rejected(Finding::Meets {
+                    against: Against::Occupant(on),
+                    verdict: Verdict::Never,
+                    ..
+                }),
+                ..
+            } if member.as_str() == "b0/value" && on.as_str() == "series"
+        ));
+    }
+
+    /// Notes beyond the end of b0 (top 100) cross a gridline at 90; beside
+    /// the bar they stand clear.
+    fn notes_with_gridline_and_side(reading_path: bool) -> (Record, LabelSet) {
+        let mut r = chart(&[100.0]);
+        gridline(&mut r, "grid-90", Kind::ValueLine, 90.0);
+        if reading_path {
+            r.enter(Occupant::new(
+                Id::new("path"),
+                Kind::ReadingPath,
+                Ink::Rect(Rect::new(30.0, 0.0, 170.0, 220.0)),
+            ));
+        }
+        let mut set = value_labels(1);
+        set.kind = Kind::Words;
+        set.patterns[1] = Pattern::new(
+            "beside the bar",
+            Attach::Whole,
+            Side::Right,
+            Alignment::Center,
+        );
+        (r, set)
+    }
+
+    #[test]
+    fn a_pattern_that_needs_a_halo_waits_behind_a_clean_one() {
+        // Review 8, C3: "move first ... else a halo" counted as an ordinary
+        // place, so a pattern needing a halo beat a later clean one.
+        let (r, set) = notes_with_gridline_and_side(false);
+        let placed = judge_set(&r, &set, PLOT, Level::Preferred).unwrap();
+        assert_eq!(
+            (placed.pattern, placed.preference),
+            (1, Preference::InOrder)
+        );
+        // It still comes before a place last in order.
+        let (r, set) = notes_with_gridline_and_side(true);
+        let placed = judge_set(&r, &set, PLOT, Level::Preferred).unwrap();
+        assert_eq!(
+            (placed.pattern, placed.preference),
+            (0, Preference::ElseHalo)
+        );
+        assert_eq!(
+            placed.labels[0].judgement.verdicts().collect::<Vec<_>>(),
+            [Verdict::MoveFirstElseHalo]
+        );
+    }
+
+    /// Bars above and below a zero line at 100.
+    fn both_ways() -> (Record, LabelSet) {
+        let mut r = bars(&[]);
+        r.enter(Occupant::new(
+            Id::new("up"),
+            Kind::DataMark,
+            Ink::Rect(Rect::new(10.0, 60.0, 20.0, 40.0)),
+        ));
+        r.enter(Occupant::new(
+            Id::new("down"),
+            Kind::DataMark,
+            Ink::Rect(Rect::new(50.0, 100.0, 20.0, 40.0)),
+        ));
+        gridline(&mut r, "zero", Kind::ValueLine, 100.0);
+        let member = |owner: &str, end| {
+            Member::new(Id::new(format!("{owner}/value")), Id::new(owner), LABEL).pointing(end)
+        };
+        let set = LabelSet {
+            id: Id::new("values"),
+            kind: Kind::Number,
+            role: None,
+            members: vec![member("up", Side::Above), member("down", Side::Below)],
+            patterns: vec![
+                Pattern::beyond_end("beyond the end", Alignment::Center),
+                Pattern::inside_end("inside the end", Alignment::Center),
+            ],
+        };
+        (r, set)
+    }
+
+    #[test]
+    fn bars_above_and_below_zero_share_one_pattern() {
+        // Review 9, C4.
+        let (r, set) = both_ways();
+        let placed = judge_set(&r, &set, PLOT, Level::Preferred).unwrap();
+        assert_eq!(placed.pattern, 0);
+        let rects: Vec<_> = placed.labels.iter().map(|l| l.rect).collect();
+        assert_eq!(
+            rects,
+            [
+                Rect::new(13.0, 60.0 - RELATED - 11.0, 14.0, 11.0),
+                Rect::new(53.0, 140.0 + RELATED, 14.0, 11.0),
+            ]
+        );
+        let mut set = set;
+        set.patterns.remove(0);
+        let placed = judge_set(&r, &set, PLOT, Level::Preferred).unwrap();
+        let ys: Vec<_> = placed.labels.iter().map(|l| l.rect.y).collect();
+        assert_eq!(ys, [60.0 + RELATED, 140.0 - RELATED - 11.0]);
+        // A member that does not say which way it points stops the pattern.
+        set.members[1].end = None;
+        let failure = judge_set(&r, &set, PLOT, Level::Preferred).unwrap_err();
+        assert_eq!(failure.stopped[0].reason, Reason::NoEnd);
+    }
+
+    #[test]
+    fn an_end_label_anchors_on_its_lines_end() {
+        // Review 9: an end label anchored on the line's bounding box, so it
+        // stood level with the middle of a rising line.
+        let mut r = bars(&[]);
+        r.enter(Occupant::new(
+            Id::new("series"),
+            Kind::DataLine,
+            Ink::segment(Point::new(0.0, 150.0), Point::new(150.0, 50.0), 2.0),
+        ));
+        let set = LabelSet {
+            id: Id::new("ends"),
+            kind: Kind::Words,
+            role: None,
+            members: vec![
+                Member::new(
+                    Id::new("series/name"),
+                    Id::new("series"),
+                    Size::new(30.0, 11.0),
+                )
+                .pointing(Side::Right),
+            ],
+            patterns: vec![Pattern::beyond_end("at the end", Alignment::Center)],
+        };
+        let placed = judge_set(&r, &set, PLOT, Level::Preferred).unwrap();
+        let rect = placed.labels[0].rect;
+        assert_eq!(rect, Rect::new(151.0 + RELATED, 44.5, 30.0, 11.0));
+        assert_eq!(placed.labels[0].judgement.findings, []);
+    }
+
+    #[test]
+    fn judging_a_set_leaves_the_record_unchanged() {
+        // Interface risk, C9: place_set changed the record.
+        let r = {
+            let mut r = chart(&[100.0, 60.0, 120.0]);
+            note_over_b1(&mut r);
+            r
+        };
+        let before: Vec<_> = r.occupants().to_vec();
+        let judged = judge_set(&r, &value_labels(3), PLOT, Level::Preferred).unwrap();
+        assert_eq!(judged.pattern, 1);
+        assert_eq!(r.occupants(), &before[..]);
+        // Entering is the separate step, and place_set does both.
+        let mut entered = r.clone();
+        enter_set(&mut entered, &judged);
+        let mut placed_into = r.clone();
+        let placed = place_set(&mut placed_into, &value_labels(3), PLOT, Level::Preferred).unwrap();
+        assert_eq!(placed, judged);
+        assert_eq!(entered.occupants(), placed_into.occupants());
+        assert_eq!(entered.occupants().len(), before.len() + 3);
+        // Later members are judged against earlier ones before any enters.
+        let mut crowded = value_labels(2);
+        crowded.members[1].owner = Id::new("b0");
+        let failure = judge_set(&r, &crowded, PLOT, Level::Preferred).unwrap_err();
+        assert!(matches!(
+            &failure.stopped[0].reason,
+            Reason::Rejected(Finding::Meets { against: Against::Occupant(on), .. })
+                if on.as_str() == "b0/value"
+        ));
+    }
+
+    #[test]
+    fn the_room_a_pattern_needs_is_known_before_anything_is_placed() {
+        // Interface risk, C9: no pure query for the room a pattern needs.
+        let rules = Rules::default();
+        let sizes = Sizes {
+            label_size: 11.0,
+            word_space: 3.7,
+            line_width: 1.0,
+        };
+        let (_, set) = both_ways();
+        assert_eq!(
+            room_needed(&set, 0, &rules, &sizes).unwrap(),
+            Room {
+                above: RELATED + 11.0,
+                below: RELATED + 11.0,
+                ..Room::default()
+            }
+        );
+        assert_eq!(
+            room_needed(&set, 1, &rules, &sizes).unwrap(),
+            Room::default()
+        );
+        let mut beside = value_labels(2);
+        beside.patterns[0] = Pattern::new("right", Attach::Whole, Side::Right, Alignment::Center)
+            .gap(Gap::Unrelated);
+        assert_eq!(
+            room_needed(&beside, 0, &rules, &sizes).unwrap(),
+            Room {
+                right: 0.66 * 11.0 + 14.0,
+                ..Room::default()
+            }
+        );
+        assert_eq!(
+            room_needed(&beside, 1, &rules, &sizes).unwrap(),
+            Room::default()
+        );
+        let (_, mut set) = both_ways();
+        set.members[0].end = None;
+        assert_eq!(
+            room_needed(&set, 0, &rules, &sizes).unwrap_err().reason,
+            Reason::NoEnd
+        );
     }
 }

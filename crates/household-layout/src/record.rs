@@ -469,7 +469,11 @@ impl Record {
             if !candidate.kind.is_ink() || !occupant.kind.is_ink() {
                 continue;
             }
-            if let Some(join) = self.joined.iter().find(|j| j.is(&candidate.id, &occupant.id)) {
+            if let Some(join) = self
+                .joined
+                .iter()
+                .find(|j| j.is(&candidate.id, &occupant.id))
+            {
                 let least = self.rules.distances.text.distance(join.gap, &join.metrics);
                 if gap < least - FIT_EPSILON {
                     findings.push(Finding::BelowLeast {
@@ -937,8 +941,12 @@ mod tests {
         r.enter(hline("grid", Kind::ValueLine, 50.0));
         r.enter(bar("bar", Rect::new(100.0, 40.0, 20.0, 100.0)));
         let value = |x: f64, y: f64| {
-            Occupant::new(id("v"), Kind::Number, Ink::Rect(Rect::new(x, y, 14.0, 11.0)))
-                .owned_by(id("bar"))
+            Occupant::new(
+                id("v"),
+                Kind::Number,
+                Ink::Rect(Rect::new(x, y, 14.0, 11.0)),
+            )
+            .owned_by(id("bar"))
         };
         let inside = r.judge(&value(103.0, 45.0));
         assert_eq!(inside.rejection_at(Level::Preferred), None);
@@ -957,13 +965,19 @@ mod tests {
         assert_eq!(row_name(&r, row), "a number in a value line not its own");
         // A data line is not drawn beneath the bar: it stops the label.
         r.enter(hline("series", Kind::DataLine, 48.0));
-        assert_eq!(verdict_on(&r, &value(103.0, 45.0), "series").0, Verdict::Never);
+        assert_eq!(
+            verdict_on(&r, &value(103.0, 45.0), "series").0,
+            Verdict::Never
+        );
         // The order of drawing is data: without it the gridline stops it too.
         let mut r = record();
         r.enter(hline("grid", Kind::ValueLine, 50.0));
         r.enter(bar("bar", Rect::new(100.0, 40.0, 20.0, 100.0)));
         r.rules_mut().drawing_order.clear();
-        assert_eq!(verdict_on(&r, &value(103.0, 45.0), "grid").0, Verdict::Never);
+        assert_eq!(
+            verdict_on(&r, &value(103.0, 45.0), "grid").0,
+            Verdict::Never
+        );
     }
 
     #[test]
@@ -1075,8 +1089,8 @@ mod tests {
         let j = r.judge(&to_target);
         assert_eq!(j.rejection_at(Level::Preferred), None);
         assert_eq!(j.verdicts().collect::<Vec<_>>(), [Verdict::MeantToMeet]);
-        let through = connector(Point::new(140.0, 160.0), Point::new(210.0, 160.0))
-            .owned_by(id("target"));
+        let through =
+            connector(Point::new(140.0, 160.0), Point::new(210.0, 160.0)).owned_by(id("target"));
         let (verdict, row) = verdict_on(&r, &through, "other");
         assert_eq!(verdict, Verdict::Never);
         assert_eq!(

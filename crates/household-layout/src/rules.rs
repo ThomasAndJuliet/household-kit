@@ -42,10 +42,14 @@ impl Default for Rules {
 
 impl Rules {
     /// Whether `lower` is drawn beneath `upper` by the order of drawing.
-    pub fn drawn_beneath(&self, lower: (Kind, Option<&Role>), upper: (Kind, Option<&Role>)) -> bool {
-        self.drawing_order.iter().any(|row| {
-            row.beneath.matches(lower.0, lower.1) && row.above.matches(upper.0, upper.1)
-        })
+    pub fn drawn_beneath(
+        &self,
+        lower: (Kind, Option<&Role>),
+        upper: (Kind, Option<&Role>),
+    ) -> bool {
+        self.drawing_order
+            .iter()
+            .any(|row| row.beneath.matches(lower.0, lower.1) && row.above.matches(upper.0, upper.1))
     }
 }
 
@@ -780,6 +784,45 @@ mod tests {
         .collect();
         assert_eq!(rejecting, [Verdict::Never]);
         assert!(Verdict::LastInOrder.preference() > Verdict::LessPreferred.preference());
+    }
+
+    #[test]
+    fn a_halo_one_could_move_from_comes_after_clean_places_and_before_less_preferred() {
+        let order = [
+            Verdict::Allowed,
+            Verdict::AllowedWithHalo,
+            Verdict::MoveFirstElseHalo,
+            Verdict::LessPreferred,
+            Verdict::LastInOrder,
+        ]
+        .map(Verdict::preference);
+        assert_eq!(
+            order,
+            [
+                Preference::InOrder,
+                Preference::InOrder,
+                Preference::ElseHalo,
+                Preference::LessPreferred,
+                Preference::LastInOrder,
+            ]
+        );
+    }
+
+    #[test]
+    fn the_default_rules_draw_value_lines_beneath_data_marks_and_squeeze_from_strong() {
+        let rules = Rules::default();
+        assert_eq!(rules.squeeze_from, Level::Strong);
+        assert!(rules.drawn_beneath((Kind::ValueLine, None), (Kind::DataMark, None)));
+        assert!(!rules.drawn_beneath((Kind::DataLine, None), (Kind::DataMark, None)));
+        assert!(!rules.drawn_beneath((Kind::DataMark, None), (Kind::ValueLine, None)));
+        let near: Vec<_> = rules
+            .covering
+            .rows
+            .iter()
+            .filter(|row| row.near)
+            .map(|row| row.name.as_str())
+            .collect();
+        assert_eq!(near, ["a connector along or close to a data line"]);
     }
 
     #[test]
