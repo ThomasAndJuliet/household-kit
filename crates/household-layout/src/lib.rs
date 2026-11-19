@@ -24,10 +24,19 @@
 //! - [`rules`]: the distance table and the covering table, as data.
 //! - [`record`]: the record of occupied space, and what it answers.
 //! - [`labels`]: anchors, ordered places, and sets placed by pattern.
+//! - [`engine`]: the apps' layout engine (household-widgets' `layout.rs`),
+//!   ported as it is, with leaves the caller measures in place of widgets.
+//!
+//! Juliet's decision of 19 November 2026 is to work within that engine
+//! before assuming an extension: [`engine`] is the same engine, with the
+//! same names, so that a chart lays out as a window does. It adds only an
+//! identity on children and plan nodes, what failed at each stage when
+//! nothing fits, and a child's report of what its form does not show.
 
 pub mod allocate;
 pub mod boxes;
 pub mod compose;
+pub mod engine;
 pub mod geometry;
 pub mod identity;
 pub mod kinds;
