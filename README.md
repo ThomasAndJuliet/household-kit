@@ -131,7 +131,7 @@ CI (`.github/workflows/ci.yml`) runs those in its `check` job, and in a second j
 
 ## Licence
 
-No licence has been chosen yet, so no one has permission to use, copy or change this code. The household-ui reference files the code comes from are GPL-3.0-only, and the AI-usage applet is MPL-2.0. A licence file must be added before this repository is made public.
+The kit is GPL-3.0-only (`LICENSE`). Each crate's `Cargo.toml` names its licence: `household-tones` is `GPL-3.0-only AND AGPL-3.0-only`, because its APCA port keeps apca-w3's AGPL notice; `household-widgets` is GPL-3.0-only.
 
 ## Open questions
 
