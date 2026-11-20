@@ -219,8 +219,8 @@ fn shared_settings_alignment_finds_wrapped_caption_and_preserves_the_row_box() {
 fn allocated_fill_label_occupies_its_width_and_keeps_the_declared_useful_floor() {
     let renderer = renderer();
     let row = settings_row();
-    let label = match &row.kind {
-        Kind::Composition(composition) => composition.children[0].clone(),
+    let label = match row.kind() {
+        Kind::Composition(composition) => Child::from_part(composition.children()[0].clone()),
         Kind::Leaf(_) | Kind::Frame(_) | Kind::Forms(_) => {
             unreachable!("a settings row is a composition")
         }

@@ -32,7 +32,7 @@ impl WidthCapacity {
     /// preferred width". A weight says how fast a part gives width up in a
     /// shortage, and a part that gives none up offers its preferred width as
     /// its minimum. Every place that needs that width asks here: what
-    /// `allocate_width` requires, and, in household-widgets' layout, the
+    /// `allocate_width` requires, and, in planning, the
     /// minimum width a composition and a frame measure
     /// (`Composition::measure`, `Frame::measure`), and the floor by which a
     /// row and a wrap check and pack their children (`Composition::plan_row`,

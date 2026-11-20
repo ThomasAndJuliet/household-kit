@@ -445,10 +445,10 @@ fn a_forms_familys_own_adjustments_leave_the_node_its_form_reported_on() {
         // wrappers hold the family as it was.
         let mut node = &plan.children[1].geometry;
         let mut family = &family;
-        if matches!(wrapped.kind, Kind::Forms(_)) {
+        if matches!(wrapped.kind(), Kind::Forms(_)) {
             family = &wrapped;
         } else {
-            assert!(matches!(wrapped.kind, Kind::Composition(_)));
+            assert!(matches!(wrapped.kind(), Kind::Composition(_)));
             node = &node.children[0].geometry;
         }
         assert_eq!([node.size.width, node.size.height], form_size);

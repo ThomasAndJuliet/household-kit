@@ -20,6 +20,9 @@ impl Size {
     /// No width and no height.
     pub const ZERO: Self = Self::new(0.0, 0.0);
 
+    /// Unbounded in both dimensions: room without a limit.
+    pub const INFINITE: Self = Self::new(f32::INFINITY, f32::INFINITY);
+
     pub const fn new(width: f32, height: f32) -> Self {
         Self { width, height }
     }
@@ -30,6 +33,12 @@ impl Size {
 pub struct Point {
     pub x: f32,
     pub y: f32,
+}
+
+impl Point {
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
 }
 
 /// Preferred and useful minimum geometry of a component at one exact level.

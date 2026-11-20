@@ -208,7 +208,7 @@ fn a_bad_number_is_kept_and_a_later_good_one_does_not_clear_the_mark() {
     let renderer = renderer();
     let bad = ok().weight(f32::NAN);
     assert!(
-        bad.weight.is_nan(),
+        bad.part.sharing().weight.is_nan(),
         "the number given is kept, not replaced"
     );
     let later = bad.weight(1.0).hidden_when(|_| false).round_width_up();
