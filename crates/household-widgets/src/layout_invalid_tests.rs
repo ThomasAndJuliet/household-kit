@@ -11,6 +11,11 @@
 //! measurement was replaced, in bounded and in unbounded room. A stage that
 //! holds one does not fit, so the next stage is taken, or the fallback. Where
 //! an invalid child is hidden, it takes no part and the rest lays out.
+//!
+//! The engine's own "this must be so here" holds by construction: forms
+//! always have a form to select, a wrap packs into the row it is filling,
+//! a leaf given a plan made for another kind of child refuses the stage,
+//! and the responsive widget given a layout without its child does nothing.
 
 use super::*;
 use cosmic::iced::advanced::renderer::Headless;
@@ -331,4 +336,122 @@ fn a_presentation_family_counts_a_missing_default_as_supported() {
     );
     let listed = PresentationFamily::new(normal, vec![emphasised, normal]);
     assert_eq!(listed.supported(), &[emphasised, normal], "nothing added");
+}
+
+#[test]
+fn forms_with_one_form_select_it_at_every_level() {
+    let renderer = renderer();
+    let family = forms(vec![(Level::Preferred, ok())]);
+    for level in Level::ALL {
+        for room in rooms() {
+            assert_eq!(
+                family
+                    .query_at(level, &renderer, room)
+                    .map(|plan| plan.size),
+                Ok(Size::new(40.0, 20.0)),
+                "{level:?} in {room:?}"
+            );
+        }
+    }
+}
+
+/// The children's indices in each row of a wrap of `count` 40 × 20 leaves
+/// with spacing 4, planned `width` wide, and the wrap's size.
+fn wrapped(count: usize, width: f32) -> Result<(Vec<Vec<usize>>, Size), AllocationError> {
+    let wrap = wrap_child((0..count).map(|_| ok()).collect(), 4.0);
+    let plan = wrap.query_at(Level::Preferred, &renderer(), Size::new(width, 300.0))?;
+    let rows = plan
+        .rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .filter_map(|i| plan.children.get(*i).map(|placed| placed.index))
+                .collect()
+        })
+        .collect();
+    Ok((rows, plan.size))
+}
+
+#[test]
+fn a_wrap_packs_none_one_and_one_child_per_row() {
+    let renderer = renderer();
+    // With no children a wrap is hidden: it takes no part.
+    let empty: Child<'_, ()> = wrap_child(Vec::new(), 4.0);
+    for room in rooms() {
+        assert!(
+            empty
+                .query_at(Level::Preferred, &renderer, room)
+                .is_ok_and(|plan| plan.hidden)
+        );
+    }
+    assert_eq!(
+        wrapped(1, 300.0),
+        Ok((vec![vec![0]], Size::new(40.0, 20.0)))
+    );
+    assert_eq!(
+        wrapped(3, 300.0),
+        Ok((vec![vec![0, 1, 2]], Size::new(128.0, 20.0)))
+    );
+    // 40 + 4 + 40 does not fit in 50: each child needs a row of its own.
+    assert_eq!(
+        wrapped(3, 50.0),
+        Ok((vec![vec![0], vec![1], vec![2]], Size::new(40.0, 68.0)))
+    );
+    assert_eq!(
+        wrapped(3, 84.0),
+        Ok((vec![vec![0, 1], vec![2]], Size::new(84.0, 44.0)))
+    );
+}
+
+#[test]
+fn a_leaf_given_a_plan_without_its_native_size_renders_nothing_and_refuses_the_stage() {
+    let renderer = renderer();
+    let room = layout::Limits::new(Size::ZERO, Size::new(300.0, 300.0));
+    let leaf = ok();
+    let commit = |plan: &GeometryPlan| {
+        let agreement = Rc::new(Cell::new(true));
+        let mut content = leaf.render(Level::Preferred, plan, agreement.clone());
+        let mut tree = Tree::new(content.as_widget());
+        let node = content.as_widget_mut().layout(&mut tree, &renderer, &room);
+        (agreement.get(), node.size())
+    };
+    let own = leaf
+        .query_at(Level::Preferred, &renderer, Size::new(300.0, 300.0))
+        .expect("the leaf's own plan");
+    assert_eq!(commit(&own), (true, Size::new(40.0, 20.0)));
+    // Bound to this leaf, but made as a composition's plan is: no native size.
+    let foreign = leaf.bind_geometry(Level::Preferred, GeometryPlan::leaf(Size::new(40.0, 20.0)));
+    assert_eq!(commit(&foreign), (false, Size::ZERO));
+}
+
+#[test]
+fn the_responsive_widget_given_a_layout_without_its_child_does_nothing() {
+    let renderer = renderer();
+    let mut widget = stages(vec![Stage::new(Level::Preferred, ok())]);
+    let mut tree = Tree::empty();
+    let room = Size::new(300.0, 300.0);
+    widget.layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, room));
+    let childless = layout::Node::new(room);
+    let viewport = Rectangle::with_size(room);
+    assert_eq!(
+        widget.mouse_interaction(
+            &tree,
+            Layout::new(&childless),
+            mouse::Cursor::Unavailable,
+            &viewport,
+            &renderer,
+        ),
+        mouse::Interaction::None
+    );
+    assert!(
+        widget
+            .overlay(
+                &mut tree,
+                Layout::new(&childless),
+                &renderer,
+                &viewport,
+                Vector::ZERO,
+            )
+            .is_none()
+    );
 }

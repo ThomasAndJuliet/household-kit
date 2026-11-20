@@ -1248,6 +1248,20 @@ impl<'a, Message: 'a> Child<'a, Message> {
             }
             Kind::Frame(frame) => return frame.render(level, plan, agreement, self.grow_height),
             Kind::Leaf(leaf) => {
+                // A leaf's own plan always records the size its view measured
+                // (`plan_width`). A plan without one was made for another kind
+                // of child, so it does not match this leaf: render nothing and
+                // refuse the stage, exactly as `render` does for a plan whose
+                // binding does not match.
+                let Some(expected) = plan.native_size else {
+                    return Element::new(VerifiedBox {
+                        content: widget::space().width(0).height(0).into(),
+                        reports: Vec::new(),
+                        regions: Vec::new(),
+                        binding_matches: false,
+                        agreement,
+                    });
+                };
                 // Laid out as it was planned (`plan_width`): an ordinary leaf
                 // with unbounded height, compressed to its own; a viewport
                 // within the height it was offered.
@@ -1257,7 +1271,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 };
                 let content = Element::new(VerifiedLeaf {
                     content: (leaf.view)(level),
-                    expected: plan.native_size.expect("native leaf measurement"),
+                    expected,
                     maximum: Size::new(plan.size.width, maximum_height),
                     compress_height,
                     agreement,
@@ -1824,7 +1838,11 @@ impl<'a, Message: 'a> Composition<'a, Message> {
         }
         // Pack using useful minima, including zero-weight protection. Each new
         // row gets a fresh allocation from that stage's preferred dimensions.
+        // `row` is the row being filled, with `used` its width so far; it
+        // joins `rows` when the next child does not fit beside it, and after
+        // the last child. A row is never empty in `rows`.
         let mut rows: Vec<Vec<(usize, MeasuredSize)>> = Vec::new();
+        let mut row: Vec<(usize, MeasuredSize)> = Vec::new();
         let mut used = 0.0;
         for (index, measured) in active {
             let child = &self.children[index];
@@ -1839,24 +1857,22 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                     available: width,
                 });
             }
-            let extra = if rows.last().is_some_and(|row| !row.is_empty()) {
-                self.spacing
-            } else {
-                0.0
-            };
-            if self.arrangement == Arrangement::Wrap && used + extra + minimum > width + FIT_EPSILON
+            let extra = if row.is_empty() { 0.0 } else { self.spacing };
+            if self.arrangement == Arrangement::Wrap
+                && !row.is_empty()
+                && used + extra + minimum > width + FIT_EPSILON
             {
-                rows.push(Vec::new());
+                rows.push(std::mem::take(&mut row));
                 used = 0.0;
             }
-            if rows.is_empty() {
-                rows.push(Vec::new());
-            }
-            if !rows.last().unwrap().is_empty() {
+            if !row.is_empty() {
                 used += self.spacing;
             }
             used += minimum;
-            rows.last_mut().unwrap().push((index, measured));
+            row.push((index, measured));
+        }
+        if !row.is_empty() {
+            rows.push(row);
         }
         for row in rows {
             let gap = self.spacing * row.len().saturating_sub(1) as f32;
@@ -2402,12 +2418,15 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        let Some(layout) = child_layout(layout) else {
+            return;
+        };
         self.content.as_widget().draw(
             &tree.children[0],
             renderer,
             theme,
             style,
-            child_layout(layout),
+            layout,
             cursor,
             viewport,
         );
@@ -2424,10 +2443,13 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        let Some(layout) = child_layout(layout) else {
+            return;
+        };
         self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
-            child_layout(layout),
+            layout,
             cursor,
             renderer,
             clipboard,
@@ -2443,12 +2465,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        self.content.as_widget_mut().operate(
-            &mut tree.children[0],
-            child_layout(layout),
-            renderer,
-            operation,
-        );
+        let Some(layout) = child_layout(layout) else {
+            return;
+        };
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
     }
 
     fn mouse_interaction(
@@ -2459,9 +2481,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
+        let Some(layout) = child_layout(layout) else {
+            return mouse::Interaction::default();
+        };
         self.content.as_widget().mouse_interaction(
             &tree.children[0],
-            child_layout(layout),
+            layout,
             cursor,
             viewport,
             renderer,
@@ -2476,9 +2501,10 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
+        let layout = child_layout(layout)?;
         self.content.as_widget_mut().overlay(
             &mut tree.children[0],
-            child_layout(layout),
+            layout,
             renderer,
             viewport,
             translation,
@@ -2492,9 +2518,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         renderer: &Renderer,
         destinations: &mut cosmic::iced::advanced::clipboard::DndDestinationRectangles,
     ) {
+        let Some(layout) = child_layout(layout) else {
+            return;
+        };
         self.content.as_widget().drag_destinations(
             &tree.children[0],
-            child_layout(layout),
+            layout,
             renderer,
             destinations,
         );
@@ -2507,18 +2536,27 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
+        let Some(layout) = child_layout(layout) else {
+            return iced_accessibility::A11yTree::default();
+        };
         self.content
             .as_widget()
-            .a11y_nodes(child_layout(layout), &tree.children[0], cursor)
+            .a11y_nodes(layout, &tree.children[0], cursor)
     }
 }
 
-fn child_layout(layout: Layout<'_>) -> Layout<'_> {
+/// The layout of the selected representation (or the fallback): the one
+/// child of the node `ResponsiveLevels::layout` returns. Every layout it
+/// returns has that child. Given a layout without one, which was not made by
+/// this widget's layout, there is nothing of this widget's to draw, update,
+/// operate on or point at there, so each caller does nothing and answers
+/// with the neutral value (no interaction, no overlay, no accessibility
+/// nodes), as the engine renders nothing for a plan that does not match.
+fn child_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
     layout
         .children()
         .next()
-        .expect("responsive representation was laid out")
-        .with_virtual_offset(layout.virtual_offset())
+        .map(|child| child.with_virtual_offset(layout.virtual_offset()))
 }
 
 impl<'a, Message: 'a> From<ResponsiveLevels<'a, Message>> for Element<'a, Message> {
