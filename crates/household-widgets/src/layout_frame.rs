@@ -110,7 +110,15 @@ impl<'a, Message: 'a> Frame<'a, Message> {
         agreement: Rc<Cell<bool>>,
         grow_height: f32,
     ) -> Element<'a, Message> {
-        let inner = &plan.children[0].geometry;
+        // A frame's own plan places its content first (`plan`); a plan
+        // without a placement was made for another kind of child, and the
+        // frame refuses it as a leaf does a plan without its native size.
+        let Some(Placement {
+            geometry: inner, ..
+        }) = plan.children.first()
+        else {
+            return refused(agreement);
+        };
         let mut content = self.content.clone();
         if grow_height > 0.0 {
             content.grow_height = grow_height;

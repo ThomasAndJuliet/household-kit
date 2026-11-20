@@ -163,26 +163,29 @@ pub fn allocate_width(
         })
         .collect();
     let mut shortage = (widths.iter().sum::<f64>() - f64::from(available)).max(0.0);
+    // `widths` and `rates` hold one entry per capacity, in its order: each
+    // pass walks the three together.
     while shortage > 0.0 {
-        let total_rate: f64 = capacities
+        let total_rate: f64 = widths
             .iter()
-            .enumerate()
-            .filter(|(i, capacity)| widths[*i] > f64::from(capacity.minimum))
-            .map(|(i, _)| rates[i])
+            .zip(&rates)
+            .zip(capacities)
+            .filter(|((width, _), capacity)| **width > f64::from(capacity.minimum))
+            .map(|((_, rate), _)| *rate)
             .sum();
         if total_rate == 0.0 {
             break;
         }
         let mut removed = 0.0;
         let mut clamped = false;
-        for (i, capacity) in capacities.iter().enumerate() {
-            let room = widths[i] - f64::from(capacity.minimum);
-            if room <= 0.0 || rates[i] == 0.0 {
+        for ((width, rate), capacity) in widths.iter_mut().zip(&rates).zip(capacities) {
+            let room = *width - f64::from(capacity.minimum);
+            if room <= 0.0 || *rate == 0.0 {
                 continue;
             }
-            let share = shortage * rates[i] / total_rate;
+            let share = shortage * rate / total_rate;
             let reduction = share.min(room);
-            widths[i] -= reduction;
+            *width -= reduction;
             removed += reduction;
             clamped |= share >= room;
         }
@@ -1021,19 +1024,19 @@ impl<'a, Message: 'a> Child<'a, Message> {
         }
         let measured = self.query(level, renderer);
         validate_measurement(measured)?;
-        let widths = allocate_with_growth(
+        let allocated = allocate_one(
             available.width,
-            &[WidthCapacity {
+            WidthCapacity {
                 preferred: measured.preferred.width,
                 minimum: measured.minimum.width,
                 weight: self.weight,
-            }],
-            &[self.grow],
+            },
+            self.grow,
         )?;
         let width = if self.has_composition(level) && available.width.is_finite() {
             available.width
         } else {
-            widths[0]
+            allocated
         };
         self.plan_width(level, renderer, width, available.height)
     }
@@ -1254,13 +1257,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 // refuse the stage, exactly as `render` does for a plan whose
                 // binding does not match.
                 let Some(expected) = plan.native_size else {
-                    return Element::new(VerifiedBox {
-                        content: widget::space().width(0).height(0).into(),
-                        reports: Vec::new(),
-                        regions: Vec::new(),
-                        binding_matches: false,
-                        agreement,
-                    });
+                    return refused(agreement);
                 };
                 // Laid out as it was planned (`plan_width`): an ordinary leaf
                 // with unbounded height, compressed to its own; a viewport
@@ -1283,6 +1280,20 @@ impl<'a, Message: 'a> Child<'a, Message> {
             }
             Kind::Composition(composition) => composition,
         };
+        // A placement's child, rendered in the slot the plan gives it. The
+        // plan was made from this composition, so its placements name its
+        // children and its rows name its placements; one that names nothing
+        // here belongs to another plan, and that part renders nothing and
+        // refuses the stage (`refused`).
+        let place = |placed: &Placement| -> Element<'a, Message> {
+            let Some(child) = composition.children.get(placed.index) else {
+                return refused(agreement.clone());
+            };
+            widget::container(child.render(level, &placed.geometry, agreement.clone()))
+                .width(placed.geometry.size.width)
+                .height(placed.geometry.size.height)
+                .into()
+        };
         // The plan has already omitted hidden forms. Native `with_children`
         // filters zero-sized hints, which would discard valid zero-height
         // horizontal spacers (or zero-width vertical slots). Preserve every
@@ -1291,16 +1302,9 @@ impl<'a, Message: 'a> Child<'a, Message> {
             widget::Row::from_vec(
                 indices
                     .iter()
-                    .map(|i| {
-                        let placed = &plan.children[*i];
-                        widget::container(composition.children[placed.index].render(
-                            level,
-                            &placed.geometry,
-                            agreement.clone(),
-                        ))
-                        .width(placed.geometry.size.width)
-                        .height(placed.geometry.size.height)
-                        .into()
+                    .map(|i| match plan.children.get(*i) {
+                        Some(placed) => place(placed),
+                        None => refused(agreement.clone()),
                     })
                     .collect::<Vec<Element<'a, Message>>>(),
             )
@@ -1325,16 +1329,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
             Arrangement::Column => widget::Column::from_vec(
                 plan.children
                     .iter()
-                    .map(|placed| {
-                        widget::container(composition.children[placed.index].render(
-                            level,
-                            &placed.geometry,
-                            agreement.clone(),
-                        ))
-                        .width(placed.geometry.size.width)
-                        .height(placed.geometry.size.height)
-                        .into()
-                    })
+                    .map(place)
                     .collect::<Vec<Element<'a, Message>>>(),
             )
             .spacing(composition.spacing)
@@ -1498,6 +1493,21 @@ impl<'a, Message: 'a> Child<'a, Message> {
             .push(Adjustment::MinimumWidth(Rc::new(minimum)));
         self
     }
+}
+
+/// What a part renders when the plan it is given does not match it: nothing,
+/// in a box that refuses the stage when it is laid out, as `render` does for
+/// a plan whose binding does not match (`VerifiedBox` with `binding_matches`
+/// false). The stage is rejected, so the next declared stage, or the
+/// fallback, is taken; nothing is laid out at a size the plan did not give.
+fn refused<'a, Message: 'a>(agreement: Rc<Cell<bool>>) -> Element<'a, Message> {
+    Element::new(VerifiedBox {
+        content: widget::space().width(0).height(0).into(),
+        reports: Vec::new(),
+        regions: Vec::new(),
+        binding_matches: false,
+        agreement,
+    })
 }
 
 pub fn child<'a, Message: 'a>(
@@ -1701,6 +1711,21 @@ fn allocate_with_growth(
     Ok(widths)
 }
 
+/// The width allocated to one child alone, by the same rule as to several
+/// (`allocate_with_growth`), which returns one width per capacity. Were it
+/// to return none, the child would have no width, and its plan fails as for
+/// invalid input rather than laying out at a width nobody allocated.
+fn allocate_one(
+    available: f32,
+    capacity: WidthCapacity,
+    grow: f32,
+) -> Result<f32, AllocationError> {
+    allocate_with_growth(available, &[capacity], &[grow])?
+        .first()
+        .copied()
+        .ok_or(AllocationError::InvalidInput)
+}
+
 impl<'a, Message: 'a> Composition<'a, Message> {
     fn measure(&self, level: Level, renderer: &Renderer) -> MeasuredSize {
         let measured: Vec<_> = self
@@ -1762,20 +1787,22 @@ impl<'a, Message: 'a> Composition<'a, Message> {
         width: f32,
         height: f32,
     ) -> Result<GeometryPlan, AllocationError> {
+        // Each visible child is carried with its index among the declared
+        // children (which its placement records) and its measurement.
         let active: Vec<_> = self
             .children
             .iter()
             .enumerate()
             .filter(|(_, child)| !child.is_hidden(level))
-            .map(|(index, child)| (index, child.query(level, renderer)))
+            .map(|(index, child)| (index, child, child.query(level, renderer)))
             .collect();
-        for (_, size) in &active {
+        for (_, _, size) in &active {
             validate_measurement(*size)?;
         }
-        let capacity = |index: usize, measured: MeasuredSize| WidthCapacity {
+        let capacity = |child: &Child<'a, Message>, measured: MeasuredSize| WidthCapacity {
             preferred: measured.preferred.width,
             minimum: measured.minimum.width,
-            weight: self.children[index].weight,
+            weight: child.weight,
         };
         let mut result = GeometryPlan::leaf(Size::ZERO);
         if self.arrangement == Arrangement::Column {
@@ -1787,12 +1814,10 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                 });
             }
             let mut proposals = Vec::new();
-            for (index, measured) in active {
-                let child = &self.children[index];
-                let allocated =
-                    allocate_with_growth(width, &[capacity(index, measured)], &[child.grow])?[0];
+            for (index, child, measured) in active {
+                let allocated = allocate_one(width, capacity(child, measured), child.grow)?;
                 let geometry = child.plan_width(level, renderer, allocated, f32::INFINITY)?;
-                proposals.push((index, allocated, geometry));
+                proposals.push((index, child, allocated, geometry));
             }
             // Width-dependent ordinary heights are hard floors. Only explicitly
             // declared viewports (possibly nested) offer vertical capacity
@@ -1801,23 +1826,23 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                 height - gap,
                 &proposals
                     .iter()
-                    .map(|(index, _, plan)| WidthCapacity {
+                    .map(|(_, child, _, plan)| WidthCapacity {
                         preferred: plan.size.height,
                         minimum: plan.minimum_height,
-                        weight: self.children[*index].weight,
+                        weight: child.weight,
                     })
                     .collect::<Vec<_>>(),
                 &proposals
                     .iter()
-                    .map(|(index, _, _)| self.children[*index].grow_height)
+                    .map(|(_, child, _, _)| child.grow_height)
                     .collect::<Vec<_>>(),
             )?;
             result.minimum_height = gap;
-            for ((index, allocated, proposal), allocated_height) in
+            for ((index, child, allocated, proposal), allocated_height) in
                 proposals.into_iter().zip(heights)
             {
                 let geometry = if (allocated_height - proposal.size.height).abs() > FIT_EPSILON {
-                    self.children[index].plan_width(level, renderer, allocated, allocated_height)?
+                    child.plan_width(level, renderer, allocated, allocated_height)?
                 } else {
                     proposal
                 };
@@ -1841,11 +1866,10 @@ impl<'a, Message: 'a> Composition<'a, Message> {
         // `row` is the row being filled, with `used` its width so far; it
         // joins `rows` when the next child does not fit beside it, and after
         // the last child. A row is never empty in `rows`.
-        let mut rows: Vec<Vec<(usize, MeasuredSize)>> = Vec::new();
-        let mut row: Vec<(usize, MeasuredSize)> = Vec::new();
+        let mut rows: Vec<Vec<(usize, &Child<'a, Message>, MeasuredSize)>> = Vec::new();
+        let mut row: Vec<(usize, &Child<'a, Message>, MeasuredSize)> = Vec::new();
         let mut used = 0.0;
-        for (index, measured) in active {
-            let child = &self.children[index];
+        for (index, child, measured) in active {
             let minimum = if child.weight == 0.0 {
                 measured.preferred.width
             } else {
@@ -1869,11 +1893,16 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                 used += self.spacing;
             }
             used += minimum;
-            row.push((index, measured));
+            row.push((index, child, measured));
         }
         if !row.is_empty() {
             rows.push(row);
         }
+        // The child each placement was planned from, in the placements'
+        // order, and each row's height and floor as a capacity: a wrap shares
+        // a shortage of height between its rows with these, below.
+        let mut planned: Vec<&Child<'a, Message>> = Vec::new();
+        let mut row_extents: Vec<WidthCapacity> = Vec::new();
         for row in rows {
             let gap = self.spacing * row.len().saturating_sub(1) as f32;
             if gap > width {
@@ -1884,19 +1913,16 @@ impl<'a, Message: 'a> Composition<'a, Message> {
             }
             let capacities: Vec<_> = row
                 .iter()
-                .map(|(index, measured)| capacity(*index, *measured))
+                .map(|(_, child, measured)| capacity(child, *measured))
                 .collect();
-            let grows: Vec<_> = row
-                .iter()
-                .map(|(index, _)| self.children[*index].grow)
-                .collect();
+            let grows: Vec<_> = row.iter().map(|(_, child, _)| child.grow).collect();
             let widths = allocate_with_growth(width - gap, &capacities, &grows)?;
             let start = result.children.len();
             let mut row_width = 0.0;
             let mut row_height: f32 = 0.0;
             let mut row_minimum_height: f32 = 0.0;
-            for ((index, _), allocated) in row.into_iter().zip(widths) {
-                let geometry = self.children[index].plan_width(
+            for ((index, child, _), allocated) in row.into_iter().zip(widths) {
+                let geometry = child.plan_width(
                     level,
                     renderer,
                     allocated,
@@ -1918,12 +1944,19 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                     position,
                     geometry,
                 });
+                planned.push(child);
             }
-            for placed in &mut result.children[start..] {
+            // The row's placements are the ones pushed since `start`.
+            for placed in result.children.iter_mut().skip(start) {
                 if !self.top_aligned {
                     placed.position.y += (row_height - placed.geometry.size.height) / 2.0;
                 }
             }
+            row_extents.push(WidthCapacity {
+                preferred: row_height,
+                minimum: row_minimum_height,
+                weight: 1.0,
+            });
             result.rows.push((start..result.children.len()).collect());
             result.size.width = result.size.width.max(row_width);
             result.size.height += row_height + self.spacing;
@@ -1943,29 +1976,21 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                     available: height,
                 });
             }
-            let capacities: Vec<_> = result
-                .rows
-                .iter()
-                .map(|row| WidthCapacity {
-                    preferred: row
-                        .iter()
-                        .map(|i| result.children[*i].geometry.size.height)
-                        .fold(0.0, f32::max),
-                    minimum: row
-                        .iter()
-                        .map(|i| result.children[*i].geometry.minimum_height)
-                        .fold(0.0, f32::max),
-                    weight: 1.0,
-                })
-                .collect();
+            // Each row offers its height (its tallest placement's) down to its
+            // floor (its highest placement floor), as recorded while the row
+            // was planned (`row_extents`); no placement's geometry has
+            // changed since.
             let heights =
-                allocate_with_growth(height - gap, &capacities, &vec![0.0; capacities.len()])?;
+                allocate_with_growth(height - gap, &row_extents, &vec![0.0; row_extents.len()])?;
             let mut y = 0.0;
+            // The rows are consecutive runs of the placements, in order, so
+            // each row takes the next placements, as many as it holds, with
+            // the children they were planned from.
+            let mut placements = result.children.iter_mut().zip(planned);
             for (row, row_height) in result.rows.iter().zip(heights) {
-                for i in row {
-                    let placed = &mut result.children[*i];
+                for (placed, child) in placements.by_ref().take(row.len()) {
                     if placed.geometry.size.height > row_height + FIT_EPSILON {
-                        placed.geometry = self.children[placed.index].plan_width(
+                        placed.geometry = child.plan_width(
                             level,
                             renderer,
                             placed.geometry.size.width,
@@ -2132,10 +2157,13 @@ impl<Message> Widget<Message, Theme, Renderer> for VerifiedDecoration<'_, Messag
                 Size::new(true, true),
             )
         };
+        let Some(content) = tree.children.first_mut() else {
+            return refused_node(&self.agreement);
+        };
         let node = self
             .content
             .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, &limits);
+            .layout(content, renderer, &limits);
         if !finite_size(node.size())
             || (node.size().width - self.expected.width).abs() > FIT_EPSILON
             || (node.size().height - self.expected.height).abs() > FIT_EPSILON
@@ -2151,9 +2179,10 @@ impl<Message> Widget<Message, Theme, Renderer> for VerifiedDecoration<'_, Messag
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        self.content
-            .as_widget()
-            .a11y_nodes(layout, &tree.children[0], cursor)
+        let Some(content) = tree.children.first() else {
+            return iced_accessibility::A11yTree::default();
+        };
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
 }
 
@@ -2167,8 +2196,11 @@ struct VerifiedLeaf<'a, Message> {
 impl<Message> Widget<Message, Theme, Renderer> for VerifiedLeaf<'_, Message> {
     forward_widget!(Message, Theme, Renderer; children, diff, size, draw, update, operate, mouse_interaction, overlay, drag_destinations);
     fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, _: &layout::Limits) -> layout::Node {
+        let Some(content) = tree.children.first_mut() else {
+            return refused_node(&self.agreement);
+        };
         let node = self.content.as_widget_mut().layout(
-            &mut tree.children[0],
+            content,
             renderer,
             &layout::Limits::with_compression(
                 Size::ZERO,
@@ -2191,9 +2223,10 @@ impl<Message> Widget<Message, Theme, Renderer> for VerifiedLeaf<'_, Message> {
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        self.content
-            .as_widget()
-            .a11y_nodes(layout, &tree.children[0], cursor)
+        let Some(content) = tree.children.first() else {
+            return iced_accessibility::A11yTree::default();
+        };
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
 }
 
@@ -2221,19 +2254,13 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for FixedComponent<'a, Me
             Ok(plan) => self.child.render(self.level, &plan, agreement.clone()),
             Err(_) => widget::space().width(0).height(0).into(),
         };
-        tree.diff_children(std::slice::from_mut(&mut self.content));
-        let node = self
-            .content
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits);
-        if agreement.get() {
-            node
-        } else {
-            self.content = widget::space().width(0).height(0).into();
-            tree.diff_children(std::slice::from_mut(&mut self.content));
-            self.content
-                .as_widget_mut()
-                .layout(&mut tree.children[0], renderer, limits)
+        match layout_content(tree, &mut self.content, renderer, limits) {
+            Some(node) if agreement.get() => node,
+            _ => {
+                self.content = widget::space().width(0).height(0).into();
+                layout_content(tree, &mut self.content, renderer, limits)
+                    .unwrap_or_else(|| layout::Node::new(Size::ZERO))
+            }
         }
     }
     #[cfg(feature = "a11y")]
@@ -2243,10 +2270,40 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for FixedComponent<'a, Me
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        self.content
-            .as_widget()
-            .a11y_nodes(layout, &tree.children[0], cursor)
+        let Some(content) = tree.children.first() else {
+            return iced_accessibility::A11yTree::default();
+        };
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
+}
+
+/// Reconcile a wrapper's tree with its one content element and lay the
+/// content out within `limits`. `diff_children` leaves the tree one child
+/// per element it is given, so the content's own tree is the first child.
+/// Were it missing, the content is not laid out and there is no node; the
+/// caller then lays out nothing there, as the engine renders nothing for a
+/// plan that does not match.
+fn layout_content<Message>(
+    tree: &mut Tree,
+    content: &mut Element<'_, Message>,
+    renderer: &Renderer,
+    limits: &layout::Limits,
+) -> Option<layout::Node> {
+    tree.diff_children(std::slice::from_mut(content));
+    let content_tree = tree.children.first_mut()?;
+    Some(
+        content
+            .as_widget_mut()
+            .layout(content_tree, renderer, limits),
+    )
+}
+
+/// What a verification wrapper lays out when its tree has no child for its
+/// content: nothing, and the stage it belongs to is refused, as for a plan
+/// that does not match (`refused`).
+fn refused_node(agreement: &Cell<bool>) -> layout::Node {
+    agreement.set(false);
+    layout::Node::new(Size::ZERO)
 }
 
 // Tree::diff and layout-time diffing (e.g. a nested native Responsive) consult
@@ -2358,7 +2415,6 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
             self.content = stage
                 .content
                 .render(stage.level, &geometry, agreement.clone());
-            tree.diff_children(std::slice::from_mut(&mut self.content));
             // Ordinary native content always retains unbounded height here.
             // Finite-height clipping cannot certify a successful stage.
             let commit_limits = layout::Limits::with_compression(
@@ -2366,12 +2422,9 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
                 Size::new(geometry.size.width, f32::INFINITY),
                 Size::new(true, true),
             );
-            let node = self.content.as_widget_mut().layout(
-                &mut tree.children[0],
-                renderer,
-                &commit_limits,
-            );
-            if agreement.get()
+            // Content that could not be laid out does not agree.
+            if let Some(node) = layout_content(tree, &mut self.content, renderer, &commit_limits)
+                && agreement.get()
                 && finite_size(node.size())
                 && (node.size().width - geometry.size.width).abs() <= FIT_EPSILON
                 && (node.size().height - geometry.size.height).abs() <= FIT_EPSILON
@@ -2397,15 +2450,15 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
             || widget::space().width(0).height(0).into(),
             |fallback| fallback(),
         );
-        tree.diff_children(std::slice::from_mut(&mut self.content));
-        let node =
-            self.content
-                .as_widget_mut()
-                .layout(&mut tree.children[0], renderer, &limits.loose());
-        layout::Node::with_children(
-            limits.resolve(self.width, self.height, node.size()),
-            vec![node],
-        )
+        match layout_content(tree, &mut self.content, renderer, &limits.loose()) {
+            Some(node) => layout::Node::with_children(
+                limits.resolve(self.width, self.height, node.size()),
+                vec![node],
+            ),
+            // Nothing to show: the widget's own box, with no child in it
+            // (`child_layout`).
+            None => layout::Node::new(limits.resolve(self.width, self.height, Size::ZERO)),
+        }
     }
 
     fn draw(
@@ -2418,18 +2471,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        let Some(layout) = child_layout(layout) else {
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first()) else {
             return;
         };
-        self.content.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            style,
-            layout,
-            cursor,
-            viewport,
-        );
+        self.content
+            .as_widget()
+            .draw(content, renderer, theme, style, layout, cursor, viewport);
     }
 
     fn update(
@@ -2443,18 +2490,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        let Some(layout) = child_layout(layout) else {
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first_mut())
+        else {
             return;
         };
         self.content.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
+            content, event, layout, cursor, renderer, clipboard, shell, viewport,
         );
     }
 
@@ -2465,12 +2506,13 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        let Some(layout) = child_layout(layout) else {
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first_mut())
+        else {
             return;
         };
         self.content
             .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
+            .operate(content, layout, renderer, operation);
     }
 
     fn mouse_interaction(
@@ -2481,16 +2523,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        let Some(layout) = child_layout(layout) else {
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first()) else {
             return mouse::Interaction::default();
         };
-        self.content.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.content
+            .as_widget()
+            .mouse_interaction(content, layout, cursor, viewport, renderer)
     }
 
     fn overlay<'a>(
@@ -2502,13 +2540,10 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         translation: Vector,
     ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
         let layout = child_layout(layout)?;
-        self.content.as_widget_mut().overlay(
-            &mut tree.children[0],
-            layout,
-            renderer,
-            viewport,
-            translation,
-        )
+        let content = tree.children.first_mut()?;
+        self.content
+            .as_widget_mut()
+            .overlay(content, layout, renderer, viewport, translation)
     }
 
     fn drag_destinations(
@@ -2518,15 +2553,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         renderer: &Renderer,
         destinations: &mut cosmic::iced::advanced::clipboard::DndDestinationRectangles,
     ) {
-        let Some(layout) = child_layout(layout) else {
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first()) else {
             return;
         };
-        self.content.as_widget().drag_destinations(
-            &tree.children[0],
-            layout,
-            renderer,
-            destinations,
-        );
+        self.content
+            .as_widget()
+            .drag_destinations(content, layout, renderer, destinations);
     }
 
     #[cfg(feature = "a11y")]
@@ -2536,12 +2568,10 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        let Some(layout) = child_layout(layout) else {
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first()) else {
             return iced_accessibility::A11yTree::default();
         };
-        self.content
-            .as_widget()
-            .a11y_nodes(layout, &tree.children[0], cursor)
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
 }
 
@@ -2551,7 +2581,9 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
 /// this widget's layout, there is nothing of this widget's to draw, update,
 /// operate on or point at there, so each caller does nothing and answers
 /// with the neutral value (no interaction, no overlay, no accessibility
-/// nodes), as the engine renders nothing for a plan that does not match.
+/// nodes), as the engine renders nothing for a plan that does not match. The
+/// same holds for a tree without the content's own tree, the first child
+/// `layout_content` leaves in it.
 fn child_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
     layout
         .children()
@@ -2600,6 +2632,10 @@ mod height_tests;
 #[cfg(test)]
 #[path = "layout_invalid_tests.rs"]
 mod invalid_tests;
+
+#[cfg(test)]
+#[path = "layout_mismatch_tests.rs"]
+mod mismatch_tests;
 
 #[cfg(test)]
 mod renderer_minimum_tests {
