@@ -323,17 +323,61 @@ struct Composition<'a, Message> {
 }
 
 type Forms<'a, Message> = Rc<Vec<(Level, Child<'a, Message>)>>;
+type ViewFactory<'a, Message> = Rc<dyn Fn(Level) -> Element<'a, Message> + 'a>;
 type ViewMap<'a, Message> = Rc<dyn Fn(Element<'a, Message>) -> Element<'a, Message> + 'a>;
 type MinimumQuery<'a> = Rc<dyn Fn(Level, &Renderer) -> Size + 'a>;
 
+/// What a child is: exactly one of four kinds, each holding only what that
+/// kind needs.
+///
+/// - `Leaf`: a native view. The engine knows it only through its factory,
+///   which builds the view at a level both for disposable measurements and for
+///   the committed widget tree (`child`, `scroll_child`, `spacer`).
+/// - `Composition`: immediate children in a row, column or wrap, planned
+///   together (`row_child`, `column_child`, `wrap_child`, and the wrappers
+///   `fill_width` and `fixed_dimensions`, which put one child in a column).
+/// - `Frame`: declared chrome of a fixed padding round one child
+///   (`framed_child`).
+/// - `Forms`: a component family's own alternatives, one per level threshold;
+///   the form selected at a level is planned and rendered in the family's
+///   place (`forms`).
+///
+/// Every question whose answer depends on the kind (is it hidden, how is it
+/// planned, how is it rendered, can it be probed natively) is one `match` on
+/// this enum with no wildcard arm, so a new kind cannot compile until each of
+/// those questions has an answer for it. A child cannot be two kinds at once,
+/// and only a leaf has a view factory: nothing has to check which optional
+/// part is set, and no placeholder view stands in for the kinds without one.
+enum Kind<'a, Message> {
+    Leaf(ViewFactory<'a, Message>),
+    Composition(Rc<Composition<'a, Message>>),
+    Frame(Rc<Frame<'a, Message>>),
+    Forms(Forms<'a, Message>),
+}
+
+// Written by hand, as for `Child`: every variant holds `Rc`s, so a clone
+// shares the prepared parts and needs no `Message: Clone`.
+impl<Message> Clone for Kind<'_, Message> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Leaf(view) => Self::Leaf(view.clone()),
+            Self::Composition(composition) => Self::Composition(composition.clone()),
+            Self::Frame(frame) => Self::Frame(frame.clone()),
+            Self::Forms(forms) => Self::Forms(forms.clone()),
+        }
+    }
+}
+
 /// A queryable leaf or composite. Only the root selects a level. Composites
 /// forward that exact level; outward weights never replace internal weights.
+///
+/// A child is its `kind` (what it is) together with what any kind may carry:
+/// the measuring query, which every kind answers, and the declarations a
+/// caller adds with the builder methods below (weights and growth, hiding,
+/// decoration, reports, regions).
 pub struct Child<'a, Message> {
-    view: Rc<dyn Fn(Level) -> Element<'a, Message> + 'a>,
+    kind: Kind<'a, Message>,
     query: SizeQuery<'a>,
-    composition: Option<Rc<Composition<'a, Message>>>,
-    frame: Option<Rc<Frame<'a, Message>>>,
-    forms: Option<Forms<'a, Message>>,
     decorator: Option<ViewMap<'a, Message>>,
     hidden: Rc<dyn Fn(Level) -> bool + 'a>,
     viewport: Option<MinimumQuery<'a>>,
@@ -352,11 +396,8 @@ pub struct Child<'a, Message> {
 impl<Message> Clone for Child<'_, Message> {
     fn clone(&self) -> Self {
         Self {
-            view: self.view.clone(),
+            kind: self.kind.clone(),
             query: self.query.clone(),
-            composition: self.composition.clone(),
-            frame: self.frame.clone(),
-            forms: self.forms.clone(),
             decorator: self.decorator.clone(),
             hidden: self.hidden.clone(),
             viewport: self.viewport.clone(),
@@ -431,36 +472,26 @@ impl<'a, Message: 'a> Child<'a, Message> {
         plan
     }
 
-    fn selected_form(&self, level: Level) -> Option<&Self> {
-        self.forms.as_ref().map(|forms| select_form(forms, level))
-    }
-
     fn has_composition(&self, level: Level) -> bool {
-        self.composition.is_some()
-            || self
-                .frame
-                .as_ref()
-                .is_some_and(|frame| frame.content.has_composition(level))
-            || self
-                .selected_form(level)
-                .is_some_and(|form| form.has_composition(level))
+        match &self.kind {
+            Kind::Leaf(_) => false,
+            Kind::Composition(_) => true,
+            Kind::Frame(frame) => frame.content.has_composition(level),
+            Kind::Forms(forms) => select_form(forms, level).has_composition(level),
+        }
     }
 
     fn is_hidden(&self, level: Level) -> bool {
         (self.hidden)(level)
-            || self
-                .selected_form(level)
-                .is_some_and(|form| form.is_hidden(level))
-            || self.composition.as_ref().is_some_and(|composition| {
-                composition
+            || match &self.kind {
+                Kind::Leaf(_) => false,
+                Kind::Composition(composition) => composition
                     .children
                     .iter()
-                    .all(|child| child.is_hidden(level))
-            })
-            || self
-                .frame
-                .as_ref()
-                .is_some_and(|frame| frame.content.is_hidden(level))
+                    .all(|child| child.is_hidden(level)),
+                Kind::Frame(frame) => frame.content.is_hidden(level),
+                Kind::Forms(forms) => select_form(forms, level).is_hidden(level),
+            }
     }
 
     pub fn view(&self, level: Level) -> Element<'a, Message> {
@@ -471,20 +502,22 @@ impl<'a, Message: 'a> Child<'a, Message> {
         // such as tab strips. Root stage commits use render/VerifiedLeaf; only
         // composites and explicitly decorated leaves need this fixed-level
         // allocation adapter here.
-        if self.composition.is_none()
-            && self.frame.is_none()
-            && self.forms.is_none()
-            && self.decorator.is_none()
-            && self.presentation.is_none()
-            && self.information.is_none()
-        {
-            return (self.view)(level);
+        match &self.kind {
+            Kind::Leaf(view)
+                if self.decorator.is_none()
+                    && self.presentation.is_none()
+                    && self.information.is_none() =>
+            {
+                view(level)
+            }
+            Kind::Leaf(_) | Kind::Composition(_) | Kind::Frame(_) | Kind::Forms(_) => {
+                Element::new(FixedComponent {
+                    child: self.clone(),
+                    level,
+                    content: widget::space().into(),
+                })
+            }
         }
-        Element::new(FixedComponent {
-            child: self.clone(),
-            level,
-            content: widget::space().into(),
-        })
     }
 
     pub fn query(&self, level: Level, renderer: &Renderer) -> MeasuredSize {
@@ -570,58 +603,59 @@ impl<'a, Message: 'a> Child<'a, Message> {
         } else {
             height
         };
-        let mut plan = if let Some(form) = self.selected_form(level) {
-            let mut selected = form.clone();
-            if self.grow_height > 0.0 {
-                selected.grow_height = self.grow_height;
-            }
-            selected.plan_width(level, renderer, width, height)?
-        } else if let Some(composition) = &self.composition {
-            composition.plan(level, renderer, width, height)?
-        } else if let Some(frame) = &self.frame {
-            frame.plan(level, renderer, width, height, self.grow_height)?
-        } else {
-            let viewport_height = self.viewport.as_ref().map(|minimum| {
-                let minimum = minimum(level, renderer);
-                let measured = self.query(level, renderer);
-                if self.grow_height > 0.0 && height.is_finite() {
-                    height.max(minimum.height)
-                } else {
-                    measured.preferred.height.min(height).max(minimum.height)
+        let mut plan = match &self.kind {
+            Kind::Forms(forms) => {
+                let mut selected = select_form(forms, level).clone();
+                if self.grow_height > 0.0 {
+                    selected.grow_height = self.grow_height;
                 }
-            });
-            let size = measure_element_in(
-                || (self.view)(level),
-                renderer,
-                Size::new(width, viewport_height.unwrap_or(f32::INFINITY)),
-                viewport_height.is_none(),
-            );
-            if !finite_size(size) {
-                return Err(AllocationError::InvalidInput);
+                selected.plan_width(level, renderer, width, height)?
             }
-            if size.width > width + FIT_EPSILON {
-                return Err(AllocationError::NoFit {
-                    required: size.width,
-                    available: width,
+            Kind::Composition(composition) => composition.plan(level, renderer, width, height)?,
+            Kind::Frame(frame) => frame.plan(level, renderer, width, height, self.grow_height)?,
+            Kind::Leaf(view) => {
+                let viewport_height = self.viewport.as_ref().map(|minimum| {
+                    let minimum = minimum(level, renderer);
+                    let measured = self.query(level, renderer);
+                    if self.grow_height > 0.0 && height.is_finite() {
+                        height.max(minimum.height)
+                    } else {
+                        measured.preferred.height.min(height).max(minimum.height)
+                    }
                 });
+                let size = measure_element_in(
+                    || view(level),
+                    renderer,
+                    Size::new(width, viewport_height.unwrap_or(f32::INFINITY)),
+                    viewport_height.is_none(),
+                );
+                if !finite_size(size) {
+                    return Err(AllocationError::InvalidInput);
+                }
+                if size.width > width + FIT_EPSILON {
+                    return Err(AllocationError::NoFit {
+                        required: size.width,
+                        available: width,
+                    });
+                }
+                if let Some(offered_height) = viewport_height
+                    && size.height > offered_height + FIT_EPSILON
+                {
+                    return Err(AllocationError::NoFit {
+                        required: size.height,
+                        available: offered_height,
+                    });
+                }
+                // The parent reserves the allocated width even for shrink content.
+                let mut plan = GeometryPlan::leaf(Size::new(width, size.height));
+                plan.native_size = Some(size);
+                if let Some(minimum) = &self.viewport {
+                    let minimum = minimum(level, renderer);
+                    plan.size.height = viewport_height.expect("declared viewport height");
+                    plan.minimum_height = minimum.height;
+                }
+                plan
             }
-            if let Some(offered_height) = viewport_height
-                && size.height > offered_height + FIT_EPSILON
-            {
-                return Err(AllocationError::NoFit {
-                    required: size.height,
-                    available: offered_height,
-                });
-            }
-            // The parent reserves the allocated width even for shrink content.
-            let mut plan = GeometryPlan::leaf(Size::new(width, size.height));
-            plan.native_size = Some(size);
-            if let Some(minimum) = &self.viewport {
-                let minimum = minimum(level, renderer);
-                plan.size.height = viewport_height.expect("declared viewport height");
-                plan.minimum_height = minimum.height;
-            }
-            plan
         };
         if self.fixed_width.is_some() || self.reserve_width {
             plan.size.width = width;
@@ -709,43 +743,46 @@ impl<'a, Message: 'a> Child<'a, Message> {
         plan: &GeometryPlan,
         agreement: Rc<Cell<bool>>,
     ) -> Element<'a, Message> {
-        if let Some(form) = self.selected_form(level) {
-            let mut selected = form.clone();
-            if self.grow_height > 0.0 {
-                selected.grow_height = self.grow_height;
+        // Forms, frames and leaves are rendered here; a composition continues
+        // below, where its rows or column are built from the plan's placements.
+        let composition = match &self.kind {
+            Kind::Forms(forms) => {
+                let mut selected = select_form(forms, level).clone();
+                if self.grow_height > 0.0 {
+                    selected.grow_height = self.grow_height;
+                }
+                let content = selected.render(level, plan, agreement);
+                return if self.grow_height > 0.0 {
+                    widget::container(content)
+                        .width(plan.size.width)
+                        .height(plan.size.height)
+                        .into()
+                } else {
+                    content
+                };
             }
-            let content = selected.render(level, plan, agreement);
-            return if self.grow_height > 0.0 {
-                widget::container(content)
+            Kind::Frame(frame) => return frame.render(level, plan, agreement, self.grow_height),
+            Kind::Leaf(view) => {
+                let content = Element::new(VerifiedLeaf {
+                    content: view(level),
+                    expected: plan.native_size.expect("native leaf measurement"),
+                    maximum: Size::new(
+                        plan.size.width,
+                        if self.viewport.is_some() {
+                            plan.size.height
+                        } else {
+                            f32::INFINITY
+                        },
+                    ),
+                    compress_height: self.viewport.is_none(),
+                    agreement,
+                });
+                return widget::container(content)
                     .width(plan.size.width)
                     .height(plan.size.height)
-                    .into()
-            } else {
-                content
-            };
-        }
-        if let Some(frame) = &self.frame {
-            return frame.render(level, plan, agreement, self.grow_height);
-        }
-        let Some(composition) = &self.composition else {
-            let content = Element::new(VerifiedLeaf {
-                content: (self.view)(level),
-                expected: plan.native_size.expect("native leaf measurement"),
-                maximum: Size::new(
-                    plan.size.width,
-                    if self.viewport.is_some() {
-                        plan.size.height
-                    } else {
-                        f32::INFINITY
-                    },
-                ),
-                compress_height: self.viewport.is_none(),
-                agreement,
-            });
-            return widget::container(content)
-                .width(plan.size.width)
-                .height(plan.size.height)
-                .into();
+                    .into();
+            }
+            Kind::Composition(composition) => composition,
         };
         // The plan has already omitted hidden forms. Native `with_children`
         // filters zero-sized hints, which would discard valid zero-height
@@ -989,30 +1026,32 @@ impl<'a, Message: 'a> Child<'a, Message> {
     ) -> Self {
         self.refresh_preparation();
         let query = self.query.clone();
-        let native = if self.composition.is_none() && self.forms.is_none() && self.frame.is_none() {
-            Some(self.view.clone())
-        } else {
-            None
+        // Only a leaf has a native view to probe at the declared floor.
+        let native = match &self.kind {
+            Kind::Leaf(view) => Some(view.clone()),
+            Kind::Composition(_) | Kind::Frame(_) | Kind::Forms(_) => None,
         };
         self.query = Rc::new(move |level, renderer| {
             let mut measured = query(level, renderer);
-            let recoverable = measured.preferred.width == f32::INFINITY
-                && measured.preferred.height.is_finite()
-                && measured.preferred.height >= 0.0
-                && measured.minimum.height.is_finite()
-                && measured.minimum.height >= 0.0
-                && native.is_some();
+            // The native view to probe, when this leaf has no intrinsic width.
+            let recoverable = native.as_ref().filter(|_| {
+                measured.preferred.width == f32::INFINITY
+                    && measured.preferred.height.is_finite()
+                    && measured.preferred.height >= 0.0
+                    && measured.minimum.height.is_finite()
+                    && measured.minimum.height >= 0.0
+            });
             if (measured.preferred.width.is_finite() && measured.preferred.width >= 0.0)
-                || recoverable
+                || recoverable.is_some()
             {
                 let floor = minimum(level, renderer, measured.preferred);
                 if floor.is_finite() && floor >= 0.0 {
-                    if recoverable {
+                    if let Some(native) = recoverable {
                         // Some native Fill controls have no intrinsic width.
                         // The component's declared floor is the finite offer;
                         // never substitute an arbitrary window or probe width.
                         let bounded = measure_element_in(
-                            || native.as_ref().expect("native leaf factory")(level),
+                            || native(level),
                             renderer,
                             Size::new(floor, f32::INFINITY),
                             true,
@@ -1044,10 +1083,16 @@ impl<'a, Message: 'a> Child<'a, Message> {
 pub fn child<'a, Message: 'a>(
     view: impl Fn(Level) -> Element<'a, Message> + 'a,
 ) -> Child<'a, Message> {
-    let view: Rc<dyn Fn(Level) -> Element<'a, Message> + 'a> = Rc::new(view);
+    leaf_child(Rc::new(view))
+}
+
+/// A native leaf measured by laying out its view with unbounded room. Kept
+/// apart from `child` so a caller that also probes the view itself
+/// (`scroll_child_with_minimum`) shares the one factory.
+fn leaf_child<'a, Message: 'a>(view: ViewFactory<'a, Message>) -> Child<'a, Message> {
     let measure = view.clone();
     Child {
-        view,
+        kind: Kind::Leaf(view),
         query: Rc::new(move |level, renderer| {
             let size = measure_element(|| measure(level), renderer);
             MeasuredSize {
@@ -1055,9 +1100,6 @@ pub fn child<'a, Message: 'a>(
                 minimum: size,
             }
         }),
-        composition: None,
-        frame: None,
-        forms: None,
         decorator: None,
         hidden: Rc::new(|_| false),
         viewport: None,
@@ -1091,13 +1133,10 @@ pub fn forms<'a, Message: 'a>(
     let alternatives = Rc::new(alternatives);
     let query_forms = alternatives.clone();
     Child {
-        view: Rc::new(|_| widget::space().into()),
+        kind: Kind::Forms(alternatives),
         query: Rc::new(move |level, renderer| {
             select_form(&query_forms, level).query(level, renderer)
         }),
-        composition: None,
-        frame: None,
-        forms: Some(alternatives),
         decorator: None,
         hidden: Rc::new(|_| false),
         viewport: None,
@@ -1149,9 +1188,9 @@ pub fn scroll_child_with_minimum<'a, Message: 'a>(
 ) -> Child<'a, Message> {
     let minimum: MinimumQuery<'a> = Rc::new(minimum);
     let viewport = minimum.clone();
-    let mut child = child(view);
+    let native: ViewFactory<'a, Message> = Rc::new(view);
+    let mut child = leaf_child(native.clone());
     let query = child.query.clone();
-    let native = child.view.clone();
     child.query = Rc::new(move |level, renderer| {
         let minimum = minimum(level, renderer);
         let measured = query(level, renderer);
@@ -1275,11 +1314,8 @@ fn compose_aligned<'a, Message: 'a>(
     });
     let query = composition.clone();
     Child {
-        view: Rc::new(|_| widget::space().into()),
+        kind: Kind::Composition(composition),
         query: Rc::new(move |level, renderer| query.measure(level, renderer)),
-        composition: Some(composition),
-        frame: None,
-        forms: None,
         decorator: None,
         hidden: Rc::new(|_| false),
         viewport: None,

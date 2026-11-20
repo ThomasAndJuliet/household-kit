@@ -52,7 +52,7 @@ pub fn framed_child<'a, Message: 'a>(
             ),
         }
     });
-    result.frame = Some(frame);
+    result.kind = Kind::Frame(frame);
     result
 }
 
