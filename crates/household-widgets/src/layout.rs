@@ -330,9 +330,10 @@ type MinimumQuery<'a> = Rc<dyn Fn(Level, &Renderer) -> Size + 'a>;
 /// What a child is: exactly one of four kinds, each holding only what that
 /// kind needs.
 ///
-/// - `Leaf`: a native view. The engine knows it only through its factory,
-///   which builds the view at a level both for disposable measurements and for
-///   the committed widget tree (`child`, `scroll_child`, `spacer`).
+/// - `Leaf`: a native view and how it takes height (`Leaf`). The engine knows
+///   the view only through its factory, which builds the view at a level both
+///   for disposable measurements and for the committed widget tree (`child`,
+///   `scroll_child`, `spacer`).
 /// - `Composition`: immediate children in a row, column or wrap, planned
 ///   together (`row_child`, `column_child`, `wrap_child`, and the wrappers
 ///   `fill_width` and `fixed_dimensions`, which put one child in a column).
@@ -349,10 +350,58 @@ type MinimumQuery<'a> = Rc<dyn Fn(Level, &Renderer) -> Size + 'a>;
 /// and only a leaf has a view factory: nothing has to check which optional
 /// part is set, and no placeholder view stands in for the kinds without one.
 enum Kind<'a, Message> {
-    Leaf(ViewFactory<'a, Message>),
+    Leaf(Leaf<'a, Message>),
     Composition(Rc<Composition<'a, Message>>),
     Frame(Rc<Frame<'a, Message>>),
     Forms(Forms<'a, Message>),
+}
+
+/// A native view, and how it takes height.
+struct Leaf<'a, Message> {
+    view: ViewFactory<'a, Message>,
+    height: LeafHeight<'a>,
+}
+
+/// How a leaf takes height: the engine's rule for height, declared where it
+/// applies.
+///
+/// A leaf's height is measured at the width it is allocated, with unbounded
+/// room, and that height is a hard floor: offered less, the leaf does not
+/// fit. Only a leaf declared as a viewport is offered a finite height, and
+/// only down to the floor it declares. The reason is that a native view laid
+/// out in less height than it needs is clipped, and a clipped height must
+/// never pass for a fit; a viewport is a view that is built to work in less
+/// height (it scrolls), and says how little.
+///
+/// A column shares a shortage of height only among the parts whose plans
+/// record a floor below their height, which only a viewport's plan, or a
+/// plan containing one, does (`Composition::plan`); a wrap does the same
+/// between its rows.
+///
+/// The public name of the declaration stays `scroll_child`
+/// (`scroll_child_with_minimum`), because that is how the apps declare their
+/// scrolling areas; what it declares is a leaf that takes a range of heights.
+#[derive(Clone)]
+enum LeafHeight<'a> {
+    /// An ordinary leaf: its measured height is a floor, and the leaf is
+    /// planned at exactly that height (`child`, `spacer`).
+    Floor,
+    /// A declared viewport: it works at any height from its floor up, and is
+    /// offered one in that range. `minimum` is its floor, measured by the
+    /// caller with the same renderer as the view (`scroll_child`,
+    /// `scroll_child_with_minimum`).
+    Range { minimum: MinimumQuery<'a> },
+}
+
+// Written by hand, as for `Kind`: the view is an `Rc`, and a derived `Clone`
+// would ask for `Message: Clone`.
+impl<Message> Clone for Leaf<'_, Message> {
+    fn clone(&self) -> Self {
+        Self {
+            view: self.view.clone(),
+            height: self.height.clone(),
+        }
+    }
 }
 
 // Written by hand, as for `Child`: every variant holds `Rc`s, so a clone
@@ -360,7 +409,7 @@ enum Kind<'a, Message> {
 impl<Message> Clone for Kind<'_, Message> {
     fn clone(&self) -> Self {
         match self {
-            Self::Leaf(view) => Self::Leaf(view.clone()),
+            Self::Leaf(leaf) => Self::Leaf(leaf.clone()),
             Self::Composition(composition) => Self::Composition(composition.clone()),
             Self::Frame(frame) => Self::Frame(frame.clone()),
             Self::Forms(forms) => Self::Forms(forms.clone()),
@@ -403,7 +452,9 @@ type MinimumWidth<'a> = Rc<dyn Fn(Level, &Renderer, Size) -> f32 + 'a>;
 ///   in, capturing the width and height (`FixedDimensions`).
 /// - `scroll_child_with_minimum` wrapped the new leaf's closure, capturing
 ///   the caller's floor and the view factory to probe (`ViewportFloor`);
-///   `scroll_child` passes a function that returns its size.
+///   `scroll_child` passes a function that returns its size. The leaf now
+///   holds both, as its view and its declared range of heights, and the
+///   interpreter reads them from it.
 /// - `Child::new` received the first closure and `Child`'s `Clone` shared
 ///   it; they now start and copy the list.
 ///
@@ -420,7 +471,8 @@ type MinimumWidth<'a> = Rc<dyn Fn(Level, &Renderer, Size) -> f32 + 'a>;
 /// would have rounded 5 and left both at 7.5: the fraction the rounding was
 /// declared to remove. `layout_measuring_tests.rs` builds every pair of
 /// adjustments whose order changes the result both ways round.
-enum Adjustment<'a, Message> {
+#[derive(Clone)]
+enum Adjustment<'a> {
     /// The caller's measurement in place of everything before it. The kind's
     /// own measurement and the adjustments declared earlier are not consulted:
     /// `with_measurement` empties the list before recording this, so a
@@ -440,33 +492,15 @@ enum Adjustment<'a, Message> {
         width: Option<f32>,
         height: Option<f32>,
     },
-    /// A scrolling viewport's floor, measured by the caller with the same
-    /// renderer, and the viewport's view to probe at that floor when it has
-    /// no intrinsic size.
-    ViewportFloor {
-        minimum: MinimumQuery<'a>,
-        view: ViewFactory<'a, Message>,
-    },
-}
-
-// Written by hand, as for `Kind`: every variant holds `Rc`s or numbers.
-impl<Message> Clone for Adjustment<'_, Message> {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Replaced(query) => Self::Replaced(query.clone()),
-            Self::RoundWidthUp => Self::RoundWidthUp,
-            Self::PreferredWidth(preferred) => Self::PreferredWidth(preferred.clone()),
-            Self::MinimumWidth(minimum) => Self::MinimumWidth(minimum.clone()),
-            Self::FixedDimensions { width, height } => Self::FixedDimensions {
-                width: *width,
-                height: *height,
-            },
-            Self::ViewportFloor { minimum, view } => Self::ViewportFloor {
-                minimum: minimum.clone(),
-                view: view.clone(),
-            },
-        }
-    }
+    /// A scrolling viewport's floor (`LeafHeight::Range`), measured by the
+    /// caller with the same renderer, and the viewport's view to probe at
+    /// that floor when it has no intrinsic size. Both are the leaf's own:
+    /// this entry holds no copy, only its place in the list.
+    /// `scroll_child_with_minimum` records it first on the leaf it builds,
+    /// and `with_measurement` discards it with the rest of the list while the
+    /// leaf stays a viewport: its plan is still offered height down to its
+    /// floor, but its measurement is the replacement's.
+    ViewportFloor,
 }
 
 /// A queryable leaf or composite. Only the root selects a level. Composites
@@ -487,10 +521,9 @@ impl<Message> Clone for Adjustment<'_, Message> {
 /// left (see `Adjustment` for an example).
 pub struct Child<'a, Message> {
     kind: Kind<'a, Message>,
-    adjustments: Vec<Adjustment<'a, Message>>,
+    adjustments: Vec<Adjustment<'a>>,
     decorator: Option<ViewMap<'a, Message>>,
     hidden: Rc<dyn Fn(Level) -> bool + 'a>,
-    viewport: Option<MinimumQuery<'a>>,
     weight: f32,
     grow: f32,
     grow_height: f32,
@@ -510,7 +543,6 @@ impl<Message> Clone for Child<'_, Message> {
             adjustments: self.adjustments.clone(),
             decorator: self.decorator.clone(),
             hidden: self.hidden.clone(),
-            viewport: self.viewport.clone(),
             weight: self.weight,
             grow: self.grow,
             grow_height: self.grow_height,
@@ -527,9 +559,10 @@ impl<Message> Clone for Child<'_, Message> {
 
 impl<'a, Message: 'a> Child<'a, Message> {
     /// The one place a child is built. The public constructors choose the
-    /// kind, which also says how the child is measured; everything a caller
-    /// may declare afterwards starts here at its neutral value: no measuring
-    /// adjustments, visible, undecorated, no viewport, weight 1 and no
+    /// kind, which also says how the child is measured and, for a leaf, how
+    /// it takes height; everything a caller may declare afterwards starts
+    /// here at its neutral value: no measuring adjustments, visible,
+    /// undecorated, weight 1 and no
     /// growth, no reserved or fixed dimensions, no presentation, reports or
     /// regions, and a fresh preparation identity.
     fn new(kind: Kind<'a, Message>) -> Self {
@@ -538,7 +571,6 @@ impl<'a, Message: 'a> Child<'a, Message> {
             adjustments: Vec::new(),
             decorator: None,
             hidden: Rc::new(|_| false),
-            viewport: None,
             weight: 1.0,
             grow: 0.0,
             grow_height: 0.0,
@@ -639,12 +671,12 @@ impl<'a, Message: 'a> Child<'a, Message> {
         // composites and explicitly decorated leaves need this fixed-level
         // allocation adapter here.
         match &self.kind {
-            Kind::Leaf(view)
+            Kind::Leaf(leaf)
                 if self.decorator.is_none()
                     && self.presentation.is_none()
                     && self.information.is_none() =>
             {
-                view(level)
+                (leaf.view)(level)
             }
             Kind::Leaf(_) | Kind::Composition(_) | Kind::Frame(_) | Kind::Forms(_) => {
                 Element::new(FixedComponent {
@@ -674,8 +706,8 @@ impl<'a, Message: 'a> Child<'a, Message> {
     /// its content's measurement (`Frame::measure`).
     fn base_measurement(&self, level: Level, renderer: &Renderer) -> MeasuredSize {
         match &self.kind {
-            Kind::Leaf(view) => {
-                let size = measure_element(|| view(level), renderer);
+            Kind::Leaf(leaf) => {
+                let size = measure_element(|| (leaf.view)(level), renderer);
                 MeasuredSize {
                     preferred: size,
                     minimum: size,
@@ -703,7 +735,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
     /// it, in the same order, so the result is the same to the bit.
     fn measure_adjusted(
         &self,
-        adjustments: &[Adjustment<'a, Message>],
+        adjustments: &[Adjustment<'a>],
         level: Level,
         renderer: &Renderer,
     ) -> MeasuredSize {
@@ -733,7 +765,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 let mut measured = measure_earlier();
                 // Only a leaf has a native view to probe at the declared floor.
                 let native = match &self.kind {
-                    Kind::Leaf(view) => Some(view),
+                    Kind::Leaf(leaf) => Some(&leaf.view),
                     Kind::Composition(_) | Kind::Frame(_) | Kind::Forms(_) => None,
                 };
                 // The native view to probe, when this leaf has no intrinsic width.
@@ -794,7 +826,19 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 }
                 measured
             }
-            Adjustment::ViewportFloor { minimum, view } => {
+            Adjustment::ViewportFloor => {
+                // The floor and the view are the leaf's declaration. Only
+                // `scroll_child_with_minimum` records this entry, on the
+                // viewport leaf it builds, and a child's kind never changes,
+                // so the entry is always on such a leaf; were it on anything
+                // else, there would be no floor to apply.
+                let Kind::Leaf(Leaf {
+                    view,
+                    height: LeafHeight::Range { minimum },
+                }) = &self.kind
+                else {
+                    return measure_earlier();
+                };
                 let minimum = minimum(level, renderer);
                 let measured = measure_earlier();
                 if !finite_size(minimum) {
@@ -926,21 +970,33 @@ impl<'a, Message: 'a> Child<'a, Message> {
             }
             Kind::Composition(composition) => composition.plan(level, renderer, width, height)?,
             Kind::Frame(frame) => frame.plan(level, renderer, width, height, self.grow_height)?,
-            Kind::Leaf(view) => {
-                let viewport_height = self.viewport.as_ref().map(|minimum| {
-                    let minimum = minimum(level, renderer);
-                    let measured = self.query(level, renderer);
-                    if self.grow_height > 0.0 && height.is_finite() {
-                        height.max(minimum.height)
-                    } else {
-                        measured.preferred.height.min(height).max(minimum.height)
+            Kind::Leaf(leaf) => {
+                // How the leaf takes height, decided once: the height its view
+                // is offered, whether the view is compressed to its own height
+                // within that offer, and, for a viewport, the floor its plan
+                // records. An ordinary leaf is offered unbounded height and
+                // compressed, so it is measured at the height it needs, which
+                // its plan keeps as both its height and its floor. A viewport
+                // is offered a height between its floor and the room (all of
+                // the room when it grows) and must fit in it uncompressed.
+                let (offered_height, compress_height, viewport_floor) = match &leaf.height {
+                    LeafHeight::Floor => (f32::INFINITY, true, None),
+                    LeafHeight::Range { minimum: floor } => {
+                        let minimum = floor(level, renderer);
+                        let measured = self.query(level, renderer);
+                        let offered = if self.grow_height > 0.0 && height.is_finite() {
+                            height.max(minimum.height)
+                        } else {
+                            measured.preferred.height.min(height).max(minimum.height)
+                        };
+                        (offered, false, Some(floor))
                     }
-                });
+                };
                 let size = measure_element_in(
-                    || view(level),
+                    || (leaf.view)(level),
                     renderer,
-                    Size::new(width, viewport_height.unwrap_or(f32::INFINITY)),
-                    viewport_height.is_none(),
+                    Size::new(width, offered_height),
+                    compress_height,
                 );
                 if !finite_size(size) {
                     return Err(AllocationError::InvalidInput);
@@ -951,9 +1007,9 @@ impl<'a, Message: 'a> Child<'a, Message> {
                         available: width,
                     });
                 }
-                if let Some(offered_height) = viewport_height
-                    && size.height > offered_height + FIT_EPSILON
-                {
+                // Never true for an ordinary leaf: its size is finite here and
+                // its offer unbounded.
+                if size.height > offered_height + FIT_EPSILON {
                     return Err(AllocationError::NoFit {
                         required: size.height,
                         available: offered_height,
@@ -962,10 +1018,11 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 // The parent reserves the allocated width even for shrink content.
                 let mut plan = GeometryPlan::leaf(Size::new(width, size.height));
                 plan.native_size = Some(size);
-                if let Some(minimum) = &self.viewport {
-                    let minimum = minimum(level, renderer);
-                    plan.size.height = viewport_height.expect("declared viewport height");
-                    plan.minimum_height = minimum.height;
+                // The floor is asked for again after the view is measured,
+                // as it always has been.
+                if let Some(floor) = viewport_floor {
+                    plan.size.height = offered_height;
+                    plan.minimum_height = floor(level, renderer).height;
                 }
                 plan
             }
@@ -1075,19 +1132,19 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 };
             }
             Kind::Frame(frame) => return frame.render(level, plan, agreement, self.grow_height),
-            Kind::Leaf(view) => {
+            Kind::Leaf(leaf) => {
+                // Laid out as it was planned (`plan_width`): an ordinary leaf
+                // with unbounded height, compressed to its own; a viewport
+                // within the height it was offered.
+                let (maximum_height, compress_height) = match &leaf.height {
+                    LeafHeight::Floor => (f32::INFINITY, true),
+                    LeafHeight::Range { .. } => (plan.size.height, false),
+                };
                 let content = Element::new(VerifiedLeaf {
-                    content: view(level),
+                    content: (leaf.view)(level),
                     expected: plan.native_size.expect("native leaf measurement"),
-                    maximum: Size::new(
-                        plan.size.width,
-                        if self.viewport.is_some() {
-                            plan.size.height
-                        } else {
-                            f32::INFINITY
-                        },
-                    ),
-                    compress_height: self.viewport.is_none(),
+                    maximum: Size::new(plan.size.width, maximum_height),
+                    compress_height,
                     agreement,
                 });
                 return widget::container(content)
@@ -1320,7 +1377,10 @@ impl<'a, Message: 'a> Child<'a, Message> {
 pub fn child<'a, Message: 'a>(
     view: impl Fn(Level) -> Element<'a, Message> + 'a,
 ) -> Child<'a, Message> {
-    Child::new(Kind::Leaf(Rc::new(view)))
+    Child::new(Kind::Leaf(Leaf {
+        view: Rc::new(view),
+        height: LeafHeight::Floor,
+    }))
 }
 
 /// A component family's own structured forms, inherited until the next
@@ -1369,18 +1429,22 @@ pub fn scroll_child<'a, Message: 'a>(
 /// native renderer as its contents. A changed level or typography therefore
 /// refreshes both measurement and selected viewport geometry. Nonfinite or
 /// negative queried floors are explicit invalid input, never clipped viewports.
+///
+/// This is the one declaration of a leaf that takes a range of heights
+/// (`LeafHeight::Range`); the name is the apps' name for their scrolling
+/// areas. The floor first applies to the leaf's measurement
+/// (`Adjustment::ViewportFloor`), before anything declared on the child after.
 pub fn scroll_child_with_minimum<'a, Message: 'a>(
     view: impl Fn(Level) -> Element<'a, Message> + 'a,
     minimum: impl Fn(Level, &Renderer) -> Size + 'a,
 ) -> Child<'a, Message> {
-    let minimum: MinimumQuery<'a> = Rc::new(minimum);
-    let view: ViewFactory<'a, Message> = Rc::new(view);
-    let mut child = Child::new(Kind::Leaf(view.clone()));
-    child.adjustments.push(Adjustment::ViewportFloor {
-        minimum: minimum.clone(),
-        view,
-    });
-    child.viewport = Some(minimum);
+    let mut child = Child::new(Kind::Leaf(Leaf {
+        view: Rc::new(view),
+        height: LeafHeight::Range {
+            minimum: Rc::new(minimum),
+        },
+    }));
+    child.adjustments.push(Adjustment::ViewportFloor);
     child
 }
 
@@ -1607,7 +1671,8 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                 proposals.push((index, allocated, geometry));
             }
             // Width-dependent ordinary heights are hard floors. Only explicitly
-            // declared viewports (possibly nested) offer vertical capacity.
+            // declared viewports (possibly nested) offer vertical capacity
+            // (`LeafHeight`).
             let heights = allocate_with_growth(
                 height - gap,
                 &proposals
