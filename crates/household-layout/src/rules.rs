@@ -148,8 +148,9 @@ impl Connectors {
     pub fn verdict(&self, at: PathAt) -> Option<(usize, Verdict)> {
         self.rows
             .iter()
-            .position(|row| row.at == at)
-            .map(|index| (index, self.rows[index].verdict))
+            .enumerate()
+            .find(|(_, row)| row.at == at)
+            .map(|(index, row)| (index, row.verdict))
     }
 
     /// The index of the row with this name, for a caller changing it.
@@ -501,12 +502,10 @@ impl DiagramSpacing {
         match self
             .least_for_pairs
             .iter()
-            .position(|p| (p.a, p.b) == (a, b) || (p.a, p.b) == (b, a))
+            .enumerate()
+            .find(|(_, p)| (p.a, p.b) == (a, b) || (p.a, p.b) == (b, a))
         {
-            Some(index) => (
-                self.least_for_pairs[index].least.resolve(sizes),
-                DistanceRow::PairLeast(index),
-            ),
+            Some((index, pair)) => (pair.least.resolve(sizes), DistanceRow::PairLeast(index)),
             None => (self.least.resolve(sizes), DistanceRow::Least),
         }
     }
@@ -595,8 +594,9 @@ impl Cuts {
     pub fn verdict(&self, at: CutAt) -> Option<(usize, Verdict)> {
         self.rows
             .iter()
-            .position(|row| row.at == at)
-            .map(|index| (index, self.rows[index].verdict))
+            .enumerate()
+            .find(|(_, row)| row.at == at)
+            .map(|(index, row)| (index, row.verdict))
     }
 
     /// The index of the row with this name, for a caller changing it.
@@ -873,17 +873,28 @@ impl Covering {
         own: bool,
         along: bool,
     ) -> (Verdict, CoveringRef) {
-        self.rows
-            .iter()
-            .position(|row| {
-                row.placed.matches(placed.0, placed.1)
-                    && matches!(&row.meets, Meets::Occupant(m) if m.matches(met.0, met.1))
-                    && row.ownership.matches(own)
-                    && (row.contact == Contact::Any || along)
+        self.row_along(placed, met, own, along)
+            .map_or((self.unlisted, CoveringRef::Unlisted), |(index, row)| {
+                (row.verdict, CoveringRef::Row(index))
             })
-            .map_or((self.unlisted, CoveringRef::Unlisted), |index| {
-                (self.rows[index].verdict, CoveringRef::Row(index))
-            })
+    }
+
+    /// The first row for a placed thing meeting an occupant, by index,
+    /// where `along` says whether the placed thing runs along what it
+    /// meets.
+    fn row_along(
+        &self,
+        placed: (Kind, Option<&Role>),
+        met: (Kind, Option<&Role>),
+        own: bool,
+        along: bool,
+    ) -> Option<(usize, &CoveringRow)> {
+        self.rows.iter().enumerate().find(|(_, row)| {
+            row.placed.matches(placed.0, placed.1)
+                && matches!(&row.meets, Meets::Occupant(m) if m.matches(met.0, met.1))
+                && row.ownership.matches(own)
+                && (row.contact == Contact::Any || along)
+        })
     }
 
     /// The verdict for a placed thing crossing the figure's edge, if a row
@@ -891,10 +902,11 @@ impl Covering {
     pub fn edge_verdict(&self, placed: (Kind, Option<&Role>)) -> Option<(Verdict, CoveringRef)> {
         self.rows
             .iter()
-            .position(|row| {
+            .enumerate()
+            .find(|(_, row)| {
                 row.placed.matches(placed.0, placed.1) && row.meets == Meets::FigureEdge
             })
-            .map(|index| (self.rows[index].verdict, CoveringRef::Row(index)))
+            .map(|(index, row)| (row.verdict, CoveringRef::Row(index)))
     }
 
     /// The row a placed thing would meet an occupant by, if one matches;
@@ -905,10 +917,18 @@ impl Covering {
         met: (Kind, Option<&Role>),
         own: bool,
     ) -> Option<usize> {
-        match self.verdict(placed, met, own).1 {
-            CoveringRef::Row(index) => Some(index),
-            _ => None,
-        }
+        self.row_entry_for(placed, met, own).map(|(index, _)| index)
+    }
+
+    /// The row a placed thing would meet an occupant by, with its index, if
+    /// one matches: [`Self::row_for`] with the row itself.
+    pub(crate) fn row_entry_for(
+        &self,
+        placed: (Kind, Option<&Role>),
+        met: (Kind, Option<&Role>),
+        own: bool,
+    ) -> Option<(usize, &CoveringRow)> {
+        self.row_along(placed, met, own, false)
     }
 
     /// The index of the row with this name, for a caller changing it.

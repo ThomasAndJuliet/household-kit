@@ -268,15 +268,19 @@ fn segment_rect_distance(a: Point, b: Point, r: Rect) -> f64 {
     if r.holds(a) || r.holds(b) {
         return 0.0;
     }
-    let corners = [
-        Point::new(r.x, r.y),
-        Point::new(r.right(), r.y),
-        Point::new(r.right(), r.bottom()),
-        Point::new(r.x, r.bottom()),
-    ];
-    (0..4)
-        .map(|i| segment_segment_distance(a, b, corners[i], corners[(i + 1) % 4]))
-        .fold(f64::INFINITY, f64::min)
+    let top_left = Point::new(r.x, r.y);
+    let top_right = Point::new(r.right(), r.y);
+    let bottom_right = Point::new(r.right(), r.bottom());
+    let bottom_left = Point::new(r.x, r.bottom());
+    [
+        (top_left, top_right),
+        (top_right, bottom_right),
+        (bottom_right, bottom_left),
+        (bottom_left, top_left),
+    ]
+    .into_iter()
+    .map(|(from, to)| segment_segment_distance(a, b, from, to))
+    .fold(f64::INFINITY, f64::min)
 }
 
 /// A thing drawn, or a candidate for drawing: its ink, its kind, its
@@ -722,8 +726,7 @@ impl Record {
             }
             let (least, least_row) =
                 spacing.least_between(candidate.kind, occupant.kind, &self.sizes);
-            if let Some(index) = covering.row_for(placed, met, own) {
-                let row = &covering.rows[index];
+            if let Some((index, row)) = covering.row_entry_for(placed, met, own) {
                 if row.verdict == Verdict::MeantToMeet {
                     continue;
                 }
