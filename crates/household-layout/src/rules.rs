@@ -23,6 +23,11 @@ pub struct Rules {
     /// (value lines with those roles) are beneath data marks; a comparison
     /// or event line is drawn over a bar and is judged.
     pub drawing_order: Vec<Beneath>,
+    /// Where a halo may cut a line (design §7: "A halo's cut | a crossing,
+    /// a bend, the line's end | never"; "near an end; over a third of the
+    /// line | less preferred"). The halo's width and the two lengths these
+    /// rows measure by are in the distance table, beside the halo.
+    pub cuts: Cuts,
     /// The level from which a distance below its ideal is accepted
     /// (semantics A7). Compositions take the same value for their gaps.
     pub squeeze_from: Level,
@@ -43,6 +48,7 @@ impl Default for Rules {
                     Match::kinds(Kind::DataMark),
                 ),
             ],
+            cuts: Cuts::default(),
             squeeze_from: Level::Strong,
         }
     }
@@ -142,6 +148,24 @@ pub enum Relation {
     /// Meant to meet: an arrow and its target, bars touching by design, a
     /// text and the line it stands in. No distance.
     MeantToMeet,
+    /// A label on its own mark's line, and a mark that neighbours its own
+    /// mark across that line (Juliet, 18 Nov: "a label just beyond its own
+    /// bar's end, on its bar's line, belongs to that bar even beside a
+    /// longer touching neighbour"). The pair keeps the distance the table's
+    /// [`DiagramSpacing::own_line`] names (by default the least distance
+    /// only) and is never flagged as squeezed.
+    ///
+    /// A caller declares it ([`crate::record::Record::declare`]) for one
+    /// pair at a time, and must be able to show, from its own geometry,
+    /// that the label stands on its own mark's line: the label lies within
+    /// its own mark's extent across the mark's length (for a horizontal
+    /// bar, between the bar's top and bottom; for an upright one, between
+    /// its left and right), and along that length it stands just beyond
+    /// the mark's end or inside the mark. The other side of the pair is a
+    /// mark that neighbours the label's own mark across that line: the
+    /// next bar of a cluster, touching or not. The record does not check
+    /// this; it judges the pair by the row the declaration names.
+    OwnLine,
 }
 
 /// The distance table: two families, text spacing and diagram spacing.
@@ -165,7 +189,10 @@ impl Default for Distances {
                 unrelated: Measure::em(0.66),
                 near: Measure::em(0.336 + 0.2),
                 least_for_pairs: Vec::new(),
+                own_line: IdealRow::Least,
                 halo: Measure::em(0.15),
+                halo_near_end: Measure::em(1.0),
+                halo_cut_share: 1.0 / 3.0,
             },
         }
     }
@@ -271,9 +298,35 @@ pub struct DiagramSpacing {
     /// Pairs of kinds with a least distance of their own; the first entry
     /// naming a pair, in either order, is used.
     pub least_for_pairs: Vec<PairLeast>,
-    /// The halo's width. The halo's geometry is not in this slice; the
-    /// number lives here with the others.
+    /// The distance a pair declared [`Relation::OwnLine`] keeps: by
+    /// default the least distance between their kinds, and no squeezing
+    /// below an ideal, since this row is their ideal.
+    pub own_line: IdealRow,
+    /// The halo's width: the clear space a halo leaves between a text and
+    /// the ink of the line it stands in, on every side ([`crate::halo`]). A
+    /// starting value nobody has decided, to be judged on pictures:
+    /// "tying it to the size eg line width or font sizing but this is a
+    /// matter of numbers not architecture so should be easy to tune".
     pub halo: Measure,
+    /// How near a line's end a halo's cut is "near an end" (the cut rows'
+    /// [`CutAt::NearEnd`]): measured from either end of the cut to the
+    /// line's end. A starting value.
+    pub halo_near_end: Measure,
+    /// The share of a line's length beyond which a halo's cut is "over a
+    /// third of the line" (the cut rows' [`CutAt::OverShare`]). A
+    /// starting value.
+    pub halo_cut_share: f64,
+}
+
+/// Which entry of the diagram spacing a relation keeps as its ideal, where
+/// the table names it by row ([`DiagramSpacing::own_line`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IdealRow {
+    /// The least distance for the pair's kinds, with its pair rows: below
+    /// it rejected, at or above it clean, never squeezed.
+    Least,
+    Related,
+    Unrelated,
 }
 
 /// A least distance of its own for a pair of kinds.
@@ -316,12 +369,127 @@ impl DiagramSpacing {
     }
 
     /// The ideal for a relation and the row it comes from; none for things
-    /// meant to meet.
+    /// meant to meet. For a pair on its own line whose row is the least
+    /// distance this is the general least distance; [`Self::ideal_between`]
+    /// counts the pair rows of the two kinds as well.
     pub fn ideal(&self, relation: Relation, sizes: &Sizes) -> Option<(f64, DistanceRow)> {
         match relation {
             Relation::Related => Some((self.related.resolve(sizes), DistanceRow::Related)),
             Relation::Unrelated => Some((self.unrelated.resolve(sizes), DistanceRow::Unrelated)),
             Relation::MeantToMeet => None,
+            Relation::OwnLine => Some(match self.own_line {
+                IdealRow::Least => (self.least.resolve(sizes), DistanceRow::Least),
+                IdealRow::Related => (self.related.resolve(sizes), DistanceRow::Related),
+                IdealRow::Unrelated => (self.unrelated.resolve(sizes), DistanceRow::Unrelated),
+            }),
+        }
+    }
+
+    /// The ideal for a relation between two kinds and the row it comes
+    /// from: [`Self::ideal`], with the least distance taken from the pair
+    /// rows where the relation's row is the least distance.
+    pub fn ideal_between(
+        &self,
+        relation: Relation,
+        a: Kind,
+        b: Kind,
+        sizes: &Sizes,
+    ) -> Option<(f64, DistanceRow)> {
+        match (relation, self.own_line) {
+            (Relation::OwnLine, IdealRow::Least) => Some(self.least_between(a, b, sizes)),
+            _ => self.ideal(relation, sizes),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Halo cuts
+// ---------------------------------------------------------------------------
+
+/// Where a halo's cut falls, for the rows of [`Cuts`] (design §7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CutAt {
+    /// Another line crosses the line inside the cut.
+    Crossing,
+    /// The cut reaches a bend: a point where two straight pieces of the
+    /// line meet at an angle.
+    Bend,
+    /// The cut reaches the line's end.
+    End,
+    /// The cut comes within [`DiagramSpacing::halo_near_end`] of the
+    /// line's end without reaching it.
+    NearEnd,
+    /// The cut is longer than [`DiagramSpacing::halo_cut_share`] of the
+    /// line.
+    OverShare,
+    /// The text stands in a cut another text's halo has already made in
+    /// the line ("a second text may not stand in the first one's cut").
+    InAnotherCut,
+    /// The verdict asks for a halo in a thing drawn as an area, which has
+    /// no line to cut.
+    NotALine,
+}
+
+/// One row of the cut table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CutRow {
+    /// The row's words, for reports.
+    pub name: String,
+    pub at: CutAt,
+    pub verdict: Verdict,
+}
+
+/// The cut table: for each place a cut may fall, a verdict. Every row
+/// that applies to a cut gives a finding; a place no row names is no
+/// concern of the table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cuts {
+    pub rows: Vec<CutRow>,
+}
+
+impl Cuts {
+    /// The first row for `at`, by index, with its verdict.
+    pub fn verdict(&self, at: CutAt) -> Option<(usize, Verdict)> {
+        self.rows
+            .iter()
+            .position(|row| row.at == at)
+            .map(|index| (index, self.rows[index].verdict))
+    }
+
+    /// The index of the row with this name, for a caller changing it.
+    pub fn row_named(&self, name: &str) -> Option<usize> {
+        self.rows.iter().position(|row| row.name == name)
+    }
+}
+
+impl Default for Cuts {
+    /// Design §7: "A halo's cut | a crossing, a bend, the line's end |
+    /// never"; "A halo's cut | near an end; over a third of the line | less
+    /// preferred". The last two rows are what the record needs besides: a
+    /// text never stands in another's cut (the brief of 20 Nov), and a halo
+    /// needs a line to cut.
+    fn default() -> Self {
+        use CutAt::*;
+        use Verdict::{LessPreferred, Never};
+        let row = |name: &str, at, verdict| CutRow {
+            name: name.into(),
+            at,
+            verdict,
+        };
+        Self {
+            rows: vec![
+                row("a halo's cut at a crossing", Crossing, Never),
+                row("a halo's cut at a bend", Bend, Never),
+                row("a halo's cut at the line's end", End, Never),
+                row("a halo's cut near an end", NearEnd, LessPreferred),
+                row(
+                    "a halo's cut over a third of the line",
+                    OverShare,
+                    LessPreferred,
+                ),
+                row("text in another text's cut", InAnotherCut, Never),
+                row("a halo in a thing not drawn as a line", NotALine, Never),
+            ],
         }
     }
 }
@@ -373,6 +541,12 @@ impl Verdict {
             Self::LastInOrder => Preference::LastInOrder,
             _ => Preference::InOrder,
         }
+    }
+
+    /// Whether a thing placed by this verdict stands in what it meets with
+    /// a halo, so that the record cuts the line round it.
+    pub fn needs_halo(self) -> bool {
+        matches!(self, Self::MoveFirstElseHalo | Self::AllowedWithHalo)
     }
 }
 
@@ -881,6 +1055,51 @@ mod tests {
         assert_eq!(
             c.verdict((Kind::Words, None), (Kind::Tick, None), false),
             (Verdict::Never, CoveringRef::Unlisted)
+        );
+    }
+
+    #[test]
+    fn the_default_cut_rows_and_halo_numbers_follow_the_design() {
+        let d = Distances::default().diagram;
+        assert!((d.halo.resolve(&SIZES) - 1.65).abs() < 1e-9);
+        assert_eq!(d.halo_near_end, Measure::em(1.0));
+        assert!((d.halo_cut_share - 1.0 / 3.0).abs() < 1e-12);
+        assert_eq!(d.own_line, IdealRow::Least);
+        let cuts = Cuts::default();
+        let verdict = |at| cuts.verdict(at).unwrap().1;
+        for at in [
+            CutAt::Crossing,
+            CutAt::Bend,
+            CutAt::End,
+            CutAt::InAnotherCut,
+        ] {
+            assert_eq!(verdict(at), Verdict::Never, "{at:?}");
+        }
+        assert_eq!(verdict(CutAt::NearEnd), Verdict::LessPreferred);
+        assert_eq!(verdict(CutAt::OverShare), Verdict::LessPreferred);
+        let halo: Vec<_> = [
+            Verdict::MoveFirstElseHalo,
+            Verdict::AllowedWithHalo,
+            Verdict::Allowed,
+            Verdict::BreaksRound,
+        ]
+        .map(Verdict::needs_halo)
+        .to_vec();
+        assert_eq!(halo, [true, true, false, false]);
+        // The own line's ideal is the pair's least distance.
+        let mut d = d;
+        d.least_for_pairs.push(PairLeast {
+            a: Kind::Number,
+            b: Kind::DataMark,
+            least: Measure::em(0.1),
+        });
+        assert_eq!(
+            d.ideal_between(Relation::OwnLine, Kind::DataMark, Kind::Number, &SIZES),
+            Some((1.1, DistanceRow::PairLeast(0)))
+        );
+        assert_eq!(
+            d.ideal_between(Relation::Unrelated, Kind::DataMark, Kind::Number, &SIZES),
+            d.ideal(Relation::Unrelated, &SIZES)
         );
     }
 }

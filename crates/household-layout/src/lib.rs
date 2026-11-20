@@ -66,10 +66,13 @@
 //! - [`rules`]: the distance table, the covering table and the order of
 //!   drawing.
 //! - [`record`]: the record of occupied space, and what it answers.
+//! - [`halo`]: where a line is cut round a text standing in it, what a
+//!   caller enters for a line, and how a cut is judged.
 //! - [`labels`]: anchors, and label sets placed by pattern.
 
 pub mod engine;
 pub mod geometry;
+pub mod halo;
 pub mod identity;
 pub mod kinds;
 pub mod labels;

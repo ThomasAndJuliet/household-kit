@@ -38,6 +38,28 @@
 //! result into the record it was judged against; [`place_set`] does both.
 //! Nothing is moved after it is placed.
 //!
+//! # Halo or move, once per set
+//!
+//! A member standing in a line by a verdict that needs a halo carries the
+//! cut its halo makes ([`PlacedLabel::cuts`]), judged by the cut table: a
+//! pattern whose cut falls at a crossing, a bend or a line's end is
+//! rejected like any other, and one whose cut falls near an end or over a
+//! third of the line waits behind those whose cuts do not. [`enter_set`]
+//! enters the cuts with the labels, and the caller draws each line broken
+//! where they say ([`Record::cuts_of`]).
+//!
+//! "Halo or move is chosen once per set" (design §9, provisional): a set
+//! either moves every member that meets a line or haloes every one. A
+//! pattern is one place for every member, so the choice is the pattern's:
+//! the set moves when some pattern holds every member clear of the lines it
+//! may only stand in with a halo, and otherwise takes the first pattern
+//! that needs halos, every member standing in a line haloed where that
+//! pattern puts it. No member is moved off its line while another is
+//! haloed, since no pattern moves one member alone. The rule therefore
+//! holds by construction rather than as a row of data: choosing per label
+//! instead would need a list of places for each member, which sets placed
+//! by pattern do not have.
+//!
 //! # Labels whose positions nearly agree share one line (U8)
 //!
 //! Juliet's rule, approved 8 November: value labels whose positions differ
@@ -97,6 +119,7 @@
 //! (Checked by the test `worked_example_value_labels_on_two_bars`.)
 
 use crate::geometry::{Point, Rect, Size};
+use crate::halo::Cut;
 use crate::identity::Id;
 use crate::kinds::{Kind, Role};
 use crate::level::Level;
@@ -492,6 +515,14 @@ pub struct PlacedLabel {
     pub judgement: Judgement,
 }
 
+impl PlacedLabel {
+    /// The cuts this label's halo makes in the lines it stands in: where
+    /// to draw each of them broken.
+    pub fn cuts(&self) -> &[Cut] {
+        &self.judgement.cuts
+    }
+}
+
 /// A set placed by one pattern: judged, and not yet entered unless
 /// [`place_set`] made it.
 #[derive(Clone, Debug, PartialEq)]
@@ -594,7 +625,8 @@ pub fn judge_set(
     })
 }
 
-/// Enters a judged set's labels in the record, in the members' order.
+/// Enters a judged set's labels in the record, in the members' order, and
+/// the cuts their halos make in the lines they stand in.
 /// Fails, entering nothing, if the record has changed since the set was
 /// judged: two sets judged against one record cannot both be entered
 /// (semantics C9).
@@ -606,6 +638,12 @@ pub fn enter_set(record: &mut Record, placed: &Placed) -> Result<(), Stale> {
         });
     }
     record.enter_all(placed.labels.iter().map(|label| label.occupant.clone()));
+    record.enter_cuts(
+        placed
+            .labels
+            .iter()
+            .flat_map(|label| label.cuts().iter().cloned()),
+    );
     Ok(())
 }
 
@@ -1877,5 +1915,184 @@ mod tests {
         );
         // On a 40 px bar it reaches nothing.
         assert_eq!(across(&set, 0, 40.0), Room::default());
+    }
+
+    // ----- halos (design §7, §9) -----
+
+    /// A line from `from` to `to`, a gridline, 1 px wide.
+    fn line(r: &mut Record, name: &str, from: (f64, f64), to: (f64, f64)) {
+        r.enter(
+            Occupant::new(
+                Id::new(name),
+                Kind::ValueLine,
+                Ink::segment(Point::new(from.0, from.1), Point::new(to.0, to.1), 1.0),
+            )
+            .with_role(Role::gridline()),
+        );
+    }
+
+    /// A note set (words) over the chart's bars, by `patterns`.
+    fn notes(count: usize, patterns: Vec<Pattern>) -> LabelSet {
+        let mut set = value_labels(count);
+        set.kind = Kind::Words;
+        set.patterns = patterns;
+        set
+    }
+
+    fn above(name: &str, alignment: Alignment, gap: Gap) -> Pattern {
+        Pattern::new(name, Attach::Whole, Side::Above, alignment).gap(gap)
+    }
+
+    fn cut_xs(label: &PlacedLabel) -> Vec<(f64, f64)> {
+        label.cuts().iter().map(|c| (c.from.x, c.to.x)).collect()
+    }
+
+    #[test]
+    fn words_move_when_a_clean_place_exists_and_are_haloed_when_none_does() {
+        // The note beyond b0's end (13..27, 85.3..96.3) stands in the
+        // gridline at 90; beside the bar it is clear.
+        let (r, set) = notes_with_gridline_and_side(false);
+        let moved = judge_set(&r, &set, PLOT, Level::Preferred).unwrap();
+        assert_eq!((moved.pattern, moved.preference), (1, Preference::InOrder));
+        assert_eq!(moved.labels[0].cuts(), []);
+        // With no clean place it stays and the gridline is cut round it:
+        // from 1.65 px before the note to 1.65 px after.
+        let (mut r, mut set) = notes_with_gridline_and_side(false);
+        set.patterns.truncate(1);
+        let haloed = place_set(&mut r, &set, PLOT, Level::Preferred).unwrap();
+        assert_eq!(
+            (haloed.pattern, haloed.preference),
+            (0, Preference::ElseHalo)
+        );
+        let [(from, to)] = cut_xs(&haloed.labels[0])[..] else {
+            panic!("{haloed:?}")
+        };
+        assert!(close(from, 11.35) && close(to, 28.65));
+        // Entering the set entered the cut: the caller draws the line
+        // broken there.
+        let cuts: Vec<_> = r.cuts_of(&Id::new("grid-90")).collect();
+        assert_eq!(cuts, haloed.labels[0].cuts().iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_number_is_never_haloed_into_a_line_not_its_own() {
+        // Value labels beyond the bars stand in a gridline at 90; inside
+        // the bars they are clear. The halo is not offered to a number.
+        let mut r = chart(&[100.0, 60.0, 120.0]);
+        line(&mut r, "grid-90", (0.0, 90.0), (200.0, 90.0));
+        let placed = judge_set(&r, &value_labels(3), PLOT, Level::Preferred).unwrap();
+        assert_eq!(
+            (placed.pattern, placed.preference),
+            (1, Preference::InOrder)
+        );
+        let mut only_beyond = value_labels(3);
+        only_beyond.patterns.truncate(1);
+        let failure = judge_set(&r, &only_beyond, PLOT, Level::AllPermitted).unwrap_err();
+        assert!(matches!(
+            &failure.stopped[0],
+            Stopped {
+                member,
+                reason: Reason::Rejected(Finding::Meets {
+                    against: Against::Occupant(on),
+                    verdict: Verdict::Never,
+                    ..
+                }),
+                ..
+            } if member.as_str() == "b0/value" && on.as_str() == "grid-90"
+        ));
+    }
+
+    #[test]
+    fn a_cut_at_the_lines_end_is_refused_and_one_near_it_comes_later_in_order() {
+        // b0 spans 10..30 and its note's place above it, aligned with the
+        // bar's start, is 10..24; aligned with its end, 16..30.
+        let start = || above("above, from the start", Alignment::Start, Gap::Related);
+        let end = || above("above, to the end", Alignment::End, Gap::Related);
+        // A line from 0: the start-aligned cut begins at 8.35, near the
+        // end (within 11 px); the end-aligned one at 14.35, not near.
+        let mut r = chart(&[100.0]);
+        line(&mut r, "grid", (0.0, 90.0), (200.0, 90.0));
+        let placed =
+            judge_set(&r, &notes(1, vec![start(), end()]), PLOT, Level::Preferred).unwrap();
+        assert_eq!(
+            (placed.pattern, placed.preference),
+            (1, Preference::ElseHalo)
+        );
+        let alone = judge_set(&r, &notes(1, vec![start()]), PLOT, Level::Preferred).unwrap();
+        assert_eq!(alone.preference, Preference::LessPreferred);
+        assert!(close(cut_xs(&alone.labels[0])[0].0, 8.35));
+        // A line from 12: the start-aligned cut would reach its end; the
+        // end-aligned one comes 2.35 px from it, near the end, and is taken.
+        let mut r = chart(&[100.0]);
+        line(&mut r, "grid", (12.0, 90.0), (200.0, 90.0));
+        let set = notes(1, vec![start(), end()]);
+        let placed = judge_set(&r, &set, PLOT, Level::Preferred).unwrap();
+        assert_eq!(
+            (placed.pattern, placed.preference),
+            (1, Preference::LessPreferred)
+        );
+        let failure =
+            judge_set(&r, &notes(1, vec![start()]), PLOT, Level::AllPermitted).unwrap_err();
+        assert!(matches!(
+            &failure.stopped[0].reason,
+            Reason::Rejected(Finding::Cut {
+                at: crate::rules::CutAt::End,
+                verdict: Verdict::Never,
+                ..
+            })
+        ));
+        // An upright line at x = 20 crosses inside the end-aligned cut,
+        // which leaves no place (the start-aligned one is still stopped
+        // first by the line's end).
+        line(&mut r, "upright", (20.0, 0.0), (20.0, 99.0));
+        let failure = judge_set(&r, &set, PLOT, Level::AllPermitted).unwrap_err();
+        assert!(matches!(
+            &failure.stopped[1].reason,
+            Reason::Rejected(Finding::Cut {
+                against: Against::Occupant(on),
+                at: crate::rules::CutAt::Crossing,
+                by: Some(by),
+                ..
+            }) if on.as_str() == "grid" && by.as_str() == "upright"
+        ));
+    }
+
+    #[test]
+    fn a_set_that_would_mix_moving_and_haloing_haloes_every_member_or_moves_every_one() {
+        // Two notes over bars b0 (10..30) and b1 (50..70), both tops at 100.
+        // Above, at the related gap, both stand in the line at 90. 25 px
+        // up, b0's note is clear and b1's stands in a line at 69.5 that
+        // starts at 35. Chosen per label, b0's note would move up and
+        // b1's be haloed where it is: the set haloes both instead.
+        let mut r = chart(&[100.0, 100.0]);
+        line(&mut r, "low", (-200.0, 90.0), (300.0, 90.0));
+        line(&mut r, "high", (35.0, 69.5), (300.0, 69.5));
+        let patterns = vec![
+            above("above", Alignment::Center, Gap::Related),
+            above("further above", Alignment::Center, Gap::Length(25.0)),
+        ];
+        let set = notes(2, patterns.clone());
+        let placed = place_set(&mut r.clone(), &set, PLOT, Level::Preferred).unwrap();
+        assert_eq!(placed.pattern, 0);
+        let lines: Vec<Vec<&str>> = placed
+            .labels
+            .iter()
+            .map(|l| l.cuts().iter().map(|c| c.line.as_str()).collect())
+            .collect();
+        assert_eq!(lines, [["low"], ["low"]]);
+        // Two cuts in one line: the second note is judged against the line
+        // as the first leaves it, and stands clear of the first's cut.
+        assert!(close(cut_xs(&placed.labels[1])[0].0, 51.35));
+        // With a place clear of every line for both, the set moves both.
+        let mut set = set;
+        set.patterns
+            .push(above("well above", Alignment::Center, Gap::Length(40.0)));
+        let placed = place_set(&mut r, &set, PLOT, Level::Preferred).unwrap();
+        assert_eq!(
+            (placed.pattern, placed.preference),
+            (2, Preference::InOrder)
+        );
+        assert!(placed.labels.iter().all(|l| l.cuts().is_empty()));
+        assert_eq!(r.cuts(), []);
     }
 }

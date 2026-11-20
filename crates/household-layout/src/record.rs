@@ -61,18 +61,43 @@
 //!
 //! (Checked by the test `worked_example_a_bar_its_label_and_a_note`.)
 //!
+//! # Halos
+//!
+//! Where a candidate meets a line by a verdict that needs a halo (words in
+//! a value line, a number in its own value line, a series' name in its own
+//! data line), the judgement also carries the cut the halo makes in the
+//! line ([`Judgement::cuts`]) and a [`Finding::Cut`] for every row of the
+//! cut table that applies: at a crossing, a bend or the line's end, never;
+//! near an end or over a third of the line, less preferred. A caller that
+//! takes the place enters the cuts with the label
+//! ([`Record::enter_cuts`]; the label sets do it in
+//! [`crate::labels::enter_set`]) and draws each line broken where its cuts
+//! say ([`Record::cuts_of`]). A line that is cut stays one occupant; later
+//! candidates are judged against the ink it still shows, and one standing
+//! in another text's cut is refused. What a caller enters for a line, and
+//! the geometry, are in [`crate::halo`].
+//!
+//! # A label on its own mark's line
+//!
+//! A pair the caller declares [`Relation::OwnLine`] (a label on its own
+//! mark's line, and a mark neighbouring that mark across the line) keeps
+//! the distance the table names for it, by default the least distance
+//! only, and is never flagged as squeezed. The comment on the relation
+//! says what the caller must be able to show to declare it.
+//!
 //! Not yet here: the record's judging puts no upper bound on a related
 //! distance (Juliet's "clearly belongs" test, near and far; label sets
-//! that share lines use near), and a halo has no geometry. This version
-//! searches a list; an index for many marks can replace it behind the
-//! same methods.
+//! that share lines use near). This version searches a list; an index for
+//! many marks can replace it behind the same methods.
 
 use crate::geometry::{FIT_EPSILON, Point, Rect};
+use crate::halo::{self, Cut, Line, Piece};
 use crate::identity::Id;
 use crate::kinds::{Kind, Role};
 use crate::level::Level;
 use crate::rules::{
-    CoveringRef, DistanceRow, Preference, Relation, Rules, Sizes, TextGap, TextMetrics, Verdict,
+    CoveringRef, CutAt, DistanceRow, Preference, Relation, Rules, Sizes, TextGap, TextMetrics,
+    Verdict,
 };
 
 /// What an occupant draws, for the record.
@@ -305,6 +330,18 @@ pub enum Finding {
         verdict: Verdict,
         row: CoveringRef,
     },
+    /// The candidate stands in a line with a halo, or in another text's
+    /// cut, and the cut table has a row for where the cut falls: the row's
+    /// verdict. `against` is the line; `by` is the other thing involved,
+    /// where there is one (the line crossing the cut, the text whose cut it
+    /// stands in). `row` indexes [`crate::rules::Cuts::rows`].
+    Cut {
+        against: Against,
+        at: CutAt,
+        by: Option<Id>,
+        verdict: Verdict,
+        row: usize,
+    },
 }
 
 impl Finding {
@@ -313,7 +350,8 @@ impl Finding {
             Self::Meets { against, .. }
             | Self::BelowLeast { against, .. }
             | Self::Squeezed { against, .. }
-            | Self::Near { against, .. } => against,
+            | Self::Near { against, .. }
+            | Self::Cut { against, .. } => against,
         }
     }
 
@@ -322,7 +360,9 @@ impl Finding {
     /// permitted from the level the finding carries.
     pub fn rejects_at(&self, level: Level) -> bool {
         match self {
-            Self::Meets { verdict, .. } | Self::Near { verdict, .. } => verdict.rejects(),
+            Self::Meets { verdict, .. }
+            | Self::Near { verdict, .. }
+            | Self::Cut { verdict, .. } => verdict.rejects(),
             Self::BelowLeast { .. } => true,
             Self::Squeezed { allowed_from, .. } => level < *allowed_from,
         }
@@ -333,6 +373,11 @@ impl Finding {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Judgement {
     pub findings: Vec<Finding>,
+    /// The cuts a halo round the candidate makes in the lines it stands in
+    /// by a verdict that needs a halo, one for each straight piece it
+    /// meets. A caller taking the place enters them
+    /// ([`Record::enter_cuts`]) and draws the lines broken there.
+    pub cuts: Vec<Cut>,
 }
 
 impl Judgement {
@@ -349,10 +394,12 @@ impl Judgement {
     }
 
     /// The verdicts of everything the candidate meets or, by a row that
-    /// holds near, comes close to.
+    /// holds near, comes close to, and of where its halos' cuts fall.
     pub fn verdicts(&self) -> impl Iterator<Item = Verdict> + '_ {
         self.findings.iter().filter_map(|f| match f {
-            Finding::Meets { verdict, .. } | Finding::Near { verdict, .. } => Some(*verdict),
+            Finding::Meets { verdict, .. }
+            | Finding::Near { verdict, .. }
+            | Finding::Cut { verdict, .. } => Some(*verdict),
             _ => None,
         })
     }
@@ -376,6 +423,7 @@ pub struct Record {
     occupants: Vec<Occupant>,
     declared: Vec<(Id, Id, Relation)>,
     joined: Vec<Join>,
+    cuts: Vec<Cut>,
     revision: Revision,
 }
 
@@ -410,6 +458,7 @@ impl Record {
             occupants: Vec::new(),
             declared: Vec::new(),
             joined: Vec::new(),
+            cuts: Vec::new(),
             revision: Revision::default(),
         }
     }
@@ -498,6 +547,25 @@ impl Record {
         self.occupants.push(occupant);
     }
 
+    /// Enters the cuts halos make in lines: those of a judgement whose place
+    /// was taken ([`Judgement::cuts`]). The lines stay as they were entered;
+    /// later candidates are judged against what they still show.
+    pub fn enter_cuts(&mut self, cuts: impl IntoIterator<Item = Cut>) {
+        self.changed();
+        self.cuts.extend(cuts);
+    }
+
+    /// Every cut entered, in the order entered.
+    pub fn cuts(&self) -> &[Cut] {
+        &self.cuts
+    }
+
+    /// The cuts entered in the line `line`: where to draw it broken.
+    pub fn cuts_of<'a>(&'a self, line: &Id) -> impl Iterator<Item = &'a Cut> + use<'a> {
+        let line = line.clone();
+        self.cuts.iter().filter(move |cut| cut.line == line)
+    }
+
     /// Judges a candidate against the figure's edge and everything it would
     /// meet or come too near. Changes nothing.
     pub fn judge(&self, candidate: &Occupant) -> Judgement {
@@ -511,8 +579,11 @@ impl Record {
         let covering = &self.rules.covering;
         let spacing = &self.rules.distances.diagram;
         let placed = (candidate.kind, candidate.role.as_ref());
-        let everything = || self.occupants.iter().chain(pending);
+        let everything: Vec<&Occupant> = self.occupants.iter().chain(pending).collect();
+        let pending_cuts = self.pending_cuts(pending, &everything);
+        let all_cuts: Vec<&Cut> = self.cuts.iter().chain(&pending_cuts).collect();
         let mut findings = Vec::new();
+        let mut cuts = Vec::new();
         if let Some(bounds) = self.bounds
             && !bounds.contains(candidate.ink.bounds())
             && let Some((verdict, row)) = covering.edge_verdict(placed)
@@ -523,26 +594,51 @@ impl Record {
                 row,
             });
         }
-        for occupant in everything() {
-            if self.hidden_from(candidate, occupant, everything()) {
+        for &occupant in &everything {
+            if self.hidden_from(candidate, occupant, everything.iter().copied()) {
                 continue;
             }
             let against = || Against::Occupant(occupant.id.clone());
             let relation = self.relation(candidate, occupant);
             let met = (occupant.kind, occupant.role.as_ref());
             let own = candidate.is_own(occupant);
-            let gap = candidate.ink.gap(&occupant.ink);
-            if gap <= 0.0 {
-                let (verdict, row) = if relation == Relation::MeantToMeet {
-                    (Verdict::MeantToMeet, CoveringRef::Declared)
-                } else {
-                    covering.verdict(placed, met, own)
+            // A line is judged as it now shows: without the stretches
+            // earlier halos cut from it, and a candidate standing in one of
+            // those is refused by the cut table.
+            let piece = Piece::of(&occupant.ink);
+            let mut spans = Vec::new();
+            for cut in all_cuts.iter().filter(|cut| cut.line == occupant.id) {
+                let Some(span) = piece.as_ref().and_then(|p| p.span_of(cut)) else {
+                    continue;
                 };
+                spans.push(span);
+                if cut.label != candidate.id && candidate.ink.meets(&cut.ink()) {
+                    self.cut_finding(
+                        &mut findings,
+                        occupant,
+                        CutAt::InAnotherCut,
+                        Some(cut.label.clone()),
+                    );
+                }
+            }
+            let gap = match &piece {
+                Some(piece) if !spans.is_empty() => piece
+                    .shown(&spans)
+                    .iter()
+                    .map(|ink| candidate.ink.gap(ink))
+                    .fold(f64::INFINITY, f64::min),
+                _ => candidate.ink.gap(&occupant.ink),
+            };
+            if gap <= 0.0 {
+                let (verdict, row) = self.meeting_verdict(candidate, occupant);
                 findings.push(Finding::Meets {
                     against: against(),
                     verdict,
                     row,
                 });
+                if verdict.needs_halo() {
+                    self.halo(candidate, occupant, &everything, &mut findings, &mut cuts);
+                }
                 continue;
             }
             if !candidate.kind.is_ink() || !occupant.kind.is_ink() {
@@ -564,7 +660,9 @@ impl Record {
                 }
                 continue;
             }
-            let Some((ideal, ideal_row)) = spacing.ideal(relation, &self.sizes) else {
+            let Some((ideal, ideal_row)) =
+                spacing.ideal_between(relation, candidate.kind, occupant.kind, &self.sizes)
+            else {
                 continue;
             };
             if gap >= ideal - FIT_EPSILON {
@@ -605,7 +703,109 @@ impl Record {
                 });
             }
         }
-        Judgement { findings }
+        Judgement { findings, cuts }
+    }
+
+    /// The covering table's verdict for a candidate meeting an occupant,
+    /// unless the caller declared the pair meant to meet.
+    fn meeting_verdict(&self, candidate: &Occupant, occupant: &Occupant) -> (Verdict, CoveringRef) {
+        if self.relation(candidate, occupant) == Relation::MeantToMeet {
+            (Verdict::MeantToMeet, CoveringRef::Declared)
+        } else {
+            self.rules.covering.verdict(
+                (candidate.kind, candidate.role.as_ref()),
+                (occupant.kind, occupant.role.as_ref()),
+                candidate.is_own(occupant),
+            )
+        }
+    }
+
+    /// A finding by the cut table's row for `at`, if it has one.
+    fn cut_finding(&self, findings: &mut Vec<Finding>, line: &Occupant, at: CutAt, by: Option<Id>) {
+        if let Some((row, verdict)) = self.rules.cuts.verdict(at) {
+            findings.push(Finding::Cut {
+                against: Against::Occupant(line.id.clone()),
+                at,
+                by,
+                verdict,
+                row,
+            });
+        }
+    }
+
+    /// The cut a halo round `candidate` makes in one piece of `line`, and
+    /// the findings of the cut table about where it falls ([`halo`]).
+    fn halo(
+        &self,
+        candidate: &Occupant,
+        line: &Occupant,
+        everything: &[&Occupant],
+        findings: &mut Vec<Finding>,
+        cuts: &mut Vec<Cut>,
+    ) {
+        let Some(piece) = Piece::of(&line.ink) else {
+            self.cut_finding(findings, line, CutAt::NotALine, None);
+            return;
+        };
+        let spacing = &self.rules.distances.diagram;
+        let width = spacing.halo.resolve(&self.sizes);
+        let Some(span) = piece.span(candidate.ink.bounds(), width) else {
+            return;
+        };
+        let whole = Line::of(&line.id, everything.iter().copied());
+        let others: Vec<(Id, Piece)> = everything
+            .iter()
+            .filter(|o| o.id != line.id && o.id != candidate.id && o.kind.is_ink())
+            .filter_map(|o| Piece::of(&o.ink).map(|p| (o.id.clone(), p)))
+            .collect();
+        let near_end = spacing.halo_near_end.resolve(&self.sizes);
+        for (at, by) in halo::places(
+            &whole,
+            &piece,
+            span,
+            &others,
+            near_end,
+            spacing.halo_cut_share,
+        ) {
+            self.cut_finding(findings, line, at, by);
+        }
+        cuts.extend(halo::cut(
+            &line.id,
+            &candidate.id,
+            &piece,
+            candidate.ink.bounds(),
+            width,
+        ));
+    }
+
+    /// The cuts the halos of `pending` things would make, as if they were
+    /// entered with their cuts: so that the members of a set are judged
+    /// against the lines as the members before them leave them.
+    fn pending_cuts(&self, pending: &[Occupant], everything: &[&Occupant]) -> Vec<Cut> {
+        let width = self.rules.distances.diagram.halo.resolve(&self.sizes);
+        let mut cuts = Vec::new();
+        for text in pending {
+            for &line in everything {
+                let Some(piece) = Piece::of(&line.ink) else {
+                    continue;
+                };
+                if line.id == text.id
+                    || !text.ink.meets(&line.ink)
+                    || self.hidden_from(text, line, everything.iter().copied())
+                    || !self.meeting_verdict(text, line).0.needs_halo()
+                {
+                    continue;
+                }
+                cuts.extend(halo::cut(
+                    &line.id,
+                    &text.id,
+                    &piece,
+                    text.ink.bounds(),
+                    width,
+                ));
+            }
+        }
+        cuts
     }
 
     /// Whether `line` is hidden from `candidate` by the order of drawing:
@@ -1296,5 +1496,104 @@ mod tests {
         assert!(judged.rejection_at(Level::Preferred).is_some());
         assert_eq!(judged.rejection_at(Level::Strong), None);
         assert_eq!(judged.squeezes().count(), 1);
+    }
+
+    // ----- halos and the own line -----
+
+    #[test]
+    fn a_number_is_haloed_only_into_its_own_value_line() {
+        let mut r = record();
+        r.enter(hline("target", Kind::ValueLine, 50.0).with_role(Role::comparison()));
+        let number = |owner: &str| {
+            Occupant::new(
+                id("n"),
+                Kind::Number,
+                Ink::Rect(Rect::new(100.0, 44.5, 20.0, 11.0)),
+            )
+            .owned_by(id(owner))
+        };
+        // Another's number: never, and no halo is offered.
+        let j = r.judge(&number("bar"));
+        assert!(j.rejection_at(Level::AllPermitted).is_some());
+        assert_eq!(j.cuts, []);
+        // The line's own value: allowed, with the line cut round it.
+        let j = r.judge(&number("target"));
+        assert_eq!(j.rejection_at(Level::Preferred), None);
+        assert_eq!(j.preference(), Preference::InOrder);
+        let [cut] = &j.cuts[..] else { panic!("{j:?}") };
+        assert_eq!(cut.line, id("target"));
+        assert!((cut.from.x - 98.35).abs() < 1e-9 && (cut.to.x - 121.65).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_halo_in_a_line_drawn_as_an_area_is_refused() {
+        let mut r = record();
+        r.enter(Occupant::new(
+            id("grid"),
+            Kind::ValueLine,
+            Ink::Rect(Rect::new(0.0, 49.5, 300.0, 1.0)),
+        ));
+        let j = r.judge(&label("w", Rect::new(100.0, 44.5, 20.0, 11.0)));
+        assert!(matches!(
+            j.rejection_at(Level::AllPermitted),
+            Some(Finding::Cut {
+                at: CutAt::NotALine,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_label_on_its_bars_line_beside_a_longer_touching_neighbour_is_not_squeezed() {
+        // Two touching horizontal bars of a cluster: a (y 100..116, 50 px
+        // long) and b below it (y 116..132, 80 px). a's value label stands
+        // just beyond a's end, centred on a's line, 2.5 px from b.
+        let mut r = record();
+        r.enter(bar("a", Rect::new(0.0, 100.0, 50.0, 16.0)));
+        r.enter(bar("b", Rect::new(0.0, 116.0, 80.0, 16.0)));
+        let value = |y: f64| {
+            Occupant::new(
+                id("a/value"),
+                Kind::Number,
+                Ink::Rect(Rect::new(50.0 + 3.696, y, 14.0, 11.0)),
+            )
+            .owned_by(id("a"))
+        };
+        let on_line = value(102.5);
+        let j = r.judge(&on_line);
+        assert_eq!(j.squeezes().count(), 1);
+        assert!(j.rejection_at(Level::Preferred).is_some());
+        // Declared on its own line: judged by the least distance only.
+        r.declare(id("a/value"), id("b"), Relation::OwnLine);
+        let j = r.judge(&on_line);
+        assert_eq!(j.findings, []);
+        assert_eq!(j.rejection_at(Level::Preferred), None);
+        // Below the least distance (2.2 px) it is still refused.
+        let j = r.judge(&value(103.5));
+        assert!(matches!(
+            j.rejection_at(Level::AllPermitted),
+            Some(Finding::BelowLeast { against: Against::Occupant(on), row: DistanceRow::Least, .. })
+                if on == &id("b")
+        ));
+        // The row is data: a pair row for the kinds counts, and the
+        // relation can be given the related ideal instead.
+        r.rules_mut()
+            .distances
+            .diagram
+            .least_for_pairs
+            .push(PairLeast {
+                a: Kind::Number,
+                b: Kind::DataMark,
+                least: Measure::em(0.1),
+            });
+        assert_eq!(r.judge(&value(103.5)).findings, []);
+        r.rules_mut().distances.diagram.own_line = crate::rules::IdealRow::Related;
+        assert!(matches!(
+            r.judge(&on_line).findings[..],
+            [Finding::Squeezed {
+                row: DistanceRow::Related,
+                ..
+            }]
+        ));
     }
 }
