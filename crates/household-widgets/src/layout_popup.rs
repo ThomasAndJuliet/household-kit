@@ -145,14 +145,14 @@ fn choose_attached_inner<'a, Message: 'a>(
     if !valid_rect(window) || !valid_rect(attachment.anchor) {
         return Err(NoFit { attempted });
     }
-    let query = |stage_index: usize, candidate_index: usize| {
+    // Each stage and candidate comes with its index, which the plan records.
+    let query = |(stage_index, stage): (usize, &Stage<'a, Message>),
+                 (candidate_index, &candidate): (usize, &AnchorCandidate)| {
         if rejected.contains(&(stage_index, candidate_index)) {
             return None;
         }
-        let candidate = attachment.candidates[candidate_index];
         let anchor = paint_anchor(attachment.anchor, candidate.side, attachment.surface_insets);
         let mut available = offer(window, anchor, candidate)?;
-        let stage = &stages[stage_index];
         if !attachment.fill_width {
             available.width = available
                 .width
@@ -182,8 +182,8 @@ fn choose_attached_inner<'a, Message: 'a>(
     };
     match attachment.preference {
         PlacementPreference::RepresentationFirst => {
-            for stage in 0..stages.len() {
-                for candidate in 0..attachment.candidates.len() {
+            for stage in stages.iter().enumerate() {
+                for candidate in attachment.candidates.iter().enumerate() {
                     if let Some(plan) = query(stage, candidate) {
                         return Ok(plan);
                     }
@@ -191,8 +191,8 @@ fn choose_attached_inner<'a, Message: 'a>(
             }
         }
         PlacementPreference::AnchorFirst => {
-            for candidate in 0..attachment.candidates.len() {
-                for stage in 0..stages.len() {
+            for candidate in attachment.candidates.iter().enumerate() {
+                for stage in stages.iter().enumerate() {
                     if let Some(plan) = query(stage, candidate) {
                         return Ok(plan);
                     }
@@ -245,10 +245,11 @@ pub(crate) fn choose_attached_chain(
     mut query: impl FnMut(&[ChainCard], usize, usize) -> Result<AttachedPlan, ChainFailure>,
 ) -> ChainSelection {
     let mut cards: Vec<ChainCard> = Vec::new();
+    // The span each level is tried with, one entry per level: the loop runs
+    // while `index` names a level.
     let mut spans = vec![1; count];
     let mut index = 0;
-    while index < count {
-        let span = spans[index];
+    while let Some(&span) = spans.get(index) {
         match query(&cards, index, span) {
             Ok(plan) => {
                 cards.push(ChainCard { index, span, plan });
@@ -261,9 +262,13 @@ pub(crate) fn choose_attached_chain(
                 };
                 if can_embed && let Some(parent) = cards.last() {
                     let combined = parent.span + span;
-                    if combined <= max_span(parent.index) {
+                    // The parent card was accepted at a level the loop named,
+                    // so its span is there to widen.
+                    if combined <= max_span(parent.index)
+                        && let Some(parent_span) = spans.get_mut(parent.index)
+                    {
+                        *parent_span = combined;
                         index = parent.index;
-                        spans[index] = combined;
                         cards.pop();
                         continue;
                     }
