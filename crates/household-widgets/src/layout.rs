@@ -2851,6 +2851,10 @@ mod width_dependent_tests;
 mod overflow_tests;
 
 #[cfg(test)]
+#[path = "layout_unbounded_tests.rs"]
+mod unbounded_tests;
+
+#[cfg(test)]
 mod renderer_minimum_tests {
     use super::*;
     use cosmic::iced::advanced::renderer::Headless;

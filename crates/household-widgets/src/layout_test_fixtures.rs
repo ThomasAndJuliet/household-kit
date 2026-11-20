@@ -108,6 +108,20 @@ pub(super) fn wrapping() -> Child<'static, ()> {
     shaped(|offer| paragraph(offer.width)).minimum_width(|_, _| 30.0)
 }
 
+/// A leaf with no intrinsic width, as a native Fill control has: offered
+/// unbounded width it reports an infinite width, at the height of `at` on an
+/// unbounded line; offered a finite width, it takes `at(width)`.
+pub(super) fn unbounded(at: impl Fn(f32) -> Size + 'static) -> Child<'static, ()> {
+    shaped(move |offer| {
+        let size = at(offer.width);
+        if offer.width.is_infinite() {
+            Size::new(f32::INFINITY, size.height)
+        } else {
+            size
+        }
+    })
+}
+
 /// What the child measures at the preferred level.
 pub(super) fn measure(child: &Child<'static, ()>) -> MeasuredSize {
     child.query(Level::Preferred, &renderer())
