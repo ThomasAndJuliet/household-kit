@@ -43,6 +43,24 @@ impl WidthCapacity {
     /// to width: a column shares height with the same capacities, so there
     /// it protects a preferred height (`Composition::plan_column`), and a
     /// wrap shares height between its rows with them.
+    ///
+    /// Two parts that prefer 100 and can work in 40: the one of weight 1
+    /// can be given 40, the one of weight 0 no less than its 100. Together
+    /// they need 140, which is what `allocate_width` requires of the room.
+    ///
+    /// ```
+    /// use household_layout::{AllocationError, WidthCapacity, allocate_width};
+    ///
+    /// let yielding = WidthCapacity { preferred: 100.0, minimum: 40.0, weight: 1.0 };
+    /// let protected = WidthCapacity { weight: 0.0, ..yielding };
+    /// assert_eq!(yielding.least(), 40.0);
+    /// assert_eq!(protected.least(), 100.0);
+    ///
+    /// assert_eq!(
+    ///     allocate_width(130.0, &[yielding, protected]),
+    ///     Err(AllocationError::NoFit { required: 140.0, available: 130.0 }),
+    /// );
+    /// ```
     pub fn least(self) -> f32 {
         if self.weight == 0.0 {
             self.preferred
@@ -65,6 +83,68 @@ pub enum AllocationError {
 /// Share a shortage using each child's original `weight * (preferred-minimum)`
 /// rate, clamping minima and redistributing at the remaining original rates.
 /// Surplus space is left unallocated. No representation levels are scheduled.
+///
+/// This is how parts set side by side share a room too narrow for all of
+/// them at their preferred widths: a row's children, and a column's
+/// children in height (see `WidthCapacity::least`). It returns one width per
+/// capacity, in their order. Each part starts at its preferred width, and
+/// the shortage (their total less the room) is taken from them in
+/// proportion to their rates, `weight × (preferred − minimum)`: a part
+/// gives width up faster the higher its weight and the more it has to give.
+/// A part that would be taken below its minimum stops there, and what it
+/// could not give is shared again among the rest at their own rates. A
+/// part of weight zero has a rate of zero and keeps its preferred width.
+/// The room must hold every part's `least`, within `FIT_EPSILON`, or the
+/// answer is `NoFit` with what was required; a room or a capacity that is
+/// not a usable number is `InvalidInput`. With room to spare, every part
+/// has its preferred width and the rest of the room is left over:
+/// `allocate_with_growth` shares it.
+///
+/// A shortage shared by rate. Two parts prefer 100; the first can work in
+/// 40 at weight 1 (rate 60), the second in 80 at weight 2 (rate 40). In
+/// 160 the shortage is 40, which they give up as 60 : 40, that is 24 and
+/// 16:
+///
+/// ```
+/// use household_layout::{WidthCapacity, allocate_width};
+///
+/// let capacities = [
+///     WidthCapacity { preferred: 100.0, minimum: 40.0, weight: 1.0 },
+///     WidthCapacity { preferred: 100.0, minimum: 80.0, weight: 2.0 },
+/// ];
+/// assert_eq!(allocate_width(160.0, &capacities), Ok(vec![76.0, 84.0]));
+/// ```
+///
+/// A part clamped at its minimum, and the rest shared again. The first part
+/// can give 20 at weight 3 (rate 60), the second 100 at weight 1 (rate
+/// 100). In 120 the shortage is 80, of which the first part's share is
+/// 30: more than its 20, so it stops at its minimum of 80 and the second
+/// gives 50. The 10 the first part could not give is shared again among the
+/// parts still above their minimum, here the second alone, which ends at 40:
+///
+/// ```
+/// use household_layout::{WidthCapacity, allocate_width};
+///
+/// let capacities = [
+///     WidthCapacity { preferred: 100.0, minimum: 80.0, weight: 3.0 },
+///     WidthCapacity { preferred: 100.0, minimum: 0.0, weight: 1.0 },
+/// ];
+/// assert_eq!(allocate_width(120.0, &capacities), Ok(vec![80.0, 40.0]));
+/// ```
+///
+/// A weight of zero protects the preferred width. Of two parts that prefer
+/// 100 and can work in 40, the one of weight 0 keeps its 100 and the other
+/// gives up the whole shortage of 50:
+///
+/// ```
+/// use household_layout::{WidthCapacity, allocate_width};
+///
+/// let capacities = [
+///     WidthCapacity { preferred: 100.0, minimum: 40.0, weight: 0.0 },
+///     WidthCapacity { preferred: 100.0, minimum: 40.0, weight: 1.0 },
+/// ];
+/// assert_eq!(allocate_width(150.0, &capacities), Ok(vec![100.0, 50.0]));
+/// ```
 pub fn allocate_width(
     available: f32,
     capacities: &[WidthCapacity],
@@ -140,6 +220,52 @@ pub fn allocate_width(
     Ok(widths.into_iter().map(|width| width as f32).collect())
 }
 
+/// Share a length as `allocate_width` does, then share any surplus by
+/// growth; in unbounded room, give every part its preferred width.
+///
+/// This is what the engine allocates with: a row's widths, a column's
+/// widths (one child at a time, `allocate_one`) and heights, and the
+/// heights of a wrap's rows. `grows` holds one growth factor per capacity,
+/// in their order. In a shortage the answer is `allocate_width`'s, since
+/// there is nothing left over to grow into. With room to spare, the
+/// surplus (the room less the widths allocated) is shared among the parts
+/// in proportion to their growth; when no part grows, it stays unallocated.
+/// Unbounded room (infinite) is how a part is asked what it would take
+/// without a limit: every part is given its preferred width and nothing
+/// grows, as there is no surplus to share; a capacity whose preferred or
+/// minimum width is not finite and not negative is `InvalidInput` there.
+///
+/// A surplus shared by growth. Two parts that prefer 60 and 40, growing
+/// 1 : 3, in 200: the surplus of 100 goes 25 to the first and 75 to the
+/// second:
+///
+/// ```
+/// use household_layout::{WidthCapacity, allocate_with_growth};
+///
+/// let capacities = [
+///     WidthCapacity { preferred: 60.0, minimum: 20.0, weight: 1.0 },
+///     WidthCapacity { preferred: 40.0, minimum: 20.0, weight: 1.0 },
+/// ];
+/// assert_eq!(
+///     allocate_with_growth(200.0, &capacities, &[1.0, 3.0]),
+///     Ok(vec![85.0, 115.0]),
+/// );
+/// ```
+///
+/// Unbounded room gives the preferred widths, whatever the growth:
+///
+/// ```
+/// use household_layout::{WidthCapacity, allocate_with_growth};
+///
+/// let capacities = [
+///     WidthCapacity { preferred: 60.0, minimum: 20.0, weight: 1.0 },
+///     WidthCapacity { preferred: 40.0, minimum: 20.0, weight: 1.0 },
+/// ];
+/// assert_eq!(
+///     allocate_with_growth(f32::INFINITY, &capacities, &[1.0, 3.0]),
+///     Ok(vec![60.0, 40.0]),
+/// );
+/// ```
 pub fn allocate_with_growth(
     available: f32,
     capacities: &[WidthCapacity],
@@ -184,4 +310,145 @@ pub fn allocate_one(
         .first()
         .copied()
         .ok_or(AllocationError::InvalidInput)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capacity(preferred: f32, minimum: f32, weight: f32) -> WidthCapacity {
+        WidthCapacity {
+            preferred,
+            minimum,
+            weight,
+        }
+    }
+
+    const GOOD: WidthCapacity = WidthCapacity {
+        preferred: 100.0,
+        minimum: 40.0,
+        weight: 1.0,
+    };
+
+    #[test]
+    fn every_kind_of_bad_room_is_invalid_input() {
+        for room in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0] {
+            assert_eq!(
+                allocate_width(room, &[GOOD]),
+                Err(AllocationError::InvalidInput),
+                "room {room}"
+            );
+        }
+        // Unbounded room is a question allocate_with_growth answers; a room
+        // that is not a number is not.
+        assert_eq!(
+            allocate_with_growth(f32::NAN, &[GOOD], &[0.0]),
+            Err(AllocationError::InvalidInput)
+        );
+        assert_eq!(
+            allocate_with_growth(-1.0, &[GOOD], &[0.0]),
+            Err(AllocationError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn every_kind_of_bad_capacity_is_invalid_input() {
+        let bad = [
+            ("preferred NaN", capacity(f32::NAN, 40.0, 1.0)),
+            ("preferred infinite", capacity(f32::INFINITY, 40.0, 1.0)),
+            ("minimum NaN", capacity(100.0, f32::NAN, 1.0)),
+            ("minimum infinite", capacity(100.0, f32::INFINITY, 1.0)),
+            ("minimum negative", capacity(100.0, -1.0, 1.0)),
+            ("preferred below minimum", capacity(30.0, 40.0, 1.0)),
+            ("weight NaN", capacity(100.0, 40.0, f32::NAN)),
+            ("weight infinite", capacity(100.0, 40.0, f32::INFINITY)),
+            ("weight negative", capacity(100.0, 40.0, -1.0)),
+        ];
+        for (what, bad) in bad {
+            // A bad capacity spoils the allocation wherever it stands.
+            assert_eq!(
+                allocate_width(1000.0, &[GOOD, bad]),
+                Err(AllocationError::InvalidInput),
+                "{what}"
+            );
+            assert_eq!(
+                allocate_with_growth(1000.0, &[GOOD, bad], &[0.0, 0.0]),
+                Err(AllocationError::InvalidInput),
+                "{what}"
+            );
+            assert_eq!(
+                allocate_one(1000.0, bad, 0.0),
+                Err(AllocationError::InvalidInput),
+                "{what}"
+            );
+        }
+        // In unbounded room only the widths are checked, finite and not
+        // negative.
+        for bad in [
+            capacity(f32::NAN, 40.0, 1.0),
+            capacity(f32::INFINITY, 40.0, 1.0),
+            capacity(100.0, f32::NAN, 1.0),
+            capacity(100.0, -1.0, 1.0),
+        ] {
+            assert_eq!(
+                allocate_with_growth(f32::INFINITY, &[GOOD, bad], &[0.0, 0.0]),
+                Err(AllocationError::InvalidInput)
+            );
+        }
+    }
+
+    #[test]
+    fn no_fit_says_what_was_required_and_what_there_was() {
+        // Each part's least: 40 for weight 1, 100 for weight 0.
+        let capacities = [GOOD, capacity(100.0, 40.0, 0.0), GOOD];
+        let expected = Err(AllocationError::NoFit {
+            required: 180.0,
+            available: 179.0,
+        });
+        assert_eq!(allocate_width(179.0, &capacities), expected);
+        assert_eq!(
+            allocate_with_growth(179.0, &capacities, &[1.0, 1.0, 1.0]),
+            expected
+        );
+        assert_eq!(
+            allocate_one(39.0, GOOD, 0.0),
+            Err(AllocationError::NoFit {
+                required: 40.0,
+                available: 39.0,
+            })
+        );
+        // Exactly the least fits, each part at its least.
+        assert_eq!(
+            allocate_width(180.0, &capacities),
+            Ok(vec![40.0, 100.0, 40.0])
+        );
+    }
+
+    #[test]
+    fn a_requirement_fits_within_the_tolerance_and_not_beyond_it() {
+        let available = 100.0;
+        let inside = available + FIT_EPSILON / 2.0;
+        let outside = available + 2.0 * FIT_EPSILON;
+        let fixed = |width: f32| capacity(width, width, 1.0);
+        // Just inside: it fits, and the part keeps its width, as it cannot
+        // give any up.
+        assert_eq!(
+            allocate_width(available, &[fixed(inside)]),
+            Ok(vec![inside])
+        );
+        // Just outside: it does not.
+        assert_eq!(
+            allocate_width(available, &[fixed(outside)]),
+            Err(AllocationError::NoFit {
+                required: outside,
+                available,
+            })
+        );
+    }
+
+    #[test]
+    fn nothing_to_share_is_an_empty_allocation() {
+        assert_eq!(allocate_width(0.0, &[]), Ok(vec![]));
+        assert_eq!(allocate_with_growth(f32::INFINITY, &[], &[]), Ok(vec![]));
+    }
 }

@@ -65,3 +65,42 @@ pub fn validate_measurement(size: Measured) -> Result<(), AllocationError> {
         Err(AllocationError::InvalidInput)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_size_is_finite_and_not_negative_and_room_may_be_unbounded() {
+        for bad in [f32::NAN, f32::INFINITY, -1.0] {
+            assert!(!finite_size(Size::new(bad, 1.0)));
+            assert!(!finite_size(Size::new(1.0, bad)));
+        }
+        assert!(finite_size(Size::ZERO));
+        for bad in [f32::NAN, f32::NEG_INFINITY, -1.0] {
+            assert!(!valid_available(Size::new(bad, 1.0)));
+            assert!(!valid_available(Size::new(1.0, bad)));
+        }
+        assert!(valid_available(Size::new(f32::INFINITY, f32::INFINITY)));
+    }
+
+    #[test]
+    fn a_measurement_is_valid_only_with_its_minimum_within_its_preference() {
+        let measured = |preferred: Size, minimum: Size| Measured { preferred, minimum };
+        let size = Size::new(10.0, 20.0);
+        assert_eq!(validate_measurement(measured(size, size)), Ok(()));
+        assert_eq!(validate_measurement(measured(size, Size::ZERO)), Ok(()));
+        for (preferred, minimum) in [
+            (size, Size::new(11.0, 20.0)),
+            (size, Size::new(10.0, 21.0)),
+            (Size::new(f32::NAN, 20.0), Size::ZERO),
+            (size, Size::new(-1.0, 0.0)),
+            (Size::new(10.0, f32::INFINITY), Size::ZERO),
+        ] {
+            assert_eq!(
+                validate_measurement(measured(preferred, minimum)),
+                Err(AllocationError::InvalidInput)
+            );
+        }
+    }
+}
