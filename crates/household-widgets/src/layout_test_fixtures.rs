@@ -167,3 +167,13 @@ pub(super) fn no_fit(required: f32, available: f32) -> AllocationError {
         available,
     }
 }
+
+/// The next f32 above `value`: the least by which one size can exceed
+/// another.
+pub(super) fn above(value: f32) -> f32 {
+    value.next_up()
+}
+
+/// A coordinate above 2^15, where f32s are 1/256 apart. That is more than
+/// twice the tolerance, so adding the tolerance to it changes nothing.
+pub(super) const LARGE: f32 = 40_000.0;

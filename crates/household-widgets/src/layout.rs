@@ -2859,6 +2859,10 @@ mod unbounded_tests;
 mod offer_tests;
 
 #[cfg(test)]
+#[path = "layout_tolerance_tests.rs"]
+mod tolerance_tests;
+
+#[cfg(test)]
 mod renderer_minimum_tests {
     use super::*;
     use cosmic::iced::advanced::renderer::Headless;
