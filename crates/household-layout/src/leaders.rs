@@ -557,12 +557,19 @@ pub fn enter_with_leader(record: &mut Record, placed: &WithLeader) -> Result<(),
             now: record.revision(),
         });
     }
+    enter_judged(record, placed);
+    Ok(())
+}
+
+/// Enters a label and its leader, and the cuts the label's halo makes,
+/// without asking whether the record has changed since they were judged:
+/// for a caller that has just judged them against it.
+fn enter_judged(record: &mut Record, placed: &WithLeader) {
     record.enter_all([
         placed.label.occupant.clone(),
         placed.leader.occupant.clone(),
     ]);
     record.enter_cuts(placed.label.cuts().iter().cloned());
-    Ok(())
 }
 
 /// Judges a label's places with its leader and enters what it takes:
@@ -576,7 +583,8 @@ pub fn place_with_leader(
     level: Level,
 ) -> Result<WithLeader, NoPlace> {
     let placed = judge_with_leader(record, label, places, leading, level)?;
-    enter_with_leader(record, &placed).expect("judged against this record a moment ago");
+    // Judged against this very record a moment ago, so it cannot be stale.
+    enter_judged(record, &placed);
     Ok(placed)
 }
 
