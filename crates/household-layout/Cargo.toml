@@ -1,0 +1,11 @@
+[package]
+name = "household-layout"
+description = "Arrangement for the household's apps, charts and diagrams: the apps' layout engine without a toolkit. No drawing, no measuring, no toolkit types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]

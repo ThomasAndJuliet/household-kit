@@ -76,25 +76,14 @@ pub(crate) use attached::{
 pub use hover::choose_hover;
 pub(crate) use hover::{HoverRetained, commit_hover_retaining};
 
-/// The maximum compromise a parent permits its content to make.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum Level {
-    #[default]
-    Preferred,
-    Mild,
-    Strong,
-    AllPermitted,
-}
-
-impl Level {
-    /// Representations in preference order.
-    pub const ALL: [Self; 4] = [
-        Self::Preferred,
-        Self::Mild,
-        Self::Strong,
-        Self::AllPermitted,
-    ];
-}
+// The engine's pure geometry lives in `household-layout`, which names no
+// toolkit type, so that the charts lay out with the same code. Its values
+// and the sharing of a length are this interface's, re-exported at the same
+// paths; the rest of this file converts iced's `Size` to and from the
+// core's at the edge, and the arithmetic is the core's, written once.
+pub(crate) use household_layout::FIT_EPSILON;
+pub use household_layout::{AllocationError, Arrangement, Level, WidthCapacity, allocate_width};
+use household_layout::{Measured, allocate_one, allocate_with_growth};
 
 /// Query representations without retaining the result of any rejected query.
 /// `None` explicitly means that none of the permitted representations fits.
@@ -117,126 +106,6 @@ pub fn first_fitting(
         })
 }
 
-/// Width a child prefers, its lower bound, and its willingness to shrink.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WidthCapacity {
-    pub preferred: f32,
-    pub minimum: f32,
-    /// Higher weights shrink faster; zero protects the preferred width.
-    pub weight: f32,
-}
-
-impl WidthCapacity {
-    /// The width this capacity cannot be given less than: its minimum, or
-    /// its preferred width when its weight is zero.
-    ///
-    /// This is the one statement of the rule "a weight of zero protects the
-    /// preferred width". A weight says how fast a part gives width up in a
-    /// shortage, and a part that gives none up offers its preferred width as
-    /// its minimum. Every place that needs that width asks here: what
-    /// `allocate_width` requires, the minimum width a composition and a frame
-    /// measure (`Composition::measure`, `Frame::measure`), and the floor by
-    /// which a row and a wrap check and pack their children
-    /// (`Composition::plan_row`, `Composition::plan_wrap`). A column shares
-    /// height with the same capacities, so there it protects a preferred
-    /// height (`Composition::plan_column`).
-    fn least(self) -> f32 {
-        if self.weight == 0.0 {
-            self.preferred
-        } else {
-            self.minimum
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AllocationError {
-    InvalidInput,
-    /// The minima and zero-weight preferred widths exceed the available width.
-    NoFit {
-        required: f32,
-        available: f32,
-    },
-}
-
-/// Share a shortage using each child's original `weight * (preferred-minimum)`
-/// rate, clamping minima and redistributing at the remaining original rates.
-/// Surplus space is left unallocated. No representation levels are scheduled.
-pub fn allocate_width(
-    available: f32,
-    capacities: &[WidthCapacity],
-) -> Result<Vec<f32>, AllocationError> {
-    if !available.is_finite()
-        || available < 0.0
-        || capacities.iter().any(|capacity| {
-            !capacity.preferred.is_finite()
-                || !capacity.minimum.is_finite()
-                || !capacity.weight.is_finite()
-                || capacity.minimum < 0.0
-                || capacity.preferred < capacity.minimum
-                || capacity.weight < 0.0
-        })
-    {
-        return Err(AllocationError::InvalidInput);
-    }
-    let required: f64 = capacities
-        .iter()
-        .map(|capacity| f64::from(capacity.least()))
-        .sum();
-    // Native geometry uses f32. Summing neighbouring requested dimensions in
-    // f64 can exceed their f32 total by a few ULPs after a divider drag. Use
-    // the same fit tolerance as query/commit, not a stricter hidden threshold.
-    if required > f64::from(available) + f64::from(FIT_EPSILON) {
-        return Err(AllocationError::NoFit {
-            required: required as f32,
-            available,
-        });
-    }
-    let mut widths: Vec<f64> = capacities
-        .iter()
-        .map(|capacity| f64::from(capacity.preferred))
-        .collect();
-    let rates: Vec<f64> = capacities
-        .iter()
-        .map(|capacity| {
-            f64::from(capacity.weight) * f64::from(capacity.preferred - capacity.minimum)
-        })
-        .collect();
-    let mut shortage = (widths.iter().sum::<f64>() - f64::from(available)).max(0.0);
-    // `widths` and `rates` hold one entry per capacity, in its order: each
-    // pass walks the three together.
-    while shortage > 0.0 {
-        let total_rate: f64 = widths
-            .iter()
-            .zip(&rates)
-            .zip(capacities)
-            .filter(|((width, _), capacity)| **width > f64::from(capacity.minimum))
-            .map(|((_, rate), _)| *rate)
-            .sum();
-        if total_rate == 0.0 {
-            break;
-        }
-        let mut removed = 0.0;
-        let mut clamped = false;
-        for ((width, rate), capacity) in widths.iter_mut().zip(&rates).zip(capacities) {
-            let room = *width - f64::from(capacity.minimum);
-            if room <= 0.0 || *rate == 0.0 {
-                continue;
-            }
-            let share = shortage * rate / total_rate;
-            let reduction = share.min(room);
-            *width -= reduction;
-            removed += reduction;
-            clamped |= share >= room;
-        }
-        if !clamped || removed == 0.0 {
-            break;
-        }
-        shortage = (shortage - removed).max(0.0);
-    }
-    Ok(widths.into_iter().map(|width| width as f32).collect())
-}
-
 /// Preferred and useful minimum geometry of a component at one exact level.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeasuredSize {
@@ -244,15 +113,35 @@ pub struct MeasuredSize {
     pub minimum: Size,
 }
 
-type SizeQuery<'a> = Rc<dyn Fn(Level, &Renderer) -> MeasuredSize + 'a>;
-
-/// An arrangement applies only to immediate children, which remain atomic.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Arrangement {
-    Row,
-    Column,
-    Wrap,
+// The core measures in its own `Size`, which has iced's two fields; the
+// interface keeps iced's. These convert at the edge, number for number.
+impl From<MeasuredSize> for Measured {
+    fn from(size: MeasuredSize) -> Self {
+        Self {
+            preferred: core_size(size.preferred),
+            minimum: core_size(size.minimum),
+        }
+    }
 }
+
+impl From<Measured> for MeasuredSize {
+    fn from(size: Measured) -> Self {
+        Self {
+            preferred: toolkit_size(size.preferred),
+            minimum: toolkit_size(size.minimum),
+        }
+    }
+}
+
+fn core_size(size: Size) -> household_layout::Size {
+    household_layout::Size::new(size.width, size.height)
+}
+
+fn toolkit_size(size: household_layout::Size) -> Size {
+    Size::new(size.width, size.height)
+}
+
+type SizeQuery<'a> = Rc<dyn Fn(Level, &Renderer) -> MeasuredSize + 'a>;
 
 /// Geometry proposed by a pure query. No widget state is retained here.
 #[derive(Clone, Debug)]
@@ -1066,7 +955,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         renderer: &Renderer,
         available: Size,
     ) -> Result<GeometryPlan, AllocationError> {
-        if !valid_available(available) {
+        if !household_layout::valid_available(core_size(available)) {
             return Err(AllocationError::InvalidInput);
         }
         if self.is_hidden(level) {
@@ -1704,68 +1593,13 @@ fn compose_aligned<'a, Message: 'a>(
     Child::new(Kind::Composition(composition)).invalid_unless(is_amount(spacing))
 }
 
-pub(crate) const FIT_EPSILON: f32 = 0.001;
+/// The core's checks of a size (`household_layout::finite_size`,
+/// `household_layout::validate_measurement`), on iced's sizes.
 fn finite_size(size: Size) -> bool {
-    size.width.is_finite() && size.height.is_finite() && size.width >= 0.0 && size.height >= 0.0
-}
-fn valid_available(size: Size) -> bool {
-    !size.width.is_nan() && !size.height.is_nan() && size.width >= 0.0 && size.height >= 0.0
+    household_layout::finite_size(core_size(size))
 }
 fn validate_measurement(size: MeasuredSize) -> Result<(), AllocationError> {
-    if finite_size(size.preferred)
-        && finite_size(size.minimum)
-        && size.minimum.width <= size.preferred.width
-        && size.minimum.height <= size.preferred.height
-    {
-        Ok(())
-    } else {
-        Err(AllocationError::InvalidInput)
-    }
-}
-fn allocate_with_growth(
-    available: f32,
-    capacities: &[WidthCapacity],
-    grows: &[f32],
-) -> Result<Vec<f32>, AllocationError> {
-    let mut widths = if available.is_infinite() {
-        if capacities
-            .iter()
-            .any(|capacity| !finite_size(Size::new(capacity.preferred, capacity.minimum)))
-        {
-            return Err(AllocationError::InvalidInput);
-        }
-        capacities
-            .iter()
-            .map(|capacity| capacity.preferred)
-            .collect()
-    } else {
-        allocate_width(available, capacities)?
-    };
-    let total: f64 = grows.iter().map(|grow| f64::from(*grow)).sum();
-    if available.is_finite() && total > 0.0 {
-        let surplus = (f64::from(available)
-            - widths.iter().map(|width| f64::from(*width)).sum::<f64>())
-        .max(0.0);
-        for (width, grow) in widths.iter_mut().zip(grows) {
-            *width += (surplus * f64::from(*grow) / total) as f32;
-        }
-    }
-    Ok(widths)
-}
-
-/// The width allocated to one child alone, by the same rule as to several
-/// (`allocate_with_growth`), which returns one width per capacity. Were it
-/// to return none, the child would have no width, and its plan fails as for
-/// invalid input rather than laying out at a width nobody allocated.
-fn allocate_one(
-    available: f32,
-    capacity: WidthCapacity,
-    grow: f32,
-) -> Result<f32, AllocationError> {
-    allocate_with_growth(available, &[capacity], &[grow])?
-        .first()
-        .copied()
-        .ok_or(AllocationError::InvalidInput)
+    household_layout::validate_measurement(size.into())
 }
 
 /// A visible child of a composition, as planning carries it: its index among
