@@ -712,7 +712,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
     /// Each node is finished when it is bound: nothing planning does after a
     /// child has returned its plan changes that plan, except forms raising
     /// their form's node to the room when they grow in height, which the
-    /// form, given that growth, has already done (`plan_width`).
+    /// form, given that growth, has already done (`plan_inheriting`).
     ///
     /// The one difference from binding as planning went: a report callback
     /// now runs once for each node of the finished plan that its child
@@ -1057,13 +1057,56 @@ impl<'a, Message: 'a> Child<'a, Message> {
 
     /// Plan this child in `width` × `height`, as its parent does: the plan
     /// has no bindings and no reports, which `query_at` adds to the plan it
-    /// returns (`bind_geometry`).
+    /// returns (`bind_geometry`). A child planned here inherits no growth in
+    /// height: it is the root, or a composition's child, which a composition
+    /// plans by its own (`grow_height_in_effect`).
     fn plan_width(
         &self,
         level: Level,
         renderer: &Renderer,
         width: f32,
         height: f32,
+    ) -> Result<GeometryPlan, AllocationError> {
+        self.plan_inheriting(level, renderer, width, height, 0.0)
+    }
+
+    /// The growth in height in effect for this child, when the forms or the
+    /// frame round it pass it `inherited`: the inherited growth when it is
+    /// above zero, else the child's own. Planning (`plan_inheriting`) and
+    /// rendering (`render_content`) both read it here, so they agree.
+    ///
+    /// How far an inherited growth reaches. Forms pass the growth in effect
+    /// for the family to the form they select, and a frame passes its own to
+    /// its content; a form or content that is itself forms or a frame passes
+    /// on the growth in effect for it in turn, so a family's or a frame's
+    /// growth above zero reaches through any chain of forms and frames to
+    /// the first child that is neither. A composition does not pass it on:
+    /// its children are planned and rendered as a composition's children
+    /// (`plan_width`, `render`), and a column shares its height among them
+    /// by each one's own `grow_height` (`Composition::plan_column`). An
+    /// inherited growth of zero leaves the child its own.
+    ///
+    /// (Before this was an argument, forms and frames planned and rendered
+    /// a clone of the form or the content with its `grow_height` overwritten
+    /// when theirs was above zero. The clone shared the child's preparation
+    /// identity, so its plans were bound as the child's, as they are now.)
+    fn grow_height_in_effect(&self, inherited: f32) -> f32 {
+        if inherited > 0.0 {
+            inherited
+        } else {
+            self.grow_height
+        }
+    }
+
+    /// Plan this child in `width` × `height`, with the growth in height the
+    /// forms or the frame round it pass it (`grow_height_in_effect`).
+    fn plan_inheriting(
+        &self,
+        level: Level,
+        renderer: &Renderer,
+        width: f32,
+        height: f32,
+        inherited_growth: f32,
     ) -> Result<GeometryPlan, AllocationError> {
         if self.is_hidden(level) {
             return Ok(GeometryPlan::hidden());
@@ -1097,16 +1140,15 @@ impl<'a, Message: 'a> Child<'a, Message> {
             }
             None => height,
         };
+        let grow_height = self.grow_height_in_effect(inherited_growth);
         let mut plan = match &self.kind {
             Kind::Forms(forms) => {
-                let mut selected = forms.select(level).clone();
-                if self.grow_height > 0.0 {
-                    selected.grow_height = self.grow_height;
-                }
-                selected.plan_width(level, renderer, width, height)?
+                forms
+                    .select(level)
+                    .plan_inheriting(level, renderer, width, height, grow_height)?
             }
             Kind::Composition(composition) => composition.plan(level, renderer, width, height)?,
-            Kind::Frame(frame) => frame.plan(level, renderer, width, height, self.grow_height)?,
+            Kind::Frame(frame) => frame.plan(level, renderer, width, height, grow_height)?,
             Kind::Leaf(leaf) => {
                 // How the leaf takes height, decided once: the height its view
                 // is offered, whether the view is compressed to its own height
@@ -1121,7 +1163,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
                     LeafHeight::Range { minimum: floor } => {
                         let minimum = floor(level, renderer);
                         let measured = self.query(level, renderer);
-                        let offered = if self.grow_height > 0.0 && height.is_finite() {
+                        let offered = if grow_height > 0.0 && height.is_finite() {
                             height.max(minimum.height)
                         } else {
                             measured.preferred.height.min(height).max(minimum.height)
@@ -1176,7 +1218,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         if fixed.width.is_some() || self.reserve_width {
             plan.size.width = width;
         }
-        if (self.grow_height > 0.0 || fixed.height.is_some()) && height.is_finite() {
+        if (grow_height > 0.0 || fixed.height.is_some()) && height.is_finite() {
             plan.size.height = plan.size.height.max(height);
         }
         if let Some(requested) = fixed.height {
@@ -1197,11 +1239,25 @@ impl<'a, Message: 'a> Child<'a, Message> {
         Ok(plan)
     }
 
+    /// Render this child from `plan`, inheriting no growth in height: the
+    /// root, or a composition's child (`grow_height_in_effect`).
     fn render(
         &self,
         level: Level,
         plan: &GeometryPlan,
         agreement: Rc<Cell<bool>>,
+    ) -> Element<'a, Message> {
+        self.render_inheriting(level, plan, agreement, 0.0)
+    }
+
+    /// Render this child from `plan`, with the growth in height the forms or
+    /// the frame round it pass it, as it was planned (`plan_inheriting`).
+    fn render_inheriting(
+        &self,
+        level: Level,
+        plan: &GeometryPlan,
+        agreement: Rc<Cell<bool>>,
+        inherited_growth: f32,
     ) -> Element<'a, Message> {
         let binding_matches = plan
             .bindings
@@ -1210,7 +1266,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         let content = if !binding_matches || plan.hidden {
             widget::space().width(0).height(0).into()
         } else {
-            self.render_content(level, plan, agreement.clone())
+            self.render_content(level, plan, agreement.clone(), inherited_growth)
         };
         let content = match &self.decorator {
             Some(_) if !binding_matches || plan.hidden => content,
@@ -1256,17 +1312,18 @@ impl<'a, Message: 'a> Child<'a, Message> {
         level: Level,
         plan: &GeometryPlan,
         agreement: Rc<Cell<bool>>,
+        inherited_growth: f32,
     ) -> Element<'a, Message> {
+        let grow_height = self.grow_height_in_effect(inherited_growth);
         // Forms, frames and leaves are rendered here; a composition continues
         // below, where its rows or column are built from the plan's placements.
         let composition = match &self.kind {
             Kind::Forms(forms) => {
-                let mut selected = forms.select(level).clone();
-                if self.grow_height > 0.0 {
-                    selected.grow_height = self.grow_height;
-                }
-                let content = selected.render(level, plan, agreement);
-                return if self.grow_height > 0.0 {
+                let content =
+                    forms
+                        .select(level)
+                        .render_inheriting(level, plan, agreement, grow_height);
+                return if grow_height > 0.0 {
                     widget::container(content)
                         .width(plan.size.width)
                         .height(plan.size.height)
@@ -1275,7 +1332,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
                     content
                 };
             }
-            Kind::Frame(frame) => return frame.render(level, plan, agreement, self.grow_height),
+            Kind::Frame(frame) => return frame.render(level, plan, agreement, grow_height),
             Kind::Leaf(leaf) => {
                 // A leaf's own plan always records the size its view measured
                 // (`plan_width`). A plan without one was made for another kind
@@ -1361,7 +1418,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
             .spacing(composition.spacing)
             .into(),
         };
-        if self.grow_height > 0.0 || self.fixed.any() || self.reserve_width {
+        if grow_height > 0.0 || self.fixed.any() || self.reserve_width {
             widget::container(content)
                 .width(plan.size.width)
                 .height(plan.size.height)

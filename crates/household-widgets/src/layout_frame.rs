@@ -55,6 +55,10 @@ impl<'a, Message: 'a> Frame<'a, Message> {
         }
     }
 
+    /// Plan the frame in `width` × `height`: its content in what the
+    /// padding leaves. `grow_height` is the growth in height in effect for
+    /// the frame, which its content inherits
+    /// (`Child::grow_height_in_effect`).
     pub fn plan(
         &self,
         level: Level,
@@ -77,15 +81,12 @@ impl<'a, Message: 'a> Frame<'a, Message> {
                 available: height,
             });
         }
-        let mut content = self.content.clone();
-        if grow_height > 0.0 {
-            content.grow_height = grow_height;
-        }
-        let geometry = content.plan_width(
+        let geometry = self.content.plan_inheriting(
             level,
             renderer,
             (width - horizontal).max(0.0),
             (height - vertical).max(0.0),
+            grow_height,
         )?;
         let mut result = GeometryPlan::leaf(Size::new(
             geometry.size.width + horizontal,
@@ -100,6 +101,8 @@ impl<'a, Message: 'a> Frame<'a, Message> {
         Ok(result)
     }
 
+    /// Render the frame from its plan, its content with the growth in
+    /// height it was planned with (`plan`).
     pub fn render(
         &self,
         level: Level,
@@ -116,11 +119,9 @@ impl<'a, Message: 'a> Frame<'a, Message> {
         else {
             return refused(agreement);
         };
-        let mut content = self.content.clone();
-        if grow_height > 0.0 {
-            content.grow_height = grow_height;
-        }
-        let native = content.render(level, inner, agreement.clone());
+        let native = self
+            .content
+            .render_inheriting(level, inner, agreement.clone(), grow_height);
         let native = Element::new(VerifiedDecoration {
             content: native,
             expected: inner.size,
