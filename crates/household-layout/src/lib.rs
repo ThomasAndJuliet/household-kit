@@ -109,9 +109,10 @@
 //!
 //! A host whose leaves are boxes of a fixed size and paragraphs that are
 //! 120 wide on one line of 10, and narrower take as many lines of 10 as
-//! they need: two from 60 wide, three from 40. A row of an icon 20 square, which may not shrink
-//! (weight zero), and a paragraph usable down to 30 wide, 10 apart, in a
-//! room 70 wide: the row prefers 150, so 80 must go, and all of it comes
+//! they need: two from 60 wide, three from 40. A row of an icon 20 square,
+//! which may not shrink (weight zero), and a paragraph usable down to 30
+//! wide, 10 apart, in a room 70 wide: the row prefers 150, so 80 must go,
+//! and all of it comes
 //! from the paragraph, whose rate is 1 × (120 − 30) against the icon's
 //! zero. Of the 60 the gap leaves, the icon keeps 20 and the paragraph
 //! gets 40, at which it takes three lines. The row is as high as its
