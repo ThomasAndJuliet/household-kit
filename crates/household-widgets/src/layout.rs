@@ -2839,6 +2839,14 @@ mod mismatch_tests;
 mod arrangement_tests;
 
 #[cfg(test)]
+#[path = "layout_test_fixtures.rs"]
+mod test_fixtures;
+
+#[cfg(test)]
+#[path = "layout_width_dependent_tests.rs"]
+mod width_dependent_tests;
+
+#[cfg(test)]
 mod renderer_minimum_tests {
     use super::*;
     use cosmic::iced::advanced::renderer::Headless;
