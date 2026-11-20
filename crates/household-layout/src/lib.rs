@@ -237,6 +237,7 @@ mod arrange;
 pub mod attach;
 pub mod frame;
 pub mod host;
+pub mod hover;
 pub mod level;
 mod measure;
 pub mod part;
@@ -254,6 +255,7 @@ pub use attach::{
 };
 pub use frame::{Frame, Padding};
 pub use host::{Host, Offer};
+pub use hover::{HoverChoice, choose_hover, place_hover};
 pub use level::{Arrangement, Level};
 pub use part::{
     Child, Composition, Fixed, Forms, Kind, Leaf, LeafHeight, MinimumQuery, Sharing, is_amount,

@@ -171,6 +171,15 @@ fn core_padding(padding: cosmic::iced::Padding) -> household_layout::Padding {
     }
 }
 
+fn toolkit_padding(padding: household_layout::Padding) -> cosmic::iced::Padding {
+    cosmic::iced::Padding {
+        top: padding.top,
+        right: padding.right,
+        bottom: padding.bottom,
+        left: padding.left,
+    }
+}
+
 /// Geometry proposed by a pure query. No widget state is retained here.
 #[derive(Clone, Debug)]
 pub struct GeometryPlan {

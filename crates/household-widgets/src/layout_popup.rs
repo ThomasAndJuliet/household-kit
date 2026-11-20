@@ -86,6 +86,18 @@ impl Attachment {
             surface_insets: core_padding(self.surface_insets),
         }
     }
+
+    /// The interface's attachment of the engine's: the same, with iced's
+    /// rectangle and padding.
+    pub(super) fn from_core(attachment: &household_layout::Attachment) -> Self {
+        Self {
+            anchor: toolkit_rect(attachment.anchor),
+            candidates: attachment.candidates.clone(),
+            preference: attachment.preference,
+            fill_width: attachment.fill_width,
+            surface_insets: toolkit_padding(attachment.surface_insets),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
