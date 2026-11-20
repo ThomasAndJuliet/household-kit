@@ -1,6 +1,6 @@
 [package]
 name = "household-layout"
-description = "Arrangement for the household's apps, charts and diagrams: the apps' layout engine without a toolkit, presentations, and a record of occupied space against which label sets are placed by pattern. No drawing, no measuring, no toolkit types"
+description = "Arrangement for the household's apps, charts and diagrams: the apps' layout engine without a toolkit, and the record of occupied space against which label sets are placed, with halos and leaders. No drawing, no measuring, no toolkit types"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

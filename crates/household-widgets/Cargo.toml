@@ -29,6 +29,13 @@ iced_accessibility = { git = "https://github.com/pop-os/libcosmic.git", optional
 # The colour maths (the muted accent, what goes on it), from this workspace;
 # an app that depends on household-widgets by git gets the kit at the same revision
 household-tones = { path = "../household-tones" }
+# The layout engine's geometry without a toolkit (levels, sizes, the sharing
+# of a length), which `layout` re-exports and delegates to; from this
+# workspace, so that the charts lay out with the same code. The tests reach
+# it through this entry too: `tests/layout_port_equality.rs` and
+# `tests/layout_port_nested_equality.rs` hold the crate's earlier port of the
+# engine (`engine`) to the same answers as this crate's `layout`
+household-layout = { path = "../household-layout" }
 # Zeroing what a password box lets go of (PasswordBox), as the terminal
 # zeroes its secrets; MIT OR Apache-2.0
 zeroize = "1"
@@ -38,8 +45,3 @@ zeroize = "1"
 # size against the text, how far a line grows for one); from this workspace
 household-content = { path = "../household-content", optional = true }
 household-type = { path = "../household-type", optional = true }
-
-[dev-dependencies]
-# The toolkit-free port of this crate's layout engine, whose equality with
-# the engine `tests/layout_port_equality.rs` checks; from this workspace
-household-layout = { path = "../household-layout" }

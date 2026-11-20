@@ -9,11 +9,35 @@
 //! reconciliation. Changing widget types discards that local state, including
 //! focus and inline overlays; this adapter does not transfer it between controls.
 
+// No path through the layout engine may panic. Every household app lays out
+// through it, and the owner's rule is: "this is a user application - we
+// should not be paining at all" (panicking). A number the engine cannot use
+// makes an invalid child; a plan that does not match the child given it is
+// refused; a widget tree or layout without the part it should hold does
+// nothing there. So the engine's code (this module and the `layout_*` files,
+// which are its children) may not unwrap, expect, index or slice unchecked,
+// panic, or leave unreachable, todo or unimplemented paths, and Clippy in CI
+// (`-D warnings`) rejects a change that adds one. Tests are exempt: a test
+// may unwrap and index, since a panic there is a failing test.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::indexing_slicing
+    )
+)]
+
 use cosmic::iced::advanced::widget::{Operation, Tree, tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector};
 use cosmic::{Element, Renderer, Theme, widget};
 use std::cell::Cell;
+use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -23,7 +47,6 @@ mod frame;
 mod information;
 #[path = "layout_navigation.rs"]
 mod navigation;
-use frame::Frame;
 pub use frame::framed_child;
 pub use navigation::*;
 #[path = "layout_presentation.rs"]
@@ -53,25 +76,14 @@ pub(crate) use attached::{
 pub use hover::choose_hover;
 pub(crate) use hover::{HoverRetained, commit_hover_retaining};
 
-/// The maximum compromise a parent permits its content to make.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum Level {
-    #[default]
-    Preferred,
-    Mild,
-    Strong,
-    AllPermitted,
-}
-
-impl Level {
-    /// Representations in preference order.
-    pub const ALL: [Self; 4] = [
-        Self::Preferred,
-        Self::Mild,
-        Self::Strong,
-        Self::AllPermitted,
-    ];
-}
+// The engine's pure geometry lives in `household-layout`, which names no
+// toolkit type, so that the charts lay out with the same code. Its values
+// and the sharing of a length are this interface's, re-exported at the same
+// paths; the rest of this file converts iced's `Size` to and from the
+// core's at the edge, and the arithmetic is the core's, written once.
+pub(crate) use household_layout::FIT_EPSILON;
+pub use household_layout::{AllocationError, Arrangement, Level, WidthCapacity, allocate_width};
+use household_layout::{Host, Kind, LeafHeight, Measured, Offer, is_amount};
 
 /// Query representations without retaining the result of any rejected query.
 /// `None` explicitly means that none of the permitted representations fits.
@@ -94,106 +106,6 @@ pub fn first_fitting(
         })
 }
 
-/// Width a child prefers, its lower bound, and its willingness to shrink.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WidthCapacity {
-    pub preferred: f32,
-    pub minimum: f32,
-    /// Higher weights shrink faster; zero protects the preferred width.
-    pub weight: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AllocationError {
-    InvalidInput,
-    /// The minima and zero-weight preferred widths exceed the available width.
-    NoFit {
-        required: f32,
-        available: f32,
-    },
-}
-
-/// Share a shortage using each child's original `weight * (preferred-minimum)`
-/// rate, clamping minima and redistributing at the remaining original rates.
-/// Surplus space is left unallocated. No representation levels are scheduled.
-pub fn allocate_width(
-    available: f32,
-    capacities: &[WidthCapacity],
-) -> Result<Vec<f32>, AllocationError> {
-    if !available.is_finite()
-        || available < 0.0
-        || capacities.iter().any(|capacity| {
-            !capacity.preferred.is_finite()
-                || !capacity.minimum.is_finite()
-                || !capacity.weight.is_finite()
-                || capacity.minimum < 0.0
-                || capacity.preferred < capacity.minimum
-                || capacity.weight < 0.0
-        })
-    {
-        return Err(AllocationError::InvalidInput);
-    }
-    let required: f64 = capacities
-        .iter()
-        .map(|capacity| {
-            f64::from(if capacity.weight == 0.0 {
-                capacity.preferred
-            } else {
-                capacity.minimum
-            })
-        })
-        .sum();
-    // Native geometry uses f32. Summing neighbouring requested dimensions in
-    // f64 can exceed their f32 total by a few ULPs after a divider drag. Use
-    // the same fit tolerance as query/commit, not a stricter hidden threshold.
-    if required > f64::from(available) + f64::from(FIT_EPSILON) {
-        return Err(AllocationError::NoFit {
-            required: required as f32,
-            available,
-        });
-    }
-    let mut widths: Vec<f64> = capacities
-        .iter()
-        .map(|capacity| f64::from(capacity.preferred))
-        .collect();
-    let rates: Vec<f64> = capacities
-        .iter()
-        .map(|capacity| {
-            f64::from(capacity.weight) * f64::from(capacity.preferred - capacity.minimum)
-        })
-        .collect();
-    let mut shortage = (widths.iter().sum::<f64>() - f64::from(available)).max(0.0);
-    while shortage > 0.0 {
-        let total_rate: f64 = capacities
-            .iter()
-            .enumerate()
-            .filter(|(i, capacity)| widths[*i] > f64::from(capacity.minimum))
-            .map(|(i, _)| rates[i])
-            .sum();
-        if total_rate == 0.0 {
-            break;
-        }
-        let mut removed = 0.0;
-        let mut clamped = false;
-        for (i, capacity) in capacities.iter().enumerate() {
-            let room = widths[i] - f64::from(capacity.minimum);
-            if room <= 0.0 || rates[i] == 0.0 {
-                continue;
-            }
-            let share = shortage * rates[i] / total_rate;
-            let reduction = share.min(room);
-            widths[i] -= reduction;
-            removed += reduction;
-            clamped |= share >= room;
-        }
-        if !clamped || removed == 0.0 {
-            break;
-        }
-        shortage = (shortage - removed).max(0.0);
-    }
-    Ok(widths.into_iter().map(|width| width as f32).collect())
-}
-
 /// Preferred and useful minimum geometry of a component at one exact level.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeasuredSize {
@@ -201,14 +113,32 @@ pub struct MeasuredSize {
     pub minimum: Size,
 }
 
-type SizeQuery<'a> = Rc<dyn Fn(Level, &Renderer) -> MeasuredSize + 'a>;
+// The core measures in its own `Size`, which has iced's two fields; the
+// interface keeps iced's. These convert at the edge, number for number.
+impl From<MeasuredSize> for Measured {
+    fn from(size: MeasuredSize) -> Self {
+        Self {
+            preferred: core_size(size.preferred),
+            minimum: core_size(size.minimum),
+        }
+    }
+}
 
-/// An arrangement applies only to immediate children, which remain atomic.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Arrangement {
-    Row,
-    Column,
-    Wrap,
+impl From<Measured> for MeasuredSize {
+    fn from(size: Measured) -> Self {
+        Self {
+            preferred: toolkit_size(size.preferred),
+            minimum: toolkit_size(size.minimum),
+        }
+    }
+}
+
+fn core_size(size: Size) -> household_layout::Size {
+    household_layout::Size::new(size.width, size.height)
+}
+
+fn toolkit_size(size: household_layout::Size) -> Size {
+    Size::new(size.width, size.height)
 }
 
 /// Geometry proposed by a pure query. No widget state is retained here.
@@ -274,6 +204,33 @@ pub struct Placement {
 }
 
 impl GeometryPlan {
+    /// The engine's plan as the interface's: the same tree, with iced's
+    /// `Size` and `Point`, and no bindings and no reports, which
+    /// `Child::bind_geometry` adds. Every number is the engine's own `f32`.
+    fn from_core(plan: &household_layout::Plan) -> Self {
+        Self {
+            size: toolkit_size(plan.size()),
+            hidden: plan.is_hidden(),
+            children: plan
+                .children()
+                .iter()
+                .map(|placed| Placement {
+                    index: placed.index(),
+                    position: cosmic::iced::Point::new(placed.position().x, placed.position().y),
+                    geometry: Self::from_core(placed.plan()),
+                })
+                .collect(),
+            rows: plan.rows().to_vec(),
+            minimum_height: plan.minimum_height(),
+            native_size: plan.leaf_size().map(toolkit_size),
+            bindings: Vec::new(),
+            source_reports: Vec::new(),
+        }
+    }
+
+    /// A leaf's plan of `size`, with nothing bound, for tests that give a
+    /// child a plan it was not planned from.
+    #[cfg(test)]
     fn leaf(size: Size) -> Self {
         Self {
             size,
@@ -284,12 +241,6 @@ impl GeometryPlan {
             native_size: None,
             bindings: Vec::new(),
             source_reports: Vec::new(),
-        }
-    }
-    fn hidden() -> Self {
-        Self {
-            hidden: true,
-            ..Self::leaf(Size::ZERO)
         }
     }
 
@@ -315,58 +266,109 @@ impl GeometryPlan {
     }
 }
 
-struct Composition<'a, Message> {
-    children: Vec<Child<'a, Message>>,
-    arrangement: Arrangement,
-    spacing: f32,
-    top_aligned: bool,
+type ViewFactory<'a, Message> = Rc<dyn Fn(Level) -> Element<'a, Message> + 'a>;
+type ViewMap<'a, Message> = Rc<dyn Fn(Element<'a, Message>) -> Element<'a, Message> + 'a>;
+
+/// The widgets as the engine's host (`household_layout::Host`): a leaf is a
+/// native view, built by its factory at a level; measuring needs the
+/// renderer; every part carries the widgets' `Note`; and a frame's chrome is
+/// the decorator that draws its padding (`framed_child`).
+///
+/// The engine's one question, a leaf's size at a level within an offer, is
+/// answered by laying the view out natively with fresh state
+/// (`measure_element_in`): an offer to take the height it needs is laid out
+/// with its height compressed to its own, an offer of a height to be laid
+/// out in is laid out in that height. Those are the four measurements the
+/// engine makes of a native view: with unbounded room, at a declared
+/// minimum width, at a viewport's floor, and at the width allocated while
+/// planning.
+struct Native<'a, Message>(PhantomData<fn() -> (&'a (), Message)>);
+
+impl<'a, Message> Host for Native<'a, Message> {
+    type Leaf = ViewFactory<'a, Message>;
+    type Context = Renderer;
+    type Note = Note<'a, Message>;
+    type Chrome = ViewMap<'a, Message>;
+
+    fn size(
+        leaf: &Self::Leaf,
+        level: Level,
+        context: &Self::Context,
+        offer: Offer,
+    ) -> household_layout::Size {
+        let (room, compress_height) = match offer {
+            Offer::NeededHeight(room) => (room, true),
+            Offer::OfferedHeight(room) => (room, false),
+        };
+        core_size(measure_element_in(
+            || leaf(level),
+            context,
+            toolkit_size(room),
+            compress_height,
+        ))
+    }
 }
 
-type Forms<'a, Message> = Rc<Vec<(Level, Child<'a, Message>)>>;
-type ViewMap<'a, Message> = Rc<dyn Fn(Element<'a, Message>) -> Element<'a, Message> + 'a>;
-type MinimumQuery<'a> = Rc<dyn Fn(Level, &Renderer) -> Size + 'a>;
+/// A part of the widgets' tree: the engine's part, with the widgets as its
+/// host. A composition's children, a frame's content and a family's forms
+/// are parts; `Child` is the interface's handle on one.
+type Part<'a, Message> = household_layout::Child<'a, Native<'a, Message>>;
 
 /// A queryable leaf or composite. Only the root selects a level. Composites
 /// forward that exact level; outward weights never replace internal weights.
+///
+/// What a child is, how it is measured and how it is planned are the
+/// engine's (`household_layout::Child`, its part): its kind, the
+/// adjustments to its measurement, and its weights, growth and hiding. This
+/// is the interface's handle on that part, and it adds what is the
+/// widgets': building views, binding a plan to the child it was planned
+/// from and rendering it with verification (`Commit`), and the bookkeeping
+/// every part carries in its note (`Note`). Each builder below declares on
+/// the part through the engine's builder of the same name, then does the
+/// widgets' bookkeeping.
 pub struct Child<'a, Message> {
-    view: Rc<dyn Fn(Level) -> Element<'a, Message> + 'a>,
-    query: SizeQuery<'a>,
-    composition: Option<Rc<Composition<'a, Message>>>,
-    frame: Option<Rc<Frame<'a, Message>>>,
-    forms: Option<Forms<'a, Message>>,
-    decorator: Option<ViewMap<'a, Message>>,
-    hidden: Rc<dyn Fn(Level) -> bool + 'a>,
-    viewport: Option<MinimumQuery<'a>>,
-    weight: f32,
-    grow: f32,
-    grow_height: f32,
-    reserve_width: bool,
-    fixed_width: Option<f32>,
-    fixed_height: Option<f32>,
+    part: Part<'a, Message>,
+}
+
+/// What the widgets keep on every child for themselves, apart from its
+/// geometry: the preparation identity that certifies a plan was made from
+/// this child (`bind_geometry`), the decorator that styles its rendered
+/// content (`map_view`), the presentation it was prepared with
+/// (`PresentationFamily::prepare`), the information it reports
+/// (`report_information`) and the regions it names (`report_region`).
+/// Planning never reads any of it: it is the host's note on the engine's
+/// part (`household_layout::Host::Note`).
+struct Note<'a, Message> {
     preparation: PreparedId,
+    decorator: Option<ViewMap<'a, Message>>,
     presentation: Option<Presentation>,
     information: Option<SourceInformation<'a>>,
     regions: Vec<Region>,
 }
 
-impl<Message> Clone for Child<'_, Message> {
+/// A child's note before anything is declared: a fresh preparation
+/// identity, and nothing else. The engine gives every part it builds this
+/// note, the column that `fill_width` and `fixed_dimensions` put a child in
+/// included.
+impl<Message> Default for Note<'_, Message> {
+    fn default() -> Self {
+        Self {
+            preparation: PreparedId::new(),
+            decorator: None,
+            presentation: None,
+            information: None,
+            regions: Vec::new(),
+        }
+    }
+}
+
+// Written by hand, as for `Child`: the decorator is an `Rc`, and a derived
+// `Clone` would ask for `Message: Clone`.
+impl<Message> Clone for Note<'_, Message> {
     fn clone(&self) -> Self {
         Self {
-            view: self.view.clone(),
-            query: self.query.clone(),
-            composition: self.composition.clone(),
-            frame: self.frame.clone(),
-            forms: self.forms.clone(),
-            decorator: self.decorator.clone(),
-            hidden: self.hidden.clone(),
-            viewport: self.viewport.clone(),
-            weight: self.weight,
-            grow: self.grow,
-            grow_height: self.grow_height,
-            reserve_width: self.reserve_width,
-            fixed_width: self.fixed_width,
-            fixed_height: self.fixed_height,
             preparation: self.preparation.clone(),
+            decorator: self.decorator.clone(),
             presentation: self.presentation,
             information: self.information.clone(),
             regions: self.regions.clone(),
@@ -374,13 +376,57 @@ impl<Message> Clone for Child<'_, Message> {
     }
 }
 
+// Written by hand: the part's views and decorators are `Rc`s, so a clone
+// shares the prepared parts and needs no `Message: Clone`.
+impl<Message> Clone for Child<'_, Message> {
+    fn clone(&self) -> Self {
+        Self {
+            part: self.part.clone(),
+        }
+    }
+}
+
 impl<'a, Message: 'a> Child<'a, Message> {
+    /// The interface's handle on `part`.
+    fn from_part(part: Part<'a, Message>) -> Self {
+        Self { part }
+    }
+
+    /// Declare on the part with the engine's builder, `declare`, then give
+    /// the child a fresh preparation identity, as every declaration that
+    /// changes what is planned does: a plan made before it was made from
+    /// another child.
+    fn redeclared(self, declare: impl FnOnce(Part<'a, Message>) -> Part<'a, Message>) -> Self {
+        let mut child = Self::from_part(declare(self.part));
+        child.refresh_preparation();
+        child
+    }
+
+    /// Mark this child invalid unless `valid`
+    /// (`household_layout::Child::invalid_unless`).
+    fn invalid_unless(self, valid: bool) -> Self {
+        Self::from_part(self.part.invalid_unless(valid))
+    }
+
+    /// The preparation identity in this child's note, which the binding
+    /// tests compare with a plan's bindings.
+    #[cfg(test)]
+    fn preparation(&self) -> &PreparedId {
+        &self.part.note().preparation
+    }
+
+    /// What this child is, which tests match on.
+    #[cfg(test)]
+    fn kind(&self) -> &Kind<'a, Native<'a, Message>> {
+        self.part.kind()
+    }
+
     fn refresh_preparation(&mut self) {
-        self.preparation = PreparedId::new();
+        self.part.note_mut().preparation = PreparedId::new();
     }
 
     pub fn presentation(&self) -> Option<Presentation> {
-        self.presentation
+        self.part.note().presentation
     }
 
     /// Report family-local information loss from prepared immutable data and
@@ -395,7 +441,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         revision: u64,
         report: impl Fn(Level, &GeometryPlan) -> Vec<InformationLoss> + 'a,
     ) -> Self {
-        self.information = Some(SourceInformation {
+        self.part.note_mut().information = Some(SourceInformation {
             source,
             revision,
             report: Rc::new(report),
@@ -407,130 +453,130 @@ impl<'a, Message: 'a> Child<'a, Message> {
     /// Name an accepted native box for section navigation. Multiple roles may
     /// describe the same box. Rebuilding refreshes the preparation identity.
     pub fn report_region(mut self, region: Region) -> Self {
-        self.regions.push(region);
+        self.part.note_mut().regions.push(region);
         self.refresh_preparation();
         self
     }
 
+    /// Bind a finished plan to this child, the child it was planned from, at
+    /// the level it was planned at: the one walk that binds plans.
+    ///
+    /// What binding is. Every node of a plan records which children made it
+    /// (`GeometryPlan::bindings`: a child's preparation identity and the
+    /// level), and a child that reports information adds its report on the
+    /// node it made (`source_reports`), made by its callback from that node.
+    /// `render` draws a node only for a child whose binding it carries, so a
+    /// plan can be committed only by the children it was planned from, and
+    /// only the reports of the plan that is committed are published.
+    ///
+    /// Why it is apart from planning. Planning is geometry: where each part
+    /// goes and whether it fits. Preparation identities and reports belong
+    /// to the widgets, not to the geometry, and the planner lives in a
+    /// crate that knows nothing of them (household-layout). Binding also
+    /// needs only the plan that is kept: planning makes and discards trial
+    /// plans (a column plans each child with unbounded height and again at
+    /// its share, a wrap plans again in its second pass, a stage that does
+    /// not fit is dropped), and those need no binding. So planning
+    /// (`household_layout::Child::plan_width`, and the compositions' and the
+    /// frame's planning) makes plans with no bindings and no reports, and
+    /// `query_at`, the only way into planning from outside, plans, makes the
+    /// interface's plan of the engine's (`GeometryPlan::from_core`), and then
+    /// calls this once on the plan it returns.
+    ///
+    /// How the walk pairs a node with the child that made it: by the rule
+    /// planning follows, one arm per kind (`Commit::bind`).
+    ///
+    /// - A composition's placement names the child it was planned from by
+    ///   its `index` among the declared children.
+    /// - A frame's content made the frame's first (and only) placement.
+    /// - The form selected at the level made the very node the family
+    ///   returns, so that node is bound twice: by the form, then by the
+    ///   family.
+    /// - A leaf has nothing below.
+    ///
+    /// A hidden node was returned at once by the hidden child that was asked
+    /// for it (a hidden family, frame or composition returns before asking
+    /// what it holds), so it is bound by that child alone and nothing below
+    /// it is visited. A placement whose index names no child, or a frame's
+    /// plan without its placement, cannot come from the child's own
+    /// planning; the walk leaves that part unbound, and `render` refuses it.
+    ///
+    /// The order is the order planning bound in when it did it as it went:
+    /// what is below a node is bound before the node itself, and a family's
+    /// form before the family. So each node ends with the same bindings and
+    /// reports in the same order, and each report callback is given the
+    /// node as it was then: every node below it bound and reported, the
+    /// node's earlier bindings and reports in place, and its own binding.
+    /// Each node is finished when it is bound: nothing planning does after a
+    /// child has returned its plan changes that plan, except forms raising
+    /// their form's node to the room when they grow in height, which the
+    /// form, given that growth, has already done
+    /// (`household_layout::Child::grow_height_in_effect`).
+    ///
+    /// The one difference from binding as planning went: a report callback
+    /// now runs once for each node of the finished plan that its child
+    /// made, and no longer also for the trial plans that were discarded or
+    /// for plans that failed. A report callback must be pure
+    /// (`report_information`), so what it reports is the same.
     fn bind_geometry(&self, level: Level, mut plan: GeometryPlan) -> GeometryPlan {
-        plan.bindings.push((self.preparation.clone(), level));
-        if !plan.hidden
-            && let Some(information) = &self.information
-        {
-            let losses = (information.report)(level, &plan);
-            plan.source_reports.push(SourceReport {
-                source: information.source,
-                revision: information.revision,
-                presentation: self.presentation,
-                level,
-                size: plan.size,
-                losses,
-                owner: self.preparation.clone(),
-            });
-        }
+        self.part.bind(level, &mut plan);
         plan
     }
 
-    fn selected_form(&self, level: Level) -> Option<&Self> {
-        self.forms.as_ref().map(|forms| select_form(forms, level))
-    }
-
-    fn has_composition(&self, level: Level) -> bool {
-        self.composition.is_some()
-            || self
-                .frame
-                .as_ref()
-                .is_some_and(|frame| frame.content.has_composition(level))
-            || self
-                .selected_form(level)
-                .is_some_and(|form| form.has_composition(level))
-    }
-
-    fn is_hidden(&self, level: Level) -> bool {
-        (self.hidden)(level)
-            || self
-                .selected_form(level)
-                .is_some_and(|form| form.is_hidden(level))
-            || self.composition.as_ref().is_some_and(|composition| {
-                composition
-                    .children
-                    .iter()
-                    .all(|child| child.is_hidden(level))
-            })
-            || self
-                .frame
-                .as_ref()
-                .is_some_and(|frame| frame.content.is_hidden(level))
-    }
-
     pub fn view(&self, level: Level) -> Element<'a, Message> {
-        if self.is_hidden(level) {
+        if self.part.is_hidden(level) {
             return widget::space().width(0).height(0).into();
         }
         // Preserve the native leaf's public tree identity for direct consumers
         // such as tab strips. Root stage commits use render/VerifiedLeaf; only
         // composites and explicitly decorated leaves need this fixed-level
         // allocation adapter here.
-        if self.composition.is_none()
-            && self.frame.is_none()
-            && self.forms.is_none()
-            && self.decorator.is_none()
-            && self.presentation.is_none()
-            && self.information.is_none()
-        {
-            return (self.view)(level);
+        let note = self.part.note();
+        match self.part.kind() {
+            Kind::Leaf(leaf)
+                if note.decorator.is_none()
+                    && note.presentation.is_none()
+                    && note.information.is_none() =>
+            {
+                (leaf.content())(level)
+            }
+            Kind::Leaf(_) | Kind::Composition(_) | Kind::Frame(_) | Kind::Forms(_) => {
+                Element::new(FixedComponent {
+                    child: self.clone(),
+                    level,
+                    content: widget::space().into(),
+                })
+            }
         }
-        Element::new(FixedComponent {
-            child: self.clone(),
-            level,
-            content: widget::space().into(),
-        })
     }
 
+    /// The engine's measurement of the part (`household_layout::Child::query`).
     pub fn query(&self, level: Level, renderer: &Renderer) -> MeasuredSize {
-        if self.is_hidden(level) {
-            return MeasuredSize {
-                preferred: Size::ZERO,
-                minimum: Size::ZERO,
-            };
-        }
-        (self.query)(level, renderer)
+        self.part.query(level, renderer).into()
     }
 
     /// Allocate first, then measure native content at its allocated width with
     /// unbounded height. Thus a clipped height can never certify a fit. A useful
     /// minimum narrower than intrinsic width must be explicitly declared.
+    // The engine makes the plan (`household_layout::Child::query_at`);
+    // binding it to this child, with the reports, follows once it is
+    // finished (`bind_geometry`).
     pub fn query_at(
         &self,
         level: Level,
         renderer: &Renderer,
         available: Size,
     ) -> Result<GeometryPlan, AllocationError> {
-        if !valid_available(available) {
-            return Err(AllocationError::InvalidInput);
-        }
-        if self.is_hidden(level) {
-            return Ok(self.bind_geometry(level, GeometryPlan::hidden()));
-        }
-        let measured = self.query(level, renderer);
-        validate_measurement(measured)?;
-        let widths = allocate_with_growth(
-            available.width,
-            &[WidthCapacity {
-                preferred: measured.preferred.width,
-                minimum: measured.minimum.width,
-                weight: self.weight,
-            }],
-            &[self.grow],
-        )?;
-        let width = if self.has_composition(level) && available.width.is_finite() {
-            available.width
-        } else {
-            widths[0]
-        };
-        self.plan_width(level, renderer, width, available.height)
+        self.part
+            .query_at(level, renderer, core_size(available))
+            .map(|plan| self.bind_geometry(level, GeometryPlan::from_core(&plan)))
     }
 
+    /// Plan this child in `width` × `height`, as its parent does
+    /// (`household_layout::Child::plan_width`): the plan has no bindings
+    /// and no reports, which `query_at` adds to the plan it returns
+    /// (`bind_geometry`).
+    #[cfg(test)]
     fn plan_width(
         &self,
         level: Level,
@@ -538,115 +584,213 @@ impl<'a, Message: 'a> Child<'a, Message> {
         width: f32,
         height: f32,
     ) -> Result<GeometryPlan, AllocationError> {
-        if self.is_hidden(level) {
-            return Ok(self.bind_geometry(level, GeometryPlan::hidden()));
-        }
-        let constrained = if self.fixed_width.is_some() || self.fixed_height.is_some() {
-            Some(self.query(level, renderer))
-        } else {
-            None
-        };
-        let width = if self.fixed_width.is_some() {
-            let requested = constrained.expect("fixed measurement").minimum.width;
-            if width + FIT_EPSILON < requested {
-                return Err(AllocationError::NoFit {
-                    required: requested,
-                    available: width,
-                });
-            }
-            requested
-        } else {
-            width
-        };
-        let height = if self.fixed_height.is_some() {
-            let requested = constrained.expect("fixed measurement").minimum.height;
-            if height + FIT_EPSILON < requested {
-                return Err(AllocationError::NoFit {
-                    required: requested,
-                    available: height,
-                });
-            }
-            requested
-        } else {
-            height
-        };
-        let mut plan = if let Some(form) = self.selected_form(level) {
-            let mut selected = form.clone();
-            if self.grow_height > 0.0 {
-                selected.grow_height = self.grow_height;
-            }
-            selected.plan_width(level, renderer, width, height)?
-        } else if let Some(composition) = &self.composition {
-            composition.plan(level, renderer, width, height)?
-        } else if let Some(frame) = &self.frame {
-            frame.plan(level, renderer, width, height, self.grow_height)?
-        } else {
-            let viewport_height = self.viewport.as_ref().map(|minimum| {
-                let minimum = minimum(level, renderer);
-                let measured = self.query(level, renderer);
-                if self.grow_height > 0.0 && height.is_finite() {
-                    height.max(minimum.height)
-                } else {
-                    measured.preferred.height.min(height).max(minimum.height)
+        self.part
+            .plan_width(level, renderer, width, height)
+            .map(|plan| GeometryPlan::from_core(&plan))
+    }
+
+    /// Render this child from `plan`, inheriting no growth in height: the
+    /// root, or a composition's child (`Commit::render`).
+    fn render(
+        &self,
+        level: Level,
+        plan: &GeometryPlan,
+        agreement: Rc<Cell<bool>>,
+    ) -> Element<'a, Message> {
+        self.part.render(level, plan, agreement)
+    }
+
+    /// Reserve the full width allocated by the parent, keeping the inner
+    /// component's natural geometry and reports intact. Useful for wrapping
+    /// navigation followed by trailing controls: a short final row must not
+    /// move those controls into space already allocated to navigation.
+    pub fn fill_width(self) -> Self {
+        Self::from_part(self.part.fill_width())
+    }
+
+    /// Reserve exact dimensions for this prepared component. A dimension below
+    /// its measured useful minimum is raised to that minimum; insufficient
+    /// available space fails the stage rather than shrinking the request.
+    /// Apply this to the expanded form, before declaring a collapsed form.
+    /// The inner child remains an ordinary nested composition and keeps its
+    /// reports and native state. Values must be finite and nonnegative; any
+    /// other makes the child invalid (`invalid_unless`).
+    pub fn fixed_dimensions(self, width: Option<f32>, height: Option<f32>) -> Self {
+        Self::from_part(self.part.fixed_dimensions(width, height))
+    }
+
+    /// Decorate this component's rendered content without changing its geometry.
+    /// Useful ranges, structured forms and exact-level queries stay unchanged.
+    /// Apply only styling or alignment inside the existing component box: no
+    /// padding, size changes or overflow. Native commits verify the decorated
+    /// size and reject a disagreeing stage. Factories and decorators must be
+    /// free of application side effects. Hidden forms are never decorated.
+    pub fn map_view(
+        mut self,
+        decorate: impl Fn(Element<'a, Message>) -> Element<'a, Message> + 'a,
+    ) -> Self {
+        let note = self.part.note_mut();
+        note.decorator = Some(match note.decorator.take() {
+            Some(previous) => Rc::new(move |content| decorate(previous(content))),
+            None => Rc::new(decorate),
+        });
+        self.refresh_preparation();
+        self
+    }
+
+    /// Finite and nonnegative; any other weight makes the child invalid
+    /// (`invalid_unless`), as for `grow` and `grow_height`.
+    pub fn weight(self, weight: f32) -> Self {
+        self.redeclared(|part| part.weight(weight))
+    }
+
+    /// Share surplus only after shrinking has finished.
+    pub fn grow(self, grow: f32) -> Self {
+        self.redeclared(|part| part.grow(grow))
+    }
+
+    /// Share surplus height in a column independently of width growth. Native
+    /// content keeps its measured height floor; a declared viewport expands.
+    pub fn grow_height(self, grow: f32) -> Self {
+        self.redeclared(|part| part.grow_height(grow))
+    }
+
+    /// Explicit component permission to omit this form. No layout slot, gap,
+    /// event target, overlay or accessibility node is built for hidden children.
+    pub fn hidden_when(self, hidden: impl Fn(Level) -> bool + 'a) -> Self {
+        self.redeclared(move |part| part.hidden_when(hidden))
+    }
+
+    pub fn round_width_up(self) -> Self {
+        self.redeclared(|part| part.round_width_up())
+    }
+
+    /// Set the desired width independently of the measured useful minimum.
+    /// A parent may allocate less down to that minimum; when the minimum is
+    /// larger than the requested width it remains authoritative. Geometry is
+    /// remeasured at the allocated width, including wrapping and chrome.
+    pub fn preferred_width(self, width: f32) -> Self {
+        self.redeclared(|part| part.preferred_width(width))
+    }
+
+    /// Derive a preferred width from the same prepared data and renderer as
+    /// the component, without replacing its independently measured minimum.
+    pub fn preferred_width_with(
+        self,
+        preferred: impl Fn(Level, &Renderer, MeasuredSize) -> f32 + 'a,
+    ) -> Self {
+        self.redeclared(move |part| {
+            part.preferred_width_with(move |level, renderer: &Renderer, measured: Measured| {
+                preferred(level, renderer, measured.into())
+            })
+        })
+    }
+
+    /// Declare a finite, nonnegative useful width floor. If native intrinsic
+    /// width is smaller (including an all-Fill subtree reporting zero), the
+    /// preferred offer is raised to the floor. A native leaf with positive
+    /// infinite intrinsic width is probed at this declared floor; only a finite
+    /// fitting native result can use the floor as its initial preferred offer.
+    /// Native content is measured again
+    /// at its allocated width, including the actual height of wrapping text.
+    /// The component is responsible for making that form usable.
+    pub fn minimum_width(self, minimum: impl Fn(Level, Size) -> f32 + 'a) -> Self {
+        self.redeclared(move |part| {
+            part.minimum_width(move |level, preferred: household_layout::Size| {
+                minimum(level, toolkit_size(preferred))
+            })
+        })
+    }
+
+    /// A useful width floor measured from prepared native content using the
+    /// query's renderer. The callback is pure and must capture the same data,
+    /// typography and presentation as this component's selected view.
+    pub fn minimum_width_with(self, minimum: impl Fn(Level, &Renderer, Size) -> f32 + 'a) -> Self {
+        self.redeclared(move |part| {
+            part.minimum_width_with(
+                move |level, renderer: &Renderer, preferred: household_layout::Size| {
+                    minimum(level, renderer, toolkit_size(preferred))
+                },
+            )
+        })
+    }
+}
+
+/// The widgets' half of the engine, over the engine's parts: binding a
+/// finished plan to the parts it was planned from (`bind`), and rendering
+/// it, with verification, as native widgets (`render`). The engine plans;
+/// these walk the plan and the parts together, one arm per kind, reading
+/// the parts through the engine's read access and the widgets' bookkeeping
+/// from each part's note.
+trait Commit<'a, Message> {
+    /// The walk of `Child::bind_geometry`, over a node in place.
+    fn bind(&self, level: Level, plan: &mut GeometryPlan);
+
+    /// Render this part from `plan`, inheriting no growth in height: the
+    /// root, or a composition's child
+    /// (`household_layout::Child::grow_height_in_effect`).
+    fn render(
+        &self,
+        level: Level,
+        plan: &GeometryPlan,
+        agreement: Rc<Cell<bool>>,
+    ) -> Element<'a, Message>;
+
+    /// Render this part from `plan`, with the growth in height the forms or
+    /// the frame round it pass it, as it was planned.
+    fn render_inheriting(
+        &self,
+        level: Level,
+        plan: &GeometryPlan,
+        agreement: Rc<Cell<bool>>,
+        inherited_growth: f32,
+    ) -> Element<'a, Message>;
+
+    /// Render what this part holds, once its binding has matched.
+    fn render_content(
+        &self,
+        level: Level,
+        plan: &GeometryPlan,
+        agreement: Rc<Cell<bool>>,
+        inherited_growth: f32,
+    ) -> Element<'a, Message>;
+}
+
+impl<'a, Message: 'a> Commit<'a, Message> for Part<'a, Message> {
+    fn bind(&self, level: Level, plan: &mut GeometryPlan) {
+        if !plan.hidden {
+            match self.kind() {
+                Kind::Leaf(_) => {}
+                Kind::Composition(composition) => {
+                    for placed in &mut plan.children {
+                        if let Some(child) = composition.children().get(placed.index) {
+                            child.bind(level, &mut placed.geometry);
+                        }
+                    }
                 }
-            });
-            let size = measure_element_in(
-                || (self.view)(level),
-                renderer,
-                Size::new(width, viewport_height.unwrap_or(f32::INFINITY)),
-                viewport_height.is_none(),
-            );
-            if !finite_size(size) {
-                return Err(AllocationError::InvalidInput);
+                Kind::Frame(frame) => {
+                    if let Some(placed) = plan.children.first_mut() {
+                        frame.content().bind(level, &mut placed.geometry);
+                    }
+                }
+                Kind::Forms(forms) => forms.select(level).bind(level, plan),
             }
-            if size.width > width + FIT_EPSILON {
-                return Err(AllocationError::NoFit {
-                    required: size.width,
-                    available: width,
-                });
-            }
-            if let Some(offered_height) = viewport_height
-                && size.height > offered_height + FIT_EPSILON
-            {
-                return Err(AllocationError::NoFit {
-                    required: size.height,
-                    available: offered_height,
-                });
-            }
-            // The parent reserves the allocated width even for shrink content.
-            let mut plan = GeometryPlan::leaf(Size::new(width, size.height));
-            plan.native_size = Some(size);
-            if let Some(minimum) = &self.viewport {
-                let minimum = minimum(level, renderer);
-                plan.size.height = viewport_height.expect("declared viewport height");
-                plan.minimum_height = minimum.height;
-            }
-            plan
-        };
-        if self.fixed_width.is_some() || self.reserve_width {
-            plan.size.width = width;
         }
-        if (self.grow_height > 0.0 || self.fixed_height.is_some()) && height.is_finite() {
-            plan.size.height = plan.size.height.max(height);
-        }
-        if self.fixed_height.is_some() {
-            plan.minimum_height = plan
-                .minimum_height
-                .max(constrained.expect("fixed measurement").minimum.height);
-        }
-        if plan.size.width > width + FIT_EPSILON {
-            return Err(AllocationError::NoFit {
-                required: plan.size.width,
-                available: width,
+        plan.bindings.push((self.note().preparation.clone(), level));
+        if !plan.hidden
+            && let Some(information) = &self.note().information
+        {
+            let losses = (information.report)(level, plan);
+            plan.source_reports.push(SourceReport {
+                source: information.source,
+                revision: information.revision,
+                presentation: self.note().presentation,
+                level,
+                size: plan.size,
+                losses,
+                owner: self.note().preparation.clone(),
             });
         }
-        if plan.size.height > height + FIT_EPSILON {
-            return Err(AllocationError::NoFit {
-                required: plan.size.height,
-                available: height,
-            });
-        }
-        Ok(self.bind_geometry(level, plan))
     }
 
     fn render(
@@ -655,16 +799,26 @@ impl<'a, Message: 'a> Child<'a, Message> {
         plan: &GeometryPlan,
         agreement: Rc<Cell<bool>>,
     ) -> Element<'a, Message> {
+        self.render_inheriting(level, plan, agreement, 0.0)
+    }
+
+    fn render_inheriting(
+        &self,
+        level: Level,
+        plan: &GeometryPlan,
+        agreement: Rc<Cell<bool>>,
+        inherited_growth: f32,
+    ) -> Element<'a, Message> {
         let binding_matches = plan
             .bindings
             .iter()
-            .any(|(id, planned_level)| id == &self.preparation && *planned_level == level);
+            .any(|(id, planned_level)| id == &self.note().preparation && *planned_level == level);
         let content = if !binding_matches || plan.hidden {
             widget::space().width(0).height(0).into()
         } else {
-            self.render_content(level, plan, agreement.clone())
+            self.render_content(level, plan, agreement.clone(), inherited_growth)
         };
-        let content = match &self.decorator {
+        let content = match &self.note().decorator {
             Some(_) if !binding_matches || plan.hidden => content,
             Some(decorate) => {
                 let content = Element::new(VerifiedDecoration {
@@ -687,14 +841,14 @@ impl<'a, Message: 'a> Child<'a, Message> {
             reports: if binding_matches && !plan.hidden {
                 plan.source_reports
                     .iter()
-                    .filter(|report| report.owner == self.preparation)
+                    .filter(|report| report.owner == self.note().preparation)
                     .cloned()
                     .collect()
             } else {
                 Vec::new()
             },
             regions: if binding_matches && !plan.hidden {
-                self.regions.clone()
+                self.note().regions.clone()
             } else {
                 Vec::new()
             },
@@ -708,44 +862,70 @@ impl<'a, Message: 'a> Child<'a, Message> {
         level: Level,
         plan: &GeometryPlan,
         agreement: Rc<Cell<bool>>,
+        inherited_growth: f32,
     ) -> Element<'a, Message> {
-        if let Some(form) = self.selected_form(level) {
-            let mut selected = form.clone();
-            if self.grow_height > 0.0 {
-                selected.grow_height = self.grow_height;
+        let grow_height = self.grow_height_in_effect(inherited_growth);
+        // Forms, frames and leaves are rendered here; a composition continues
+        // below, where its rows or column are built from the plan's placements.
+        let composition = match self.kind() {
+            Kind::Forms(forms) => {
+                let content =
+                    forms
+                        .select(level)
+                        .render_inheriting(level, plan, agreement, grow_height);
+                return if grow_height > 0.0 {
+                    widget::container(content)
+                        .width(plan.size.width)
+                        .height(plan.size.height)
+                        .into()
+                } else {
+                    content
+                };
             }
-            let content = selected.render(level, plan, agreement);
-            return if self.grow_height > 0.0 {
-                widget::container(content)
+            Kind::Frame(frame) => return frame::render(frame, level, plan, agreement, grow_height),
+            Kind::Leaf(leaf) => {
+                // A leaf's own plan always records the size its view measured
+                // (`household_layout::Plan::leaf_size`). A plan without one
+                // was made for another kind of child, so it does not match
+                // this leaf: render nothing and refuse the stage, exactly as
+                // `render` does for a plan whose binding does not match.
+                let Some(expected) = plan.native_size else {
+                    return refused(agreement);
+                };
+                // Laid out as it was planned: an ordinary leaf with unbounded
+                // height, compressed to its own; a viewport within the height
+                // it was offered (`household_layout::Offer`).
+                let (maximum_height, compress_height) = match leaf.height() {
+                    LeafHeight::Floor => (f32::INFINITY, true),
+                    LeafHeight::Range { .. } => (plan.size.height, false),
+                };
+                let content = Element::new(VerifiedLeaf {
+                    content: (leaf.content())(level),
+                    expected,
+                    maximum: Size::new(plan.size.width, maximum_height),
+                    compress_height,
+                    agreement,
+                });
+                return widget::container(content)
                     .width(plan.size.width)
                     .height(plan.size.height)
-                    .into()
-            } else {
-                content
+                    .into();
+            }
+            Kind::Composition(composition) => composition,
+        };
+        // A placement's child, rendered in the slot the plan gives it. The
+        // plan was made from this composition, so its placements name its
+        // children and its rows name its placements; one that names nothing
+        // here belongs to another plan, and that part renders nothing and
+        // refuses the stage (`refused`).
+        let place = |placed: &Placement| -> Element<'a, Message> {
+            let Some(child) = composition.children().get(placed.index) else {
+                return refused(agreement.clone());
             };
-        }
-        if let Some(frame) = &self.frame {
-            return frame.render(level, plan, agreement, self.grow_height);
-        }
-        let Some(composition) = &self.composition else {
-            let content = Element::new(VerifiedLeaf {
-                content: (self.view)(level),
-                expected: plan.native_size.expect("native leaf measurement"),
-                maximum: Size::new(
-                    plan.size.width,
-                    if self.viewport.is_some() {
-                        plan.size.height
-                    } else {
-                        f32::INFINITY
-                    },
-                ),
-                compress_height: self.viewport.is_none(),
-                agreement,
-            });
-            return widget::container(content)
-                .width(plan.size.width)
-                .height(plan.size.height)
-                .into();
+            widget::container(child.render(level, &placed.geometry, agreement.clone()))
+                .width(placed.geometry.size.width)
+                .height(placed.geometry.size.height)
+                .into()
         };
         // The plan has already omitted hidden forms. Native `with_children`
         // filters zero-sized hints, which would discard valid zero-height
@@ -755,28 +935,21 @@ impl<'a, Message: 'a> Child<'a, Message> {
             widget::Row::from_vec(
                 indices
                     .iter()
-                    .map(|i| {
-                        let placed = &plan.children[*i];
-                        widget::container(composition.children[placed.index].render(
-                            level,
-                            &placed.geometry,
-                            agreement.clone(),
-                        ))
-                        .width(placed.geometry.size.width)
-                        .height(placed.geometry.size.height)
-                        .into()
+                    .map(|i| match plan.children.get(*i) {
+                        Some(placed) => place(placed),
+                        None => refused(agreement.clone()),
                     })
                     .collect::<Vec<Element<'a, Message>>>(),
             )
-            .spacing(composition.spacing)
-            .align_y(if composition.top_aligned {
+            .spacing(composition.spacing())
+            .align_y(if composition.top_aligned() {
                 cosmic::iced::Alignment::Start
             } else {
                 cosmic::iced::Alignment::Center
             })
             .into()
         };
-        let content = match composition.arrangement {
+        let content = match composition.arrangement() {
             Arrangement::Row => make_row(plan.rows.first().map_or(&[], Vec::as_slice)),
             Arrangement::Wrap => widget::Column::from_vec(
                 plan.rows
@@ -784,31 +957,19 @@ impl<'a, Message: 'a> Child<'a, Message> {
                     .map(|row| make_row(row))
                     .collect::<Vec<_>>(),
             )
-            .spacing(composition.spacing)
+            .spacing(composition.spacing())
             .into(),
             Arrangement::Column => widget::Column::from_vec(
                 plan.children
                     .iter()
-                    .map(|placed| {
-                        widget::container(composition.children[placed.index].render(
-                            level,
-                            &placed.geometry,
-                            agreement.clone(),
-                        ))
-                        .width(placed.geometry.size.width)
-                        .height(placed.geometry.size.height)
-                        .into()
-                    })
+                    .map(place)
                     .collect::<Vec<Element<'a, Message>>>(),
             )
-            .spacing(composition.spacing)
+            .spacing(composition.spacing())
             .into(),
         };
-        if self.grow_height > 0.0
-            || self.fixed_height.is_some()
-            || self.fixed_width.is_some()
-            || self.reserve_width
-        {
+        let sharing = self.sharing();
+        if grow_height > 0.0 || sharing.fixed.any() || sharing.reserve_width {
             widget::container(content)
                 .width(plan.size.width)
                 .height(plan.size.height)
@@ -817,261 +978,28 @@ impl<'a, Message: 'a> Child<'a, Message> {
             content
         }
     }
+}
 
-    /// Reserve the full width allocated by the parent, keeping the inner
-    /// component's natural geometry and reports intact. Useful for wrapping
-    /// navigation followed by trailing controls: a short final row must not
-    /// move those controls into space already allocated to navigation.
-    pub fn fill_width(self) -> Self {
-        let weight = self.weight;
-        let grow_height = self.grow_height;
-        let mut result = column_child(vec![self], 0.0);
-        result.weight = weight;
-        result.grow_height = grow_height;
-        result.reserve_width = true;
-        result.grow = 1.0;
-        result
-    }
-
-    /// Reserve exact dimensions for this prepared component. A dimension below
-    /// its measured useful minimum is raised to that minimum; insufficient
-    /// available space fails the stage rather than shrinking the request.
-    /// Apply this to the expanded form, before declaring a collapsed form.
-    /// The inner child remains an ordinary nested composition and keeps its
-    /// reports and native state. Values must be finite and nonnegative.
-    pub fn fixed_dimensions(self, width: Option<f32>, height: Option<f32>) -> Self {
-        assert!(
-            [width, height]
-                .into_iter()
-                .flatten()
-                .all(|n| n.is_finite() && n >= 0.0)
-        );
-        if width.is_none() && height.is_none() {
-            return self;
-        }
-        // A wrapper keeps the inner child's measured geometry and bindings intact.
-        let weight = self.weight;
-        let grow = self.grow;
-        let grow_height = self.grow_height;
-        let mut result = column_child(vec![self], 0.0);
-        result.weight = weight;
-        result.grow = grow;
-        result.grow_height = grow_height;
-        result.fixed_width = width;
-        result.fixed_height = height;
-        let query = result.query.clone();
-        result.query = Rc::new(move |level, renderer| {
-            let mut measured = query(level, renderer);
-            if let Some(width) = width {
-                let width = width.max(measured.minimum.width);
-                measured.minimum.width = width;
-                measured.preferred.width = width;
-            }
-            if let Some(height) = height {
-                let height = height.max(measured.minimum.height);
-                measured.minimum.height = height;
-                measured.preferred.height = height;
-            }
-            measured
-        });
-        result
-    }
-
-    /// Decorate this component's rendered content without changing its geometry.
-    /// Useful ranges, structured forms and exact-level queries stay unchanged.
-    /// Apply only styling or alignment inside the existing component box: no
-    /// padding, size changes or overflow. Native commits verify the decorated
-    /// size and reject a disagreeing stage. Factories and decorators must be
-    /// free of application side effects. Hidden forms are never decorated.
-    pub fn map_view(
-        mut self,
-        decorate: impl Fn(Element<'a, Message>) -> Element<'a, Message> + 'a,
-    ) -> Self {
-        self.decorator = Some(match self.decorator.take() {
-            Some(previous) => Rc::new(move |content| decorate(previous(content))),
-            None => Rc::new(decorate),
-        });
-        self.refresh_preparation();
-        self
-    }
-
-    pub fn weight(mut self, weight: f32) -> Self {
-        assert!(weight.is_finite() && weight >= 0.0);
-        self.weight = weight;
-        self.refresh_preparation();
-        self
-    }
-
-    /// Share surplus only after shrinking has finished.
-    pub fn grow(mut self, grow: f32) -> Self {
-        assert!(grow.is_finite() && grow >= 0.0);
-        self.grow = grow;
-        self.refresh_preparation();
-        self
-    }
-
-    /// Share surplus height in a column independently of width growth. Native
-    /// content keeps its measured height floor; a declared viewport expands.
-    pub fn grow_height(mut self, grow: f32) -> Self {
-        assert!(grow.is_finite() && grow >= 0.0);
-        self.grow_height = grow;
-        self.refresh_preparation();
-        self
-    }
-
-    /// Explicit component permission to omit this form. No layout slot, gap,
-    /// event target, overlay or accessibility node is built for hidden children.
-    pub fn hidden_when(mut self, hidden: impl Fn(Level) -> bool + 'a) -> Self {
-        self.hidden = Rc::new(hidden);
-        self.refresh_preparation();
-        self
-    }
-
-    pub fn round_width_up(mut self) -> Self {
-        self.refresh_preparation();
-        let query = self.query.clone();
-        self.query = Rc::new(move |level, renderer| {
-            let mut measured = query(level, renderer);
-            measured.preferred.width = measured.preferred.width.ceil();
-            measured.minimum.width = measured.minimum.width.ceil();
-            measured
-        });
-        self
-    }
-
-    /// Set the desired width independently of the measured useful minimum.
-    /// A parent may allocate less down to that minimum; when the minimum is
-    /// larger than the requested width it remains authoritative. Geometry is
-    /// remeasured at the allocated width, including wrapping and chrome.
-    pub fn preferred_width(self, width: f32) -> Self {
-        self.preferred_width_with(move |_, _, _| width)
-    }
-
-    /// Derive a preferred width from the same prepared data and renderer as
-    /// the component, without replacing its independently measured minimum.
-    pub fn preferred_width_with(
-        mut self,
-        preferred: impl Fn(Level, &Renderer, MeasuredSize) -> f32 + 'a,
-    ) -> Self {
-        self.refresh_preparation();
-        let query = self.query.clone();
-        self.query = Rc::new(move |level, renderer| {
-            let mut measured = query(level, renderer);
-            let width = preferred(level, renderer, measured);
-            measured.preferred.width = if width.is_finite() && width >= 0.0 {
-                width.max(measured.minimum.width)
-            } else {
-                f32::NAN
-            };
-            measured
-        });
-        self
-    }
-
-    /// Declare a finite, nonnegative useful width floor. If native intrinsic
-    /// width is smaller (including an all-Fill subtree reporting zero), the
-    /// preferred offer is raised to the floor. A native leaf with positive
-    /// infinite intrinsic width is probed at this declared floor; only a finite
-    /// fitting native result can use the floor as its initial preferred offer.
-    /// Native content is measured again
-    /// at its allocated width, including the actual height of wrapping text.
-    /// The component is responsible for making that form usable.
-    pub fn minimum_width(self, minimum: impl Fn(Level, Size) -> f32 + 'a) -> Self {
-        self.minimum_width_with(move |level, _, preferred| minimum(level, preferred))
-    }
-
-    /// A useful width floor measured from prepared native content using the
-    /// query's renderer. The callback is pure and must capture the same data,
-    /// typography and presentation as this component's selected view.
-    pub fn minimum_width_with(
-        mut self,
-        minimum: impl Fn(Level, &Renderer, Size) -> f32 + 'a,
-    ) -> Self {
-        self.refresh_preparation();
-        let query = self.query.clone();
-        let native = if self.composition.is_none() && self.forms.is_none() && self.frame.is_none() {
-            Some(self.view.clone())
-        } else {
-            None
-        };
-        self.query = Rc::new(move |level, renderer| {
-            let mut measured = query(level, renderer);
-            let recoverable = measured.preferred.width == f32::INFINITY
-                && measured.preferred.height.is_finite()
-                && measured.preferred.height >= 0.0
-                && measured.minimum.height.is_finite()
-                && measured.minimum.height >= 0.0
-                && native.is_some();
-            if (measured.preferred.width.is_finite() && measured.preferred.width >= 0.0)
-                || recoverable
-            {
-                let floor = minimum(level, renderer, measured.preferred);
-                if floor.is_finite() && floor >= 0.0 {
-                    if recoverable {
-                        // Some native Fill controls have no intrinsic width.
-                        // The component's declared floor is the finite offer;
-                        // never substitute an arbitrary window or probe width.
-                        let bounded = measure_element_in(
-                            || native.as_ref().expect("native leaf factory")(level),
-                            renderer,
-                            Size::new(floor, f32::INFINITY),
-                            true,
-                        );
-                        if finite_size(bounded) && bounded.width <= floor + FIT_EPSILON {
-                            measured.preferred = Size::new(floor, bounded.height);
-                            measured.minimum.width = floor;
-                            measured.minimum.height = measured.minimum.height.min(bounded.height);
-                        } else {
-                            measured.minimum.width = f32::NAN;
-                        }
-                    } else {
-                        // An all-Fill native subtree can report intrinsic zero.
-                        measured.minimum.width = floor;
-                        measured.preferred.width = measured.preferred.width.max(floor);
-                    }
-                } else {
-                    measured.minimum.width = f32::NAN;
-                }
-            } else {
-                measured.minimum.width = f32::NAN;
-            }
-            measured
-        });
-        self
-    }
+/// What a part renders when the plan it is given does not match it: nothing,
+/// in a box that refuses the stage when it is laid out, as `render` does for
+/// a plan whose binding does not match (`VerifiedBox` with `binding_matches`
+/// false). The stage is rejected, so the next declared stage, or the
+/// fallback, is taken; nothing is laid out at a size the plan did not give.
+fn refused<'a, Message: 'a>(agreement: Rc<Cell<bool>>) -> Element<'a, Message> {
+    Element::new(VerifiedBox {
+        content: widget::space().width(0).height(0).into(),
+        reports: Vec::new(),
+        regions: Vec::new(),
+        binding_matches: false,
+        agreement,
+    })
 }
 
 pub fn child<'a, Message: 'a>(
     view: impl Fn(Level) -> Element<'a, Message> + 'a,
 ) -> Child<'a, Message> {
-    let view: Rc<dyn Fn(Level) -> Element<'a, Message> + 'a> = Rc::new(view);
-    let measure = view.clone();
-    Child {
-        view,
-        query: Rc::new(move |level, renderer| {
-            let size = measure_element(|| measure(level), renderer);
-            MeasuredSize {
-                preferred: size,
-                minimum: size,
-            }
-        }),
-        composition: None,
-        frame: None,
-        forms: None,
-        decorator: None,
-        hidden: Rc::new(|_| false),
-        viewport: None,
-        weight: 1.0,
-        grow: 0.0,
-        grow_height: 0.0,
-        reserve_width: false,
-        fixed_width: None,
-        fixed_height: None,
-        preparation: PreparedId::new(),
-        presentation: None,
-        information: None,
-        regions: Vec::new(),
-    }
+    let view: ViewFactory<'a, Message> = Rc::new(view);
+    Child::from_part(Part::leaf(view))
 }
 
 /// A component family's own structured forms, inherited until the next
@@ -1079,51 +1007,21 @@ pub fn child<'a, Message: 'a>(
 /// increase. Every selected form receives the requested level, so an inherited
 /// composite still forwards Mild/Strong rules to its own immediate children.
 /// The returned child's outward weights are independent of the form's internals.
+/// Thresholds that break either rule make the child invalid (`invalid_unless`).
 pub fn forms<'a, Message: 'a>(
     alternatives: Vec<(Level, Child<'a, Message>)>,
 ) -> Child<'a, Message> {
-    assert!(
-        alternatives
-            .first()
-            .is_some_and(|(level, _)| *level == Level::Preferred)
-    );
-    assert!(alternatives.windows(2).all(|pair| pair[0].0 < pair[1].0));
-    let alternatives = Rc::new(alternatives);
-    let query_forms = alternatives.clone();
-    Child {
-        view: Rc::new(|_| widget::space().into()),
-        query: Rc::new(move |level, renderer| {
-            select_form(&query_forms, level).query(level, renderer)
-        }),
-        composition: None,
-        frame: None,
-        forms: Some(alternatives),
-        decorator: None,
-        hidden: Rc::new(|_| false),
-        viewport: None,
-        weight: 1.0,
-        grow: 0.0,
-        grow_height: 0.0,
-        reserve_width: false,
-        fixed_width: None,
-        fixed_height: None,
-        preparation: PreparedId::new(),
-        presentation: None,
-        information: None,
-        regions: Vec::new(),
-    }
-}
-
-fn select_form<'a, 'forms, Message>(
-    alternatives: &'forms [(Level, Child<'a, Message>)],
-    level: Level,
-) -> &'forms Child<'a, Message> {
-    &alternatives
-        .iter()
-        .rev()
-        .find(|(threshold, _)| *threshold <= level)
-        .expect("Preferred form is always inherited")
-        .1
+    let mut alternatives = alternatives.into_iter();
+    let Some((first_threshold, first)) = alternatives.next() else {
+        // No form at all: there is nothing to stand for the family, so the
+        // invalid child is a leaf that shows nothing. Being invalid, it is
+        // never measured or planned.
+        return child(|_| widget::space().width(0).height(0).into()).invalid_unless(false);
+    };
+    let later: Vec<_> = alternatives
+        .map(|(threshold, form)| (threshold, form.part))
+        .collect();
+    Child::from_part(Part::forms((first_threshold, first.part), later))
 }
 
 /// Declare a native scrolling viewport, including its scrollbar and any other
@@ -1135,74 +1033,32 @@ pub fn scroll_child<'a, Message: 'a>(
     view: impl Fn(Level) -> Element<'a, Message> + 'a,
     minimum: Size,
 ) -> Child<'a, Message> {
-    assert!(finite_size(minimum));
-    scroll_child_with_minimum(view, move |_, _| minimum)
+    // The engine's measuring interpreter rejects a bad floor too,
+    // but a replaced measurement discards that entry; the mark does not go.
+    scroll_child_with_minimum(view, move |_, _| minimum).invalid_unless(finite_size(minimum))
 }
 
 /// Declare a scrolling viewport whose useful floor is measured with the same
 /// native renderer as its contents. A changed level or typography therefore
 /// refreshes both measurement and selected viewport geometry. Nonfinite or
 /// negative queried floors are explicit invalid input, never clipped viewports.
+///
+/// This is the one declaration of a leaf that takes a range of heights
+/// (`household_layout::Child::ranged_leaf`, `LeafHeight::Range`); the name
+/// is the apps' name for their scrolling areas. The floor first applies to
+/// the leaf's measurement, before anything declared on the child after.
 pub fn scroll_child_with_minimum<'a, Message: 'a>(
     view: impl Fn(Level) -> Element<'a, Message> + 'a,
     minimum: impl Fn(Level, &Renderer) -> Size + 'a,
 ) -> Child<'a, Message> {
-    let minimum: MinimumQuery<'a> = Rc::new(minimum);
-    let viewport = minimum.clone();
-    let mut child = child(view);
-    let query = child.query.clone();
-    let native = child.view.clone();
-    child.query = Rc::new(move |level, renderer| {
-        let minimum = minimum(level, renderer);
-        let measured = query(level, renderer);
-        if !finite_size(minimum) {
-            return MeasuredSize {
-                preferred: Size::new(f32::NAN, f32::NAN),
-                minimum,
-            };
-        }
-        let invalid = |value: f32| value.is_nan() || value < 0.0;
-        if invalid(measured.preferred.width) || invalid(measured.preferred.height) {
-            return MeasuredSize {
-                preferred: measured.preferred,
-                minimum,
-            };
-        }
-        let mut preferred = measured.preferred;
-        if preferred.width.is_infinite() || preferred.height.is_infinite() {
-            // This component explicitly declares a scrolling viewport. Validate
-            // its whole native box, including controls, at that finite minimum.
-            let bounded = measure_element_in(|| native(level), renderer, minimum, false);
-            if !finite_size(bounded)
-                || bounded.width > minimum.width + FIT_EPSILON
-                || bounded.height > minimum.height + FIT_EPSILON
-            {
-                return MeasuredSize {
-                    preferred: Size::new(f32::NAN, f32::NAN),
-                    minimum,
-                };
-            }
-            if preferred.width.is_infinite() {
-                preferred.width = minimum.width;
-            }
-            if preferred.height.is_infinite() {
-                preferred.height = minimum.height;
-            }
-        }
-        MeasuredSize {
-            preferred: Size::new(
-                preferred.width.max(minimum.width),
-                preferred.height.max(minimum.height),
-            ),
-            minimum,
-        }
-    });
-    child.viewport = Some(viewport);
-    child
+    let view: ViewFactory<'a, Message> = Rc::new(view);
+    Child::from_part(Part::ranged_leaf(
+        view,
+        move |level, renderer: &Renderer| core_size(minimum(level, renderer)),
+    ))
 }
 
 pub fn spacer<'a, Message: 'a>(minimum: f32) -> Child<'a, Message> {
-    assert!(minimum.is_finite() && minimum >= 0.0);
     child(|_| widget::Space::new().width(Length::Fill).height(0).into())
         .with_measurement(move |_, _| MeasuredSize {
             preferred: Size::new(minimum, 0.0),
@@ -1210,16 +1066,21 @@ pub fn spacer<'a, Message: 'a>(minimum: f32) -> Child<'a, Message> {
         })
         .weight(0.0)
         .grow(1.0)
+        .invalid_unless(is_amount(minimum))
 }
 
 impl<'a, Message: 'a> Child<'a, Message> {
+    /// Measure this child with `query` instead: what its kind measures and
+    /// every adjustment declared so far no longer count, as the list shows by
+    /// starting again from the replacement. Adjustments declared after this
+    /// apply to the replacement.
     pub(crate) fn with_measurement(
-        mut self,
+        self,
         query: impl Fn(Level, &Renderer) -> MeasuredSize + 'a,
     ) -> Self {
-        self.refresh_preparation();
-        self.query = Rc::new(query);
-        self
+        self.redeclared(move |part| {
+            part.with_measurement(move |level, renderer: &Renderer| query(level, renderer).into())
+        })
     }
 }
 
@@ -1227,7 +1088,7 @@ pub fn row_child<'a, Message: 'a>(
     children: Vec<Child<'a, Message>>,
     spacing: f32,
 ) -> Child<'a, Message> {
-    compose(children, spacing, Arrangement::Row)
+    Child::from_part(Part::row(parts(children), spacing))
 }
 
 /// Arrange a row with each immediate child aligned to its top edge.
@@ -1235,392 +1096,36 @@ pub fn row_child_top<'a, Message: 'a>(
     children: Vec<Child<'a, Message>>,
     spacing: f32,
 ) -> Child<'a, Message> {
-    compose_aligned(children, spacing, Arrangement::Row, true)
+    Child::from_part(Part::row_top(parts(children), spacing))
 }
 
 pub fn column_child<'a, Message: 'a>(
     children: Vec<Child<'a, Message>>,
     spacing: f32,
 ) -> Child<'a, Message> {
-    compose(children, spacing, Arrangement::Column)
+    Child::from_part(Part::column(parts(children), spacing))
 }
 
 pub fn wrap_child<'a, Message: 'a>(
     children: Vec<Child<'a, Message>>,
     spacing: f32,
 ) -> Child<'a, Message> {
-    compose(children, spacing, Arrangement::Wrap)
+    Child::from_part(Part::wrap(parts(children), spacing))
 }
 
-fn compose<'a, Message: 'a>(
-    children: Vec<Child<'a, Message>>,
-    spacing: f32,
-    arrangement: Arrangement,
-) -> Child<'a, Message> {
-    compose_aligned(children, spacing, arrangement, false)
+/// The engine's parts of `children`, in their order.
+fn parts<'a, Message>(children: Vec<Child<'a, Message>>) -> Vec<Part<'a, Message>> {
+    children.into_iter().map(|child| child.part).collect()
 }
 
-fn compose_aligned<'a, Message: 'a>(
-    children: Vec<Child<'a, Message>>,
-    spacing: f32,
-    arrangement: Arrangement,
-    top_aligned: bool,
-) -> Child<'a, Message> {
-    assert!(spacing.is_finite() && spacing >= 0.0);
-    let composition = Rc::new(Composition {
-        children,
-        arrangement,
-        spacing,
-        top_aligned,
-    });
-    let query = composition.clone();
-    Child {
-        view: Rc::new(|_| widget::space().into()),
-        query: Rc::new(move |level, renderer| query.measure(level, renderer)),
-        composition: Some(composition),
-        frame: None,
-        forms: None,
-        decorator: None,
-        hidden: Rc::new(|_| false),
-        viewport: None,
-        weight: 1.0,
-        grow: 0.0,
-        grow_height: 0.0,
-        reserve_width: false,
-        fixed_width: None,
-        fixed_height: None,
-        preparation: PreparedId::new(),
-        presentation: None,
-        information: None,
-        regions: Vec::new(),
-    }
-}
-
-pub(crate) const FIT_EPSILON: f32 = 0.001;
+/// The core's checks of a size (`household_layout::finite_size`,
+/// `household_layout::validate_measurement`), on iced's sizes.
 fn finite_size(size: Size) -> bool {
-    size.width.is_finite() && size.height.is_finite() && size.width >= 0.0 && size.height >= 0.0
+    household_layout::finite_size(core_size(size))
 }
-fn valid_available(size: Size) -> bool {
-    !size.width.is_nan() && !size.height.is_nan() && size.width >= 0.0 && size.height >= 0.0
-}
+#[cfg(test)]
 fn validate_measurement(size: MeasuredSize) -> Result<(), AllocationError> {
-    if finite_size(size.preferred)
-        && finite_size(size.minimum)
-        && size.minimum.width <= size.preferred.width
-        && size.minimum.height <= size.preferred.height
-    {
-        Ok(())
-    } else {
-        Err(AllocationError::InvalidInput)
-    }
-}
-fn allocate_with_growth(
-    available: f32,
-    capacities: &[WidthCapacity],
-    grows: &[f32],
-) -> Result<Vec<f32>, AllocationError> {
-    let mut widths = if available.is_infinite() {
-        if capacities
-            .iter()
-            .any(|capacity| !finite_size(Size::new(capacity.preferred, capacity.minimum)))
-        {
-            return Err(AllocationError::InvalidInput);
-        }
-        capacities
-            .iter()
-            .map(|capacity| capacity.preferred)
-            .collect()
-    } else {
-        allocate_width(available, capacities)?
-    };
-    let total: f64 = grows.iter().map(|grow| f64::from(*grow)).sum();
-    if available.is_finite() && total > 0.0 {
-        let surplus = (f64::from(available)
-            - widths.iter().map(|width| f64::from(*width)).sum::<f64>())
-        .max(0.0);
-        for (width, grow) in widths.iter_mut().zip(grows) {
-            *width += (surplus * f64::from(*grow) / total) as f32;
-        }
-    }
-    Ok(widths)
-}
-
-impl<'a, Message: 'a> Composition<'a, Message> {
-    fn measure(&self, level: Level, renderer: &Renderer) -> MeasuredSize {
-        let measured: Vec<_> = self
-            .children
-            .iter()
-            .filter(|child| !child.is_hidden(level))
-            .map(|child| (child, child.query(level, renderer)))
-            .collect();
-        let gap = self.spacing * measured.len().saturating_sub(1) as f32;
-        let mut result = MeasuredSize {
-            preferred: Size::ZERO,
-            minimum: Size::ZERO,
-        };
-        for (child, size) in &measured {
-            let minimum_width = if child.weight == 0.0 {
-                size.preferred.width
-            } else {
-                size.minimum.width
-            };
-            match self.arrangement {
-                Arrangement::Row | Arrangement::Wrap => {
-                    result.preferred.width += size.preferred.width;
-                    result.preferred.height = result.preferred.height.max(size.preferred.height);
-                    if self.arrangement == Arrangement::Row {
-                        result.minimum.width += minimum_width;
-                        result.minimum.height = result.minimum.height.max(size.minimum.height);
-                    } else {
-                        result.minimum.width = result.minimum.width.max(minimum_width);
-                        // A height bound, not the height at that width. plan() measures rows.
-                        result.minimum.height = result.minimum.height.max(size.minimum.height);
-                    }
-                }
-                Arrangement::Column => {
-                    result.preferred.width = result.preferred.width.max(size.preferred.width);
-                    result.minimum.width = result.minimum.width.max(minimum_width);
-                    result.preferred.height += size.preferred.height;
-                    result.minimum.height += size.minimum.height;
-                }
-            }
-        }
-        match self.arrangement {
-            Arrangement::Row => {
-                result.preferred.width += gap;
-                result.minimum.width += gap;
-            }
-            Arrangement::Wrap => result.preferred.width += gap,
-            Arrangement::Column => {
-                result.preferred.height += gap;
-                result.minimum.height += gap;
-            }
-        }
-        result
-    }
-
-    fn plan(
-        &self,
-        level: Level,
-        renderer: &Renderer,
-        width: f32,
-        height: f32,
-    ) -> Result<GeometryPlan, AllocationError> {
-        let active: Vec<_> = self
-            .children
-            .iter()
-            .enumerate()
-            .filter(|(_, child)| !child.is_hidden(level))
-            .map(|(index, child)| (index, child.query(level, renderer)))
-            .collect();
-        for (_, size) in &active {
-            validate_measurement(*size)?;
-        }
-        let capacity = |index: usize, measured: MeasuredSize| WidthCapacity {
-            preferred: measured.preferred.width,
-            minimum: measured.minimum.width,
-            weight: self.children[index].weight,
-        };
-        let mut result = GeometryPlan::leaf(Size::ZERO);
-        if self.arrangement == Arrangement::Column {
-            let gap = self.spacing * active.len().saturating_sub(1) as f32;
-            if gap > height {
-                return Err(AllocationError::NoFit {
-                    required: gap,
-                    available: height,
-                });
-            }
-            let mut proposals = Vec::new();
-            for (index, measured) in active {
-                let child = &self.children[index];
-                let allocated =
-                    allocate_with_growth(width, &[capacity(index, measured)], &[child.grow])?[0];
-                let geometry = child.plan_width(level, renderer, allocated, f32::INFINITY)?;
-                proposals.push((index, allocated, geometry));
-            }
-            // Width-dependent ordinary heights are hard floors. Only explicitly
-            // declared viewports (possibly nested) offer vertical capacity.
-            let heights = allocate_with_growth(
-                height - gap,
-                &proposals
-                    .iter()
-                    .map(|(index, _, plan)| WidthCapacity {
-                        preferred: plan.size.height,
-                        minimum: plan.minimum_height,
-                        weight: self.children[*index].weight,
-                    })
-                    .collect::<Vec<_>>(),
-                &proposals
-                    .iter()
-                    .map(|(index, _, _)| self.children[*index].grow_height)
-                    .collect::<Vec<_>>(),
-            )?;
-            result.minimum_height = gap;
-            for ((index, allocated, proposal), allocated_height) in
-                proposals.into_iter().zip(heights)
-            {
-                let geometry = if (allocated_height - proposal.size.height).abs() > FIT_EPSILON {
-                    self.children[index].plan_width(level, renderer, allocated, allocated_height)?
-                } else {
-                    proposal
-                };
-                if !result.children.is_empty() {
-                    result.size.height += self.spacing;
-                }
-                let position = cosmic::iced::Point::new(0.0, result.size.height);
-                result.size.height += geometry.size.height;
-                result.size.width = result.size.width.max(geometry.size.width);
-                result.minimum_height += geometry.minimum_height;
-                result.children.push(Placement {
-                    index,
-                    position,
-                    geometry,
-                });
-            }
-            return Ok(result);
-        }
-        // Pack using useful minima, including zero-weight protection. Each new
-        // row gets a fresh allocation from that stage's preferred dimensions.
-        let mut rows: Vec<Vec<(usize, MeasuredSize)>> = Vec::new();
-        let mut used = 0.0;
-        for (index, measured) in active {
-            let child = &self.children[index];
-            let minimum = if child.weight == 0.0 {
-                measured.preferred.width
-            } else {
-                measured.minimum.width
-            };
-            if minimum > width + FIT_EPSILON {
-                return Err(AllocationError::NoFit {
-                    required: minimum,
-                    available: width,
-                });
-            }
-            let extra = if rows.last().is_some_and(|row| !row.is_empty()) {
-                self.spacing
-            } else {
-                0.0
-            };
-            if self.arrangement == Arrangement::Wrap && used + extra + minimum > width + FIT_EPSILON
-            {
-                rows.push(Vec::new());
-                used = 0.0;
-            }
-            if rows.is_empty() {
-                rows.push(Vec::new());
-            }
-            if !rows.last().unwrap().is_empty() {
-                used += self.spacing;
-            }
-            used += minimum;
-            rows.last_mut().unwrap().push((index, measured));
-        }
-        for row in rows {
-            let gap = self.spacing * row.len().saturating_sub(1) as f32;
-            if gap > width {
-                return Err(AllocationError::NoFit {
-                    required: gap,
-                    available: width,
-                });
-            }
-            let capacities: Vec<_> = row
-                .iter()
-                .map(|(index, measured)| capacity(*index, *measured))
-                .collect();
-            let grows: Vec<_> = row
-                .iter()
-                .map(|(index, _)| self.children[*index].grow)
-                .collect();
-            let widths = allocate_with_growth(width - gap, &capacities, &grows)?;
-            let start = result.children.len();
-            let mut row_width = 0.0;
-            let mut row_height: f32 = 0.0;
-            let mut row_minimum_height: f32 = 0.0;
-            for ((index, _), allocated) in row.into_iter().zip(widths) {
-                let geometry = self.children[index].plan_width(
-                    level,
-                    renderer,
-                    allocated,
-                    if self.arrangement == Arrangement::Row {
-                        height
-                    } else {
-                        f32::INFINITY
-                    },
-                )?;
-                if result.children.len() > start {
-                    row_width += self.spacing;
-                }
-                let position = cosmic::iced::Point::new(row_width, result.size.height);
-                row_width += geometry.size.width;
-                row_height = row_height.max(geometry.size.height);
-                row_minimum_height = row_minimum_height.max(geometry.minimum_height);
-                result.children.push(Placement {
-                    index,
-                    position,
-                    geometry,
-                });
-            }
-            for placed in &mut result.children[start..] {
-                if !self.top_aligned {
-                    placed.position.y += (row_height - placed.geometry.size.height) / 2.0;
-                }
-            }
-            result.rows.push((start..result.children.len()).collect());
-            result.size.width = result.size.width.max(row_width);
-            result.size.height += row_height + self.spacing;
-            result.minimum_height += row_minimum_height + self.spacing;
-        }
-        if !result.rows.is_empty() {
-            result.size.height -= self.spacing;
-            result.minimum_height -= self.spacing;
-        }
-        // A wrap is a column of atomic rows. Share a vertical shortage only
-        // where those rows contain declared viewport capacity.
-        if self.arrangement == Arrangement::Wrap && result.size.height > height + FIT_EPSILON {
-            let gap = self.spacing * result.rows.len().saturating_sub(1) as f32;
-            if gap > height {
-                return Err(AllocationError::NoFit {
-                    required: gap,
-                    available: height,
-                });
-            }
-            let capacities: Vec<_> = result
-                .rows
-                .iter()
-                .map(|row| WidthCapacity {
-                    preferred: row
-                        .iter()
-                        .map(|i| result.children[*i].geometry.size.height)
-                        .fold(0.0, f32::max),
-                    minimum: row
-                        .iter()
-                        .map(|i| result.children[*i].geometry.minimum_height)
-                        .fold(0.0, f32::max),
-                    weight: 1.0,
-                })
-                .collect();
-            let heights =
-                allocate_with_growth(height - gap, &capacities, &vec![0.0; capacities.len()])?;
-            let mut y = 0.0;
-            for (row, row_height) in result.rows.iter().zip(heights) {
-                for i in row {
-                    let placed = &mut result.children[*i];
-                    if placed.geometry.size.height > row_height + FIT_EPSILON {
-                        placed.geometry = self.children[placed.index].plan_width(
-                            level,
-                            renderer,
-                            placed.geometry.size.width,
-                            row_height,
-                        )?;
-                    }
-                    placed.position.y = y + (row_height - placed.geometry.size.height) / 2.0;
-                }
-                y += row_height + self.spacing;
-            }
-            result.size.height = (y - self.spacing).max(0.0);
-        }
-        Ok(result)
-    }
+    household_layout::validate_measurement(size.into())
 }
 
 /// One exact level and component arrangement in the parent's ordered policy.
@@ -1773,10 +1278,13 @@ impl<Message> Widget<Message, Theme, Renderer> for VerifiedDecoration<'_, Messag
                 Size::new(true, true),
             )
         };
+        let Some(content) = tree.children.first_mut() else {
+            return refused_node(&self.agreement);
+        };
         let node = self
             .content
             .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, &limits);
+            .layout(content, renderer, &limits);
         if !finite_size(node.size())
             || (node.size().width - self.expected.width).abs() > FIT_EPSILON
             || (node.size().height - self.expected.height).abs() > FIT_EPSILON
@@ -1792,9 +1300,10 @@ impl<Message> Widget<Message, Theme, Renderer> for VerifiedDecoration<'_, Messag
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        self.content
-            .as_widget()
-            .a11y_nodes(layout, &tree.children[0], cursor)
+        let Some(content) = tree.children.first() else {
+            return iced_accessibility::A11yTree::default();
+        };
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
 }
 
@@ -1808,8 +1317,11 @@ struct VerifiedLeaf<'a, Message> {
 impl<Message> Widget<Message, Theme, Renderer> for VerifiedLeaf<'_, Message> {
     forward_widget!(Message, Theme, Renderer; children, diff, size, draw, update, operate, mouse_interaction, overlay, drag_destinations);
     fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, _: &layout::Limits) -> layout::Node {
+        let Some(content) = tree.children.first_mut() else {
+            return refused_node(&self.agreement);
+        };
         let node = self.content.as_widget_mut().layout(
-            &mut tree.children[0],
+            content,
             renderer,
             &layout::Limits::with_compression(
                 Size::ZERO,
@@ -1832,9 +1344,10 @@ impl<Message> Widget<Message, Theme, Renderer> for VerifiedLeaf<'_, Message> {
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        self.content
-            .as_widget()
-            .a11y_nodes(layout, &tree.children[0], cursor)
+        let Some(content) = tree.children.first() else {
+            return iced_accessibility::A11yTree::default();
+        };
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
 }
 
@@ -1862,19 +1375,13 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for FixedComponent<'a, Me
             Ok(plan) => self.child.render(self.level, &plan, agreement.clone()),
             Err(_) => widget::space().width(0).height(0).into(),
         };
-        tree.diff_children(std::slice::from_mut(&mut self.content));
-        let node = self
-            .content
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits);
-        if agreement.get() {
-            node
-        } else {
-            self.content = widget::space().width(0).height(0).into();
-            tree.diff_children(std::slice::from_mut(&mut self.content));
-            self.content
-                .as_widget_mut()
-                .layout(&mut tree.children[0], renderer, limits)
+        match layout_content(tree, &mut self.content, renderer, limits) {
+            Some(node) if agreement.get() => node,
+            _ => {
+                self.content = widget::space().width(0).height(0).into();
+                layout_content(tree, &mut self.content, renderer, limits)
+                    .unwrap_or_else(|| layout::Node::new(Size::ZERO))
+            }
         }
     }
     #[cfg(feature = "a11y")]
@@ -1884,10 +1391,40 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for FixedComponent<'a, Me
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        self.content
-            .as_widget()
-            .a11y_nodes(layout, &tree.children[0], cursor)
+        let Some(content) = tree.children.first() else {
+            return iced_accessibility::A11yTree::default();
+        };
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
+}
+
+/// Reconcile a wrapper's tree with its one content element and lay the
+/// content out within `limits`. `diff_children` leaves the tree one child
+/// per element it is given, so the content's own tree is the first child.
+/// Were it missing, the content is not laid out and there is no node; the
+/// caller then lays out nothing there, as the engine renders nothing for a
+/// plan that does not match.
+fn layout_content<Message>(
+    tree: &mut Tree,
+    content: &mut Element<'_, Message>,
+    renderer: &Renderer,
+    limits: &layout::Limits,
+) -> Option<layout::Node> {
+    tree.diff_children(std::slice::from_mut(content));
+    let content_tree = tree.children.first_mut()?;
+    Some(
+        content
+            .as_widget_mut()
+            .layout(content_tree, renderer, limits),
+    )
+}
+
+/// What a verification wrapper lays out when its tree has no child for its
+/// content: nothing, and the stage it belongs to is refused, as for a plan
+/// that does not match (`refused`).
+fn refused_node(agreement: &Cell<bool>) -> layout::Node {
+    agreement.set(false);
+    layout::Node::new(Size::ZERO)
 }
 
 // Tree::diff and layout-time diffing (e.g. a nested native Responsive) consult
@@ -1999,7 +1536,6 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
             self.content = stage
                 .content
                 .render(stage.level, &geometry, agreement.clone());
-            tree.diff_children(std::slice::from_mut(&mut self.content));
             // Ordinary native content always retains unbounded height here.
             // Finite-height clipping cannot certify a successful stage.
             let commit_limits = layout::Limits::with_compression(
@@ -2007,12 +1543,9 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
                 Size::new(geometry.size.width, f32::INFINITY),
                 Size::new(true, true),
             );
-            let node = self.content.as_widget_mut().layout(
-                &mut tree.children[0],
-                renderer,
-                &commit_limits,
-            );
-            if agreement.get()
+            // Content that could not be laid out does not agree.
+            if let Some(node) = layout_content(tree, &mut self.content, renderer, &commit_limits)
+                && agreement.get()
                 && finite_size(node.size())
                 && (node.size().width - geometry.size.width).abs() <= FIT_EPSILON
                 && (node.size().height - geometry.size.height).abs() <= FIT_EPSILON
@@ -2038,15 +1571,15 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
             || widget::space().width(0).height(0).into(),
             |fallback| fallback(),
         );
-        tree.diff_children(std::slice::from_mut(&mut self.content));
-        let node =
-            self.content
-                .as_widget_mut()
-                .layout(&mut tree.children[0], renderer, &limits.loose());
-        layout::Node::with_children(
-            limits.resolve(self.width, self.height, node.size()),
-            vec![node],
-        )
+        match layout_content(tree, &mut self.content, renderer, &limits.loose()) {
+            Some(node) => layout::Node::with_children(
+                limits.resolve(self.width, self.height, node.size()),
+                vec![node],
+            ),
+            // Nothing to show: the widget's own box, with no child in it
+            // (`child_layout`).
+            None => layout::Node::new(limits.resolve(self.width, self.height, Size::ZERO)),
+        }
     }
 
     fn draw(
@@ -2059,15 +1592,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.content.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            style,
-            child_layout(layout),
-            cursor,
-            viewport,
-        );
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first()) else {
+            return;
+        };
+        self.content
+            .as_widget()
+            .draw(content, renderer, theme, style, layout, cursor, viewport);
     }
 
     fn update(
@@ -2081,15 +1611,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first_mut())
+        else {
+            return;
+        };
         self.content.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            child_layout(layout),
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
+            content, event, layout, cursor, renderer, clipboard, shell, viewport,
         );
     }
 
@@ -2100,12 +1627,13 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        self.content.as_widget_mut().operate(
-            &mut tree.children[0],
-            child_layout(layout),
-            renderer,
-            operation,
-        );
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first_mut())
+        else {
+            return;
+        };
+        self.content
+            .as_widget_mut()
+            .operate(content, layout, renderer, operation);
     }
 
     fn mouse_interaction(
@@ -2116,13 +1644,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        self.content.as_widget().mouse_interaction(
-            &tree.children[0],
-            child_layout(layout),
-            cursor,
-            viewport,
-            renderer,
-        )
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first()) else {
+            return mouse::Interaction::default();
+        };
+        self.content
+            .as_widget()
+            .mouse_interaction(content, layout, cursor, viewport, renderer)
     }
 
     fn overlay<'a>(
@@ -2133,13 +1660,11 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
-        self.content.as_widget_mut().overlay(
-            &mut tree.children[0],
-            child_layout(layout),
-            renderer,
-            viewport,
-            translation,
-        )
+        let layout = child_layout(layout)?;
+        let content = tree.children.first_mut()?;
+        self.content
+            .as_widget_mut()
+            .overlay(content, layout, renderer, viewport, translation)
     }
 
     fn drag_destinations(
@@ -2149,12 +1674,12 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         renderer: &Renderer,
         destinations: &mut cosmic::iced::advanced::clipboard::DndDestinationRectangles,
     ) {
-        self.content.as_widget().drag_destinations(
-            &tree.children[0],
-            child_layout(layout),
-            renderer,
-            destinations,
-        );
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first()) else {
+            return;
+        };
+        self.content
+            .as_widget()
+            .drag_destinations(content, layout, renderer, destinations);
     }
 
     #[cfg(feature = "a11y")]
@@ -2164,18 +1689,27 @@ impl<'view, Message: 'view> Widget<Message, Theme, Renderer> for ResponsiveLevel
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        self.content
-            .as_widget()
-            .a11y_nodes(child_layout(layout), &tree.children[0], cursor)
+        let (Some(layout), Some(content)) = (child_layout(layout), tree.children.first()) else {
+            return iced_accessibility::A11yTree::default();
+        };
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
 }
 
-fn child_layout(layout: Layout<'_>) -> Layout<'_> {
+/// The layout of the selected representation (or the fallback): the one
+/// child of the node `ResponsiveLevels::layout` returns. Every layout it
+/// returns has that child. Given a layout without one, which was not made by
+/// this widget's layout, there is nothing of this widget's to draw, update,
+/// operate on or point at there, so each caller does nothing and answers
+/// with the neutral value (no interaction, no overlay, no accessibility
+/// nodes), as the engine renders nothing for a plan that does not match. The
+/// same holds for a tree without the content's own tree, the first child
+/// `layout_content` leaves in it.
+fn child_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
     layout
         .children()
         .next()
-        .expect("responsive representation was laid out")
-        .with_virtual_offset(layout.virtual_offset())
+        .map(|child| child.with_virtual_offset(layout.virtual_offset()))
 }
 
 impl<'a, Message: 'a> From<ResponsiveLevels<'a, Message>> for Element<'a, Message> {
@@ -2207,6 +1741,58 @@ mod input_tests;
 #[cfg(test)]
 #[path = "layout_presentation_tests.rs"]
 mod presentation_tests;
+
+#[cfg(test)]
+#[path = "layout_measuring_tests.rs"]
+mod measuring_tests;
+
+#[cfg(test)]
+#[path = "layout_height_tests.rs"]
+mod height_tests;
+
+#[cfg(test)]
+#[path = "layout_invalid_tests.rs"]
+mod invalid_tests;
+
+#[cfg(test)]
+#[path = "layout_mismatch_tests.rs"]
+mod mismatch_tests;
+
+#[cfg(test)]
+#[path = "layout_arrangement_tests.rs"]
+mod arrangement_tests;
+
+#[cfg(test)]
+#[path = "layout_test_fixtures.rs"]
+mod test_fixtures;
+
+#[cfg(test)]
+#[path = "layout_width_dependent_tests.rs"]
+mod width_dependent_tests;
+
+#[cfg(test)]
+#[path = "layout_overflow_tests.rs"]
+mod overflow_tests;
+
+#[cfg(test)]
+#[path = "layout_unbounded_tests.rs"]
+mod unbounded_tests;
+
+#[cfg(test)]
+#[path = "layout_offer_tests.rs"]
+mod offer_tests;
+
+#[cfg(test)]
+#[path = "layout_tolerance_tests.rs"]
+mod tolerance_tests;
+
+#[cfg(test)]
+#[path = "layout_decision_tests.rs"]
+mod decision_tests;
+
+#[cfg(test)]
+#[path = "layout_binding_tests.rs"]
+mod binding_tests;
 
 #[cfg(test)]
 mod renderer_minimum_tests {

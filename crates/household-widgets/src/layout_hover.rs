@@ -14,10 +14,10 @@ pub fn choose_hover<'a, Message: 'a>(
     obstacles: &[Rectangle],
 ) -> Result<AttachedPlan, NoFit> {
     for fallback in [false, true] {
-        for (stage_index, candidate_index) in pairs(stages.len(), attachment) {
-            let a = single_attachment(attachment, candidate_index);
-            let obstacles = &flush_obstacles(obstacles, &a);
-            let stage = &stages[stage_index..=stage_index];
+        for ((stage_index, stage), (candidate_index, declared)) in pairs(stages, attachment) {
+            let a = single_attachment(attachment, declared);
+            let obstacles = &flush_obstacles(obstacles, &a, declared.side);
+            let stage = std::slice::from_ref(stage);
             let offers = if fallback {
                 vec![window]
             } else {
@@ -26,13 +26,13 @@ pub fn choose_hover<'a, Message: 'a>(
                     renderer,
                     window,
                     &a,
+                    declared.side,
                     &regions(window, obstacles),
                     obstacles,
                 )
             };
             for region in offers {
-                if let Ok(mut plan) =
-                    choose_attached(&stages[stage_index..=stage_index], renderer, region, &a)
+                if let Ok(mut plan) = choose_attached(stage, renderer, region, &a)
                     && (fallback || !obstacles.iter().any(|r| intersects(*r, plan.bounds)))
                 {
                     plan.stage.stage_index = stage_index;
@@ -72,10 +72,10 @@ pub(crate) fn commit_hover_retaining<'a, Message: 'a>(
     retained: &mut HoverRetained,
 ) -> Result<(AttachedPlan, layout::Node), NoFit> {
     for fallback in [false, true] {
-        for (stage_index, candidate_index) in pairs(stages.len(), attachment) {
-            let a = single_attachment(attachment, candidate_index);
-            let obstacles = &flush_obstacles(obstacles, &a);
-            let stage = &stages[stage_index..=stage_index];
+        for ((stage_index, stage), (candidate_index, declared)) in pairs(stages, attachment) {
+            let a = single_attachment(attachment, declared);
+            let obstacles = &flush_obstacles(obstacles, &a, declared.side);
+            let stage = std::slice::from_ref(stage);
             let offers = if fallback {
                 vec![window]
             } else {
@@ -84,6 +84,7 @@ pub(crate) fn commit_hover_retaining<'a, Message: 'a>(
                     renderer,
                     window,
                     &a,
+                    declared.side,
                     &regions(window, obstacles),
                     obstacles,
                 )
@@ -95,7 +96,7 @@ pub(crate) fn commit_hover_retaining<'a, Message: 'a>(
                     retained.clear();
                 }
                 if let Ok((mut plan, node)) = commit_attached_retaining(
-                    &stages[stage_index..=stage_index],
+                    stage,
                     renderer,
                     region,
                     &a,
@@ -126,10 +127,11 @@ fn ordered_regions<'a, Message: 'a>(
     renderer: &Renderer,
     window: Rectangle,
     attachment: &Attachment,
+    side: Side,
     regions: &[Rectangle],
     obstacles: &[Rectangle],
 ) -> Vec<Rectangle> {
-    let vertical = matches!(attachment.candidates[0].side, Side::Above | Side::Below);
+    let vertical = matches!(side, Side::Above | Side::Below);
     let cross = |bounds: Rectangle| if vertical { bounds.x } else { bounds.y };
     let reference = choose_attached(stages, renderer, window, attachment)
         .map(|plan| cross(plan.bounds))
@@ -151,20 +153,25 @@ fn ordered_regions<'a, Message: 'a>(
     offers.into_iter().map(|(region, _)| region).collect()
 }
 
-fn pairs(count: usize, attachment: &Attachment) -> Vec<(usize, usize)> {
+/// A stage and a declared candidate, each with its index.
+type Pair<'s, S> = ((usize, &'s S), (usize, AnchorCandidate));
+
+/// Every stage with every declared candidate, in the order the attachment's
+/// preference gives.
+fn pairs<'s, S>(stages: &'s [S], attachment: &Attachment) -> Vec<Pair<'s, S>> {
     let mut pairs = Vec::new();
     match attachment.preference {
         PlacementPreference::RepresentationFirst => {
-            for stage in 0..count {
-                for candidate in 0..attachment.candidates.len() {
-                    pairs.push((stage, candidate));
+            for stage in stages.iter().enumerate() {
+                for (index, &candidate) in attachment.candidates.iter().enumerate() {
+                    pairs.push((stage, (index, candidate)));
                 }
             }
         }
         PlacementPreference::AnchorFirst => {
-            for candidate in 0..attachment.candidates.len() {
-                for stage in 0..count {
-                    pairs.push((stage, candidate));
+            for (index, &candidate) in attachment.candidates.iter().enumerate() {
+                for stage in stages.iter().enumerate() {
+                    pairs.push((stage, (index, candidate)));
                 }
             }
         }
@@ -174,8 +181,7 @@ fn pairs(count: usize, attachment: &Attachment) -> Vec<(usize, usize)> {
 /// Every information card is placed by one rule, whatever its source declared:
 /// flush with the control (no gap), centred on it along the attached side,
 /// and shifted only as far as needed to stay inside the window.
-fn single_attachment(attachment: &Attachment, candidate: usize) -> Attachment {
-    let declared = attachment.candidates[candidate];
+fn single_attachment(attachment: &Attachment, declared: AnchorCandidate) -> Attachment {
     let placed = AnchorCandidate::new(declared.side, Alignment::CenterBounded);
     let mut a = Attachment::new(attachment.anchor, vec![placed]);
     a.surface_insets = attachment.surface_insets;
@@ -189,7 +195,8 @@ fn single_attachment(attachment: &Attachment, candidate: usize) -> Attachment {
 /// A surface holding the source (a menu round its row) is an obstacle to a
 /// card only beyond the source's own edge on the card's side: the margin
 /// between the control and its surface's edge is where a flush card sits.
-fn flush_obstacles(obstacles: &[Rectangle], attachment: &Attachment) -> Vec<Rectangle> {
+/// `side` is the side of the source the card is on.
+fn flush_obstacles(obstacles: &[Rectangle], attachment: &Attachment, side: Side) -> Vec<Rectangle> {
     let anchor = attachment.anchor;
     let contains = |o: &Rectangle| {
         o.x <= anchor.x
@@ -204,7 +211,7 @@ fn flush_obstacles(obstacles: &[Rectangle], attachment: &Attachment) -> Vec<Rect
                 return o;
             }
             let mut o = o;
-            match attachment.candidates[0].side {
+            match side {
                 Side::Left => {
                     o.width -= anchor.x - o.x;
                     o.x = anchor.x;
@@ -248,20 +255,17 @@ fn regions(window: Rectangle, obstacles: &[Rectangle]) -> Vec<Rectangle> {
         axis.dedup();
     }
     let mut result = Vec::new();
-    for (i, &x) in xs.iter().enumerate() {
-        for &right in &xs[i + 1..] {
-            for (j, &y) in ys.iter().enumerate() {
-                for &bottom in &ys[j + 1..] {
-                    let r = Rectangle {
-                        x,
-                        y,
-                        width: right - x,
-                        height: bottom - y,
-                    };
-                    if !obstacles.iter().any(|o| intersects(*o, r)) {
-                        result.push(r);
-                    }
-                }
+    let vertical = spans(&ys);
+    for (x, right) in spans(&xs) {
+        for &(y, bottom) in &vertical {
+            let r = Rectangle {
+                x,
+                y,
+                width: right - x,
+                height: bottom - y,
+            };
+            if !obstacles.iter().any(|o| intersects(*o, r)) {
+                result.push(r);
             }
         }
     }
@@ -271,6 +275,18 @@ fn regions(window: Rectangle, obstacles: &[Rectangle]) -> Vec<Rectangle> {
             .unwrap_or(Ordering::Equal)
     });
     result
+}
+
+/// Every edge paired with each later edge on one axis, in order: the spans a
+/// clear rectangle can take on that axis.
+fn spans(edges: &[f32]) -> Vec<(f32, f32)> {
+    let mut spans = Vec::new();
+    let mut rest = edges;
+    while let Some((&start, later)) = rest.split_first() {
+        spans.extend(later.iter().map(|&end| (start, end)));
+        rest = later;
+    }
+    spans
 }
 
 #[cfg(test)]
