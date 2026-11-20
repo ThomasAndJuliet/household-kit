@@ -314,3 +314,58 @@ fn spans(edges: &[f32]) -> Vec<(f32, f32)> {
     }
     spans
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Point, Size};
+
+    fn r(x: f32, y: f32, width: f32, height: f32) -> Rectangle {
+        Rectangle::new(Point::new(x, y), Size::new(width, height))
+    }
+
+    #[test]
+    fn the_clear_regions_round_two_obstacles_are_bounded_by_their_edges() {
+        // Two panels on a diagonal leave the other two quarters clear, and
+        // nothing larger: every rectangle reaching further overlaps one.
+        let window = r(0.0, 0.0, 100.0, 100.0);
+        let obstacles = [r(0.0, 0.0, 50.0, 50.0), r(50.0, 50.0, 50.0, 50.0)];
+        assert_eq!(
+            regions(window, &obstacles),
+            [r(0.0, 50.0, 50.0, 50.0), r(50.0, 0.0, 50.0, 50.0)]
+        );
+        // A short panel leaves clear space beside it as well as below it,
+        // largest first.
+        let short = [r(0.0, 0.0, 60.0, 40.0)];
+        assert_eq!(
+            regions(window, &short),
+            [
+                r(0.0, 40.0, 100.0, 60.0),
+                r(60.0, 0.0, 40.0, 100.0),
+                r(0.0, 40.0, 60.0, 60.0),
+                r(60.0, 40.0, 40.0, 60.0),
+                r(60.0, 0.0, 40.0, 40.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_surface_holding_the_source_is_an_obstacle_only_beyond_the_source() {
+        // A menu round its row: to the left of the row, the menu counts
+        // only from the row's left edge on, so a card flush with the row
+        // may sit in the menu's margin.
+        let menu = r(272.0, 415.0, 240.0, 94.0);
+        let row = Attachment::new(r(276.0, 447.0, 232.0, 28.0), Vec::new());
+        assert_eq!(
+            flush_obstacles(&[menu], &row, Side::Left),
+            [r(276.0, 415.0, 236.0, 94.0)]
+        );
+        assert_eq!(
+            flush_obstacles(&[menu], &row, Side::Below),
+            [r(272.0, 415.0, 240.0, 60.0)]
+        );
+        // A surface that does not hold the source counts whole.
+        let other = r(0.0, 0.0, 100.0, 100.0);
+        assert_eq!(flush_obstacles(&[other], &row, Side::Left), [other]);
+    }
+}

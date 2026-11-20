@@ -14,7 +14,7 @@
 //! so the host shows its own fallback rather than something clipped.
 //!
 //! A popup or a hover card chooses among the same stages, together with
-//! where it is attached (`attach`, `hover`).
+//! where it is attached ([`crate::attach`], [`crate::hover`]).
 //!
 //! How a list of stages reaches the engine. A host keeps its stages in its
 //! own type, with its own handle on each part (household-widgets'
@@ -24,7 +24,7 @@
 //! stages, with no copy of a part and no list built for the purpose, and it
 //! can hand a stage of that slice back to the host as the host's own (a
 //! hover card commits each region it tries through the host:
-//! `hover::place_hover`). [`Stage`] is the engine's own stage,
+//! [`crate::hover::place_hover`]). [`Stage`] is the engine's own stage,
 //! for a host with nothing more to keep on one.
 
 use crate::{Child, Host, Level, Plan, Size};
