@@ -52,8 +52,9 @@
 //! labels are taken in order of position, and a label joins the group
 //! before it while its position is less than the least distance from the
 //! group's first. Every label may stand no nearer its own mark than the
-//! least distance and no farther than near (halfway between the related
-//! and the unrelated ideal by default), both from the rules' distance
+//! least distance and no farther than near (by default the related ideal
+//! plus the least distance, so a label at the related ideal that moves out
+//! to a shared line is always within it), both from the rules' distance
 //! table. The group's line is the outermost label's position, brought back
 //! within every label's range if it lies beyond one, so labels move away
 //! from their marks. A group keeps its own positions when no line lies
@@ -74,7 +75,7 @@
 //! # A worked example
 //!
 //! Her 11 px text gives a least distance of 2.2 px, a related ideal of
-//! 3.696 px and near at 5.478 px. Two bars 20 px wide stand at x = 10 and
+//! 3.696 px and near at 5.896 px. Two bars 20 px wide stand at x = 10 and
 //! x = 50 on a zero line at y = 200; their tops are at 100 and 101.5.
 //! Their value labels are 14 by 11 px, beyond the end, centred, at the
 //! related gap.
@@ -82,8 +83,8 @@
 //! - Placed alone, the labels stand at (13, 85.304) and (53, 86.804): their
 //!   feet are 1.5 px apart, at 96.304 and 97.804.
 //! - Sharing lines, the two feet differ by less than 2.2 px and form one
-//!   group. The first label's foot may lie between 97.8 and 94.522 (2.2 to
-//!   5.478 px above its bar), the second's between 99.3 and 96.022. The
+//!   group. The first label's foot may lie between 97.8 and 94.104 (2.2 to
+//!   5.896 px above its bar), the second's between 99.3 and 95.604. The
 //!   outermost foot, 96.304, lies in both, so the second label moves up
 //!   1.5 px and stands 5.196 px above its bar. The report is one shared
 //!   line at 96.304.
@@ -1672,7 +1673,7 @@ mod tests {
     #[test]
     fn worked_example_value_labels_on_two_bars() {
         // The module's worked example. Her 11 px text: least 2.2, related
-        // 3.696, near 5.478.
+        // 3.696, near 5.896.
         let r = chart(&[100.0, 101.5]);
         let own = judge_set(&r, &value_labels(2), PLOT, Level::Preferred).unwrap();
         assert_eq!(
@@ -1723,6 +1724,25 @@ mod tests {
                 ..Room::default()
             }
         );
+    }
+
+    #[test]
+    fn every_step_below_the_least_distance_is_removed_under_the_default_rules() {
+        // Near is the related ideal plus the least distance, so labels at
+        // the related ideal whose positions differ by anything less than
+        // the least distance (2.2) share the outermost one's line: the
+        // farther label ends less than near from its bar, and no label is
+        // brought nearer its bar than the related ideal.
+        for step in [0.5, 1.5, 1.95, 2.19] {
+            let r = chart(&[100.0, 100.0 + step]);
+            let shared = judge_set(&r, &sharing(2), PLOT, Level::Preferred).unwrap();
+            let f = feet(&shared);
+            assert!(close(f[0], 96.304) && close(f[1], 96.304), "step {step}");
+            assert!(matches!(
+                shared.lines[0].outcome,
+                LineOutcome::Shared { .. }
+            ));
+        }
     }
 
     #[test]

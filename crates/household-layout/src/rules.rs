@@ -163,7 +163,7 @@ impl Default for Distances {
                 least: Measure::em(0.2),
                 related: Measure::em(0.336),
                 unrelated: Measure::em(0.66),
-                near: Measure::em((0.336 + 0.66) / 2.0),
+                near: Measure::em(0.336 + 0.2),
                 least_for_pairs: Vec::new(),
                 halo: Measure::em(0.15),
             },
@@ -260,8 +260,12 @@ pub struct DiagramSpacing {
     /// The ideal between unrelated things.
     pub unrelated: Measure,
     /// The farthest a label may stand from its own mark and still read as
-    /// its own (K2). By default halfway between the related and the
-    /// unrelated ideal. Label sets that share lines use it (U8); the
+    /// its own (K2). By default the related ideal plus the least distance:
+    /// labels share a line when their positions differ by less than the
+    /// least distance (U8), so a label that starts at the related ideal
+    /// and moves out to a shared line is always still within near, and
+    /// near stays short of the unrelated ideal. A starting value, to be
+    /// judged on pictures. Label sets that share lines use it; the
     /// record's judging does not yet bound a related distance.
     pub near: Measure,
     /// Pairs of kinds with a least distance of their own; the first entry
@@ -748,7 +752,7 @@ mod tests {
         assert!(near(d.related.resolve(&SIZES), 3.7));
         assert!(near(d.unrelated.resolve(&SIZES), 7.3));
         // Halfway between 3.696 and 7.26.
-        assert!((d.near.resolve(&SIZES) - 5.478).abs() < 1e-9);
+        assert!((d.near.resolve(&SIZES) - 5.896).abs() < 1e-9);
         assert_eq!(d.ideal(Relation::MeantToMeet, &SIZES), None);
     }
 
