@@ -503,6 +503,49 @@ enum Adjustment<'a> {
     ViewportFloor,
 }
 
+/// Which of a child's dimensions are fixed (`fixed_dimensions`).
+///
+/// The numbers a caller gives are not kept here: they go into the child's
+/// measurement (`Adjustment::FixedDimensions`), which raises each to the
+/// content's minimum. What the planner fixes is the child's measured minimum
+/// in each fixed dimension, every adjustment included, and it obtains those
+/// sizes in one step (`Fixed::sizes`).
+#[derive(Clone, Copy, Default)]
+struct Fixed {
+    width: bool,
+    height: bool,
+}
+
+/// The size of each fixed dimension at one level; `None` where the dimension
+/// is not fixed.
+#[derive(Clone, Copy)]
+struct FixedSizes {
+    width: Option<f32>,
+    height: Option<f32>,
+}
+
+impl Fixed {
+    /// The fixed sizes, taken from one measurement of the child, which is made
+    /// only when a dimension is fixed.
+    fn sizes(self, measure: impl FnOnce() -> MeasuredSize) -> FixedSizes {
+        if !self.width && !self.height {
+            return FixedSizes {
+                width: None,
+                height: None,
+            };
+        }
+        let minimum = measure().minimum;
+        FixedSizes {
+            width: self.width.then_some(minimum.width),
+            height: self.height.then_some(minimum.height),
+        }
+    }
+
+    fn any(self) -> bool {
+        self.width || self.height
+    }
+}
+
 /// A queryable leaf or composite. Only the root selects a level. Composites
 /// forward that exact level; outward weights never replace internal weights.
 ///
@@ -528,8 +571,7 @@ pub struct Child<'a, Message> {
     grow: f32,
     grow_height: f32,
     reserve_width: bool,
-    fixed_width: Option<f32>,
-    fixed_height: Option<f32>,
+    fixed: Fixed,
     preparation: PreparedId,
     presentation: Option<Presentation>,
     information: Option<SourceInformation<'a>>,
@@ -547,8 +589,7 @@ impl<Message> Clone for Child<'_, Message> {
             grow: self.grow,
             grow_height: self.grow_height,
             reserve_width: self.reserve_width,
-            fixed_width: self.fixed_width,
-            fixed_height: self.fixed_height,
+            fixed: self.fixed,
             preparation: self.preparation.clone(),
             presentation: self.presentation,
             information: self.information.clone(),
@@ -575,8 +616,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
             grow: 0.0,
             grow_height: 0.0,
             reserve_width: false,
-            fixed_width: None,
-            fixed_height: None,
+            fixed: Fixed::default(),
             preparation: PreparedId::new(),
             presentation: None,
             information: None,
@@ -931,34 +971,30 @@ impl<'a, Message: 'a> Child<'a, Message> {
         if self.is_hidden(level) {
             return Ok(self.bind_geometry(level, GeometryPlan::hidden()));
         }
-        let constrained = if self.fixed_width.is_some() || self.fixed_height.is_some() {
-            Some(self.query(level, renderer))
-        } else {
-            None
-        };
-        let width = if self.fixed_width.is_some() {
-            let requested = constrained.expect("fixed measurement").minimum.width;
-            if width + FIT_EPSILON < requested {
-                return Err(AllocationError::NoFit {
-                    required: requested,
-                    available: width,
-                });
+        let fixed = self.fixed.sizes(|| self.query(level, renderer));
+        let width = match fixed.width {
+            Some(requested) => {
+                if width + FIT_EPSILON < requested {
+                    return Err(AllocationError::NoFit {
+                        required: requested,
+                        available: width,
+                    });
+                }
+                requested
             }
-            requested
-        } else {
-            width
+            None => width,
         };
-        let height = if self.fixed_height.is_some() {
-            let requested = constrained.expect("fixed measurement").minimum.height;
-            if height + FIT_EPSILON < requested {
-                return Err(AllocationError::NoFit {
-                    required: requested,
-                    available: height,
-                });
+        let height = match fixed.height {
+            Some(requested) => {
+                if height + FIT_EPSILON < requested {
+                    return Err(AllocationError::NoFit {
+                        required: requested,
+                        available: height,
+                    });
+                }
+                requested
             }
-            requested
-        } else {
-            height
+            None => height,
         };
         let mut plan = match &self.kind {
             Kind::Forms(forms) => {
@@ -1027,16 +1063,14 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 plan
             }
         };
-        if self.fixed_width.is_some() || self.reserve_width {
+        if fixed.width.is_some() || self.reserve_width {
             plan.size.width = width;
         }
-        if (self.grow_height > 0.0 || self.fixed_height.is_some()) && height.is_finite() {
+        if (self.grow_height > 0.0 || fixed.height.is_some()) && height.is_finite() {
             plan.size.height = plan.size.height.max(height);
         }
-        if self.fixed_height.is_some() {
-            plan.minimum_height = plan
-                .minimum_height
-                .max(constrained.expect("fixed measurement").minimum.height);
+        if let Some(requested) = fixed.height {
+            plan.minimum_height = plan.minimum_height.max(requested);
         }
         if plan.size.width > width + FIT_EPSILON {
             return Err(AllocationError::NoFit {
@@ -1211,11 +1245,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
             .spacing(composition.spacing)
             .into(),
         };
-        if self.grow_height > 0.0
-            || self.fixed_height.is_some()
-            || self.fixed_width.is_some()
-            || self.reserve_width
-        {
+        if self.grow_height > 0.0 || self.fixed.any() || self.reserve_width {
             widget::container(content)
                 .width(plan.size.width)
                 .height(plan.size.height)
@@ -1264,8 +1294,12 @@ impl<'a, Message: 'a> Child<'a, Message> {
         result.weight = weight;
         result.grow = grow;
         result.grow_height = grow_height;
-        result.fixed_width = width;
-        result.fixed_height = height;
+        // The numbers go into the measurement; the planner needs only which
+        // dimensions they fix (`Fixed`).
+        result.fixed = Fixed {
+            width: width.is_some(),
+            height: height.is_some(),
+        };
         result
             .adjustments
             .push(Adjustment::FixedDimensions { width, height });
