@@ -9,6 +9,29 @@
 //! reconciliation. Changing widget types discards that local state, including
 //! focus and inline overlays; this adapter does not transfer it between controls.
 
+// No path through the layout engine may panic. Every household app lays out
+// through it, and the owner's rule is: "this is a user application - we
+// should not be paining at all" (panicking). A number the engine cannot use
+// makes an invalid child; a plan that does not match the child given it is
+// refused; a widget tree or layout without the part it should hold does
+// nothing there. So the engine's code (this module and the `layout_*` files,
+// which are its children) may not unwrap, expect, index or slice unchecked,
+// panic, or leave unreachable, todo or unimplemented paths, and Clippy in CI
+// (`-D warnings`) rejects a change that adds one. Tests are exempt: a test
+// may unwrap and index, since a panic there is a failing test.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::indexing_slicing
+    )
+)]
+
 use cosmic::iced::advanced::widget::{Operation, Tree, tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector};
@@ -2133,6 +2156,14 @@ struct VerifiedDecoration<'a, Message> {
     agreement: Rc<Cell<bool>>,
     check_constraints: bool,
 }
+// `forward_widget!` (src/forward.rs, outside the layout modules) passes the
+// tree's first child unchecked (`tree.children[0]`) in each hook it forwards
+// in this impl. Brief E5b leaves code outside the layout modules alone, and
+// Rust ignores a lint attribute on a macro invocation, so the allow is on the
+// impl; its own methods take the child with `first`/`first_mut`. The macro
+// doing the same, with nothing done or the neutral value answered when the
+// child is missing, would let this allow go.
+#[allow(clippy::indexing_slicing)]
 impl<Message> Widget<Message, Theme, Renderer> for VerifiedDecoration<'_, Message> {
     forward_widget!(Message, Theme, Renderer; children, diff, size, draw, update, operate, mouse_interaction, overlay, drag_destinations);
     fn layout(
@@ -2193,6 +2224,14 @@ struct VerifiedLeaf<'a, Message> {
     compress_height: bool,
     agreement: Rc<Cell<bool>>,
 }
+// `forward_widget!` (src/forward.rs, outside the layout modules) passes the
+// tree's first child unchecked (`tree.children[0]`) in each hook it forwards
+// in this impl. Brief E5b leaves code outside the layout modules alone, and
+// Rust ignores a lint attribute on a macro invocation, so the allow is on the
+// impl; its own methods take the child with `first`/`first_mut`. The macro
+// doing the same, with nothing done or the neutral value answered when the
+// child is missing, would let this allow go.
+#[allow(clippy::indexing_slicing)]
 impl<Message> Widget<Message, Theme, Renderer> for VerifiedLeaf<'_, Message> {
     forward_widget!(Message, Theme, Renderer; children, diff, size, draw, update, operate, mouse_interaction, overlay, drag_destinations);
     fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, _: &layout::Limits) -> layout::Node {
@@ -2236,6 +2275,14 @@ struct FixedComponent<'a, Message> {
     level: Level,
     content: Element<'a, Message>,
 }
+// `forward_widget!` (src/forward.rs, outside the layout modules) passes the
+// tree's first child unchecked (`tree.children[0]`) in each hook it forwards
+// in this impl. Brief E5b leaves code outside the layout modules alone, and
+// Rust ignores a lint attribute on a macro invocation, so the allow is on the
+// impl; its own methods take the child with `first`/`first_mut`. The macro
+// doing the same, with nothing done or the neutral value answered when the
+// child is missing, would let this allow go.
+#[allow(clippy::indexing_slicing)]
 impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for FixedComponent<'a, Message> {
     forward_widget!(Message, Theme, Renderer; draw, update, operate, mouse_interaction, overlay, drag_destinations);
     fn diff(&mut self, _: &mut Tree) {}
