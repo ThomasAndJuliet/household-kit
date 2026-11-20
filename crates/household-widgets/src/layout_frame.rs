@@ -33,27 +33,27 @@ pub fn framed_child<'a, Message: 'a>(
         decorate: Rc::new(decorate),
     });
     let measure = frame.clone();
-    let mut result = child(|_| widget::space().into());
-    result.query = Rc::new(move |level, renderer| {
-        let inner = measure.content.query(level, renderer);
-        let chrome = Size::new(measure.padding.x(), measure.padding.y());
-        MeasuredSize {
-            preferred: Size::new(
-                inner.preferred.width + chrome.width,
-                inner.preferred.height + chrome.height,
-            ),
-            minimum: Size::new(
-                if measure.content.weight == 0.0 {
-                    inner.preferred.width
-                } else {
-                    inner.minimum.width
-                } + chrome.width,
-                inner.minimum.height + chrome.height,
-            ),
-        }
-    });
-    result.kind = Kind::Frame(frame);
-    result
+    Child::new(
+        Kind::Frame(frame),
+        Rc::new(move |level, renderer| {
+            let inner = measure.content.query(level, renderer);
+            let chrome = Size::new(measure.padding.x(), measure.padding.y());
+            MeasuredSize {
+                preferred: Size::new(
+                    inner.preferred.width + chrome.width,
+                    inner.preferred.height + chrome.height,
+                ),
+                minimum: Size::new(
+                    if measure.content.weight == 0.0 {
+                        inner.preferred.width
+                    } else {
+                        inner.minimum.width
+                    } + chrome.width,
+                    inner.minimum.height + chrome.height,
+                ),
+            }
+        }),
+    )
 }
 
 impl<'a, Message: 'a> Frame<'a, Message> {

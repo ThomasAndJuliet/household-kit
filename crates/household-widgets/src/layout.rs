@@ -374,7 +374,8 @@ impl<Message> Clone for Kind<'_, Message> {
 /// A child is its `kind` (what it is) together with what any kind may carry:
 /// the measuring query, which every kind answers, and the declarations a
 /// caller adds with the builder methods below (weights and growth, hiding,
-/// decoration, reports, regions).
+/// decoration, reports, regions). Every child is built by `Child::new` from
+/// its kind and query, with nothing else declared yet.
 pub struct Child<'a, Message> {
     kind: Kind<'a, Message>,
     query: SizeQuery<'a>,
@@ -416,6 +417,31 @@ impl<Message> Clone for Child<'_, Message> {
 }
 
 impl<'a, Message: 'a> Child<'a, Message> {
+    /// The one place a child is built. The public constructors choose the kind
+    /// and how it is measured; everything a caller may declare afterwards
+    /// starts here at its neutral value: visible, undecorated, no viewport,
+    /// weight 1 and no growth, no reserved or fixed dimensions, no
+    /// presentation, reports or regions, and a fresh preparation identity.
+    fn new(kind: Kind<'a, Message>, query: SizeQuery<'a>) -> Self {
+        Self {
+            kind,
+            query,
+            decorator: None,
+            hidden: Rc::new(|_| false),
+            viewport: None,
+            weight: 1.0,
+            grow: 0.0,
+            grow_height: 0.0,
+            reserve_width: false,
+            fixed_width: None,
+            fixed_height: None,
+            preparation: PreparedId::new(),
+            presentation: None,
+            information: None,
+            regions: Vec::new(),
+        }
+    }
+
     fn refresh_preparation(&mut self) {
         self.preparation = PreparedId::new();
     }
@@ -1091,29 +1117,16 @@ pub fn child<'a, Message: 'a>(
 /// (`scroll_child_with_minimum`) shares the one factory.
 fn leaf_child<'a, Message: 'a>(view: ViewFactory<'a, Message>) -> Child<'a, Message> {
     let measure = view.clone();
-    Child {
-        kind: Kind::Leaf(view),
-        query: Rc::new(move |level, renderer| {
+    Child::new(
+        Kind::Leaf(view),
+        Rc::new(move |level, renderer| {
             let size = measure_element(|| measure(level), renderer);
             MeasuredSize {
                 preferred: size,
                 minimum: size,
             }
         }),
-        decorator: None,
-        hidden: Rc::new(|_| false),
-        viewport: None,
-        weight: 1.0,
-        grow: 0.0,
-        grow_height: 0.0,
-        reserve_width: false,
-        fixed_width: None,
-        fixed_height: None,
-        preparation: PreparedId::new(),
-        presentation: None,
-        information: None,
-        regions: Vec::new(),
-    }
+    )
 }
 
 /// A component family's own structured forms, inherited until the next
@@ -1132,25 +1145,10 @@ pub fn forms<'a, Message: 'a>(
     assert!(alternatives.windows(2).all(|pair| pair[0].0 < pair[1].0));
     let alternatives = Rc::new(alternatives);
     let query_forms = alternatives.clone();
-    Child {
-        kind: Kind::Forms(alternatives),
-        query: Rc::new(move |level, renderer| {
-            select_form(&query_forms, level).query(level, renderer)
-        }),
-        decorator: None,
-        hidden: Rc::new(|_| false),
-        viewport: None,
-        weight: 1.0,
-        grow: 0.0,
-        grow_height: 0.0,
-        reserve_width: false,
-        fixed_width: None,
-        fixed_height: None,
-        preparation: PreparedId::new(),
-        presentation: None,
-        information: None,
-        regions: Vec::new(),
-    }
+    Child::new(
+        Kind::Forms(alternatives),
+        Rc::new(move |level, renderer| select_form(&query_forms, level).query(level, renderer)),
+    )
 }
 
 fn select_form<'a, 'forms, Message>(
@@ -1313,23 +1311,10 @@ fn compose_aligned<'a, Message: 'a>(
         top_aligned,
     });
     let query = composition.clone();
-    Child {
-        kind: Kind::Composition(composition),
-        query: Rc::new(move |level, renderer| query.measure(level, renderer)),
-        decorator: None,
-        hidden: Rc::new(|_| false),
-        viewport: None,
-        weight: 1.0,
-        grow: 0.0,
-        grow_height: 0.0,
-        reserve_width: false,
-        fixed_width: None,
-        fixed_height: None,
-        preparation: PreparedId::new(),
-        presentation: None,
-        information: None,
-        regions: Vec::new(),
-    }
+    Child::new(
+        Kind::Composition(composition),
+        Rc::new(move |level, renderer| query.measure(level, renderer)),
+    )
 }
 
 pub(crate) const FIT_EPSILON: f32 = 0.001;
