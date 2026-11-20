@@ -605,8 +605,8 @@ pub fn judge_set(
 ) -> Result<Placed, NoPattern> {
     let mut stopped = Vec::new();
     let mut waiting: Option<Placed> = None;
-    for index in 0..set.patterns.len() {
-        match judge_pattern(record, set, index, region, level) {
+    for (index, pattern) in set.patterns.iter().enumerate() {
+        match judge_pattern(record, set, index, pattern, region, level) {
             Ok(placed) if placed.preference == Preference::InOrder => return Ok(placed),
             Ok(placed) => {
                 if waiting
@@ -637,6 +637,14 @@ pub fn enter_set(record: &mut Record, placed: &Placed) -> Result<(), Stale> {
             now: record.revision(),
         });
     }
+    enter_judged(record, placed);
+    Ok(())
+}
+
+/// Enters a judged set's labels and their cuts, without asking whether the
+/// record has changed since the set was judged: for a caller that has just
+/// judged it against this record.
+fn enter_judged(record: &mut Record, placed: &Placed) {
     record.enter_all(placed.labels.iter().map(|label| label.occupant.clone()));
     record.enter_cuts(
         placed
@@ -644,7 +652,6 @@ pub fn enter_set(record: &mut Record, placed: &Placed) -> Result<(), Stale> {
             .iter()
             .flat_map(|label| label.cuts().iter().cloned()),
     );
-    Ok(())
 }
 
 /// Judges a set and enters what it places: [`judge_set`], then
@@ -656,7 +663,8 @@ pub fn place_set(
     level: Level,
 ) -> Result<Placed, NoPattern> {
     let placed = judge_set(record, set, region, level)?;
-    enter_set(record, &placed).expect("judged against this record a moment ago");
+    // Judged against this very record a moment ago, so it cannot be stale.
+    enter_judged(record, &placed);
     Ok(placed)
 }
 
@@ -717,6 +725,8 @@ pub struct RoomNeeded {
 /// least the least distance: a group's line is then never beyond its
 /// outermost label, so no label goes beyond the outermost place a label of
 /// the set takes without it.
+///
+/// A pattern the set does not have places no label, and needs no room.
 pub fn room_needed(
     set: &LabelSet,
     pattern: usize,
@@ -724,7 +734,9 @@ pub fn room_needed(
     sizes: &Sizes,
     owner_across: impl Fn(&Member) -> f64,
 ) -> Result<RoomNeeded, Stopped> {
-    let pattern_ref = &set.patterns[pattern];
+    let Some(pattern_ref) = set.patterns.get(pattern) else {
+        return Ok(RoomNeeded::default());
+    };
     let gap = pattern_ref.gap.resolve(rules, sizes);
     let mut room = RoomNeeded::default();
     for member in &set.members {
@@ -811,18 +823,19 @@ fn occupant(set: &LabelSet, member: &Member, rect: Rect) -> Occupant {
     label
 }
 
-/// Judges every member by one pattern, each against the record and the
-/// members before it; stops at the first rejection, in the members' order.
-/// Where the pattern shares lines, every member's place is worked out first
-/// and the lines are settled before any member is judged.
+/// Judges every member by one pattern, the set's `index`th, each against
+/// the record and the members before it; stops at the first rejection, in
+/// the members' order. Where the pattern shares lines, every member's place
+/// is worked out first and the lines are settled before any member is
+/// judged.
 fn judge_pattern(
     record: &Record,
     set: &LabelSet,
     index: usize,
+    pattern: &Pattern,
     region: Rect,
     level: Level,
 ) -> Result<Placed, Stopped> {
-    let pattern = &set.patterns[index];
     let gap = pattern.gap.resolve(record.rules(), record.sizes());
     let mut spots: Vec<Result<Spot, Reason>> = set
         .members
@@ -922,35 +935,63 @@ fn share_lines(
         .resolve(record.sizes());
     let mut lines = Vec::new();
     for side in [Side::Above, Side::Below, Side::Left, Side::Right] {
-        let mut order: Vec<usize> = (0..spots.len())
-            .filter(|&i| spots[i].side == side)
+        let mut order: Vec<Grouped> = set
+            .members
+            .iter()
+            .zip(spots.iter())
+            .enumerate()
+            .filter(|(_, (_, spot))| spot.side == side)
+            .map(|(index, (member, spot))| Grouped {
+                index,
+                member,
+                position: away(side, spot.rect),
+                spot: spot.clone(),
+            })
             .collect();
-        order.sort_by(|&a, &b| away(side, spots[a].rect).total_cmp(&away(side, spots[b].rect)));
-        let mut groups: Vec<Vec<usize>> = Vec::new();
-        for i in order {
-            let position = away(side, spots[i].rect);
+        order.sort_by(|a, b| a.position.total_cmp(&b.position));
+        let mut groups: Vec<Vec<Grouped>> = Vec::new();
+        for grouped in order {
             match groups.last_mut() {
-                Some(group) if position - away(side, spots[group[0]].rect) < least => {
-                    group.push(i);
+                Some(group)
+                    if group
+                        .first()
+                        .is_some_and(|first| grouped.position - first.position < least) =>
+                {
+                    group.push(grouped);
                 }
-                _ => groups.push(vec![i]),
+                _ => groups.push(vec![grouped]),
             }
         }
         for group in groups {
-            let first = away(side, spots[group[0]].rect);
-            let last = away(side, spots[group[group.len() - 1]].rect);
-            if group.len() < 2 || last <= first {
+            let (Some(first), Some(last)) = (group.first(), group.last()) else {
+                continue;
+            };
+            if group.len() < 2 || last.position <= first.position {
                 continue;
             }
             let outcome = share_line(record, set, spots, &group, side, gap, level);
             lines.push(SharedLine {
-                members: group.iter().map(|&i| set.members[i].id.clone()).collect(),
+                members: group
+                    .iter()
+                    .map(|grouped| grouped.member.id.clone())
+                    .collect(),
                 side,
                 outcome,
             });
         }
     }
     lines
+}
+
+/// A member on one side, as it is grouped with the members whose positions
+/// nearly agree with its own: where it stands among the set's members (and
+/// so among their places), its position along its side ([`away`]), and its
+/// place.
+struct Grouped<'a> {
+    index: usize,
+    member: &'a Member,
+    position: f64,
+    spot: Spot<'a>,
 }
 
 /// Puts one group on one line if it can, moving its members in `spots`.
@@ -969,7 +1010,7 @@ fn share_line(
     record: &Record,
     set: &LabelSet,
     spots: &mut [Spot],
-    group: &[usize],
+    group: &[Grouped],
     side: Side,
     gap: f64,
     level: Level,
@@ -977,10 +1018,10 @@ fn share_line(
     let spacing = &record.rules().distances.diagram;
     let near = spacing.near.resolve(record.sizes());
     let (mut low, mut high, mut outermost) = (f64::MIN, f64::MAX, f64::MIN);
-    for &i in group {
-        let position = away(side, spots[i].rect);
+    for grouped in group {
+        let position = grouped.position;
         let mark = position - gap;
-        let (least, _) = spacing.least_between(set.kind, spots[i].owner.kind, record.sizes());
+        let (least, _) = spacing.least_between(set.kind, grouped.spot.owner.kind, record.sizes());
         low = low.max(mark + least);
         high = high.min(mark + near);
         outermost = outermost.max(position);
@@ -989,39 +1030,58 @@ fn share_line(
         return LineOutcome::Kept(KeptBecause::NoLine);
     }
     let line = outermost.clamp(low, high);
-    let mut trial: Vec<Rect> = spots.iter().map(|spot| spot.rect).collect();
-    for &i in group {
-        trial[i] = moved_away(side, trial[i], line - away(side, trial[i]));
-    }
-    for &i in group {
-        if let Some(edge) = spots[i].inside
-            && !inset_but(record, set.kind, spots[i].owner, edge).contains(trial[i])
+    let onto_line = |rect: Rect| moved_away(side, rect, line - away(side, rect));
+    // Every member's place with the group's moved onto the line.
+    let trial: Vec<Rect> = spots
+        .iter()
+        .enumerate()
+        .map(|(index, spot)| {
+            if group.iter().any(|grouped| grouped.index == index) {
+                onto_line(spot.rect)
+            } else {
+                spot.rect
+            }
+        })
+        .collect();
+    for grouped in group {
+        if let Some(edge) = grouped.spot.inside
+            && !inset_but(record, set.kind, grouped.spot.owner, edge)
+                .contains(onto_line(grouped.spot.rect))
         {
             return LineOutcome::Kept(KeptBecause::NotInside {
-                member: set.members[i].id.clone(),
+                member: grouped.member.id.clone(),
             });
         }
     }
-    let judge = |rects: &[Rect], i: usize| {
-        let others: Vec<Occupant> = (0..rects.len())
-            .filter(|&k| k != i)
-            .map(|k| occupant(set, &set.members[k], rects[k]))
+    // A member's label at `rect`, judged against the record and every other
+    // member's label at its place in `rects`.
+    let judge = |rects: &[Rect], grouped: &Grouped, rect: Rect| {
+        let others: Vec<Occupant> = set
+            .members
+            .iter()
+            .zip(rects)
+            .enumerate()
+            .filter(|&(k, _)| k != grouped.index)
+            .map(|(_, (member, &rect))| occupant(set, member, rect))
             .collect();
-        record.judge_with(&occupant(set, &set.members[i], rects[i]), &others)
+        record.judge_with(&occupant(set, grouped.member, rect), &others)
     };
     let own: Vec<Rect> = spots.iter().map(|spot| spot.rect).collect();
-    for &i in group {
-        let on_line = judge(&trial, i);
+    for grouped in group {
+        let on_line = judge(&trial, grouped, onto_line(grouped.spot.rect));
         let refused = on_line.rejection_at(level).cloned();
-        if refused.is_some() || on_line.preference() > judge(&own, i).preference() {
+        if refused.is_some()
+            || on_line.preference() > judge(&own, grouped, grouped.spot.rect).preference()
+        {
             return LineOutcome::Kept(KeptBecause::Clearance {
-                member: set.members[i].id.clone(),
+                member: grouped.member.id.clone(),
                 finding: refused,
             });
         }
     }
-    for &i in group {
-        spots[i].rect = trial[i];
+    // Members outside the group keep their places, which `trial` holds.
+    for (spot, rect) in spots.iter_mut().zip(trial) {
+        spot.rect = rect;
     }
     LineOutcome::Shared {
         at: match side {
