@@ -662,12 +662,93 @@ impl<'a, Message: 'a> Child<'a, Message> {
         self
     }
 
+    /// Bind a finished plan to this child, the child it was planned from, at
+    /// the level it was planned at: the one walk that binds plans.
+    ///
+    /// What binding is. Every node of a plan records which children made it
+    /// (`GeometryPlan::bindings`: a child's preparation identity and the
+    /// level), and a child that reports information adds its report on the
+    /// node it made (`source_reports`), made by its callback from that node.
+    /// `render` draws a node only for a child whose binding it carries, so a
+    /// plan can be committed only by the children it was planned from, and
+    /// only the reports of the plan that is committed are published.
+    ///
+    /// Why it is apart from planning. Planning is geometry: where each part
+    /// goes and whether it fits. Preparation identities and reports belong
+    /// to the widgets, not to the geometry, and the planner can then be moved
+    /// to a crate that knows nothing of them. Binding also needs only the
+    /// plan that is kept: planning makes and discards trial plans (a column
+    /// plans each child with unbounded height and again at its share, a wrap
+    /// plans again in its second pass, a stage that does not fit is dropped),
+    /// and those need no binding. So planning (`plan_width`,
+    /// `Composition::plan`, `Frame::plan`) makes plans with no bindings and
+    /// no reports, and `query_at`, the only way into planning from outside,
+    /// plans and then calls this once on the plan it returns.
+    ///
+    /// How the walk pairs a node with the child that made it: by the rule
+    /// planning follows, one arm per kind.
+    ///
+    /// - A composition's placement names the child it was planned from by
+    ///   its `index` among the declared children.
+    /// - A frame's content made the frame's first (and only) placement.
+    /// - The form selected at the level made the very node the family
+    ///   returns, so that node is bound twice: by the form, then by the
+    ///   family.
+    /// - A leaf has nothing below.
+    ///
+    /// A hidden node was returned at once by the hidden child that was asked
+    /// for it (a hidden family, frame or composition returns before asking
+    /// what it holds), so it is bound by that child alone and nothing below
+    /// it is visited. A placement whose index names no child, or a frame's
+    /// plan without its placement, cannot come from the child's own
+    /// planning; the walk leaves that part unbound, and `render` refuses it.
+    ///
+    /// The order is the order planning bound in when it did it as it went:
+    /// what is below a node is bound before the node itself, and a family's
+    /// form before the family. So each node ends with the same bindings and
+    /// reports in the same order, and each report callback is given the
+    /// node as it was then: every node below it bound and reported, the
+    /// node's earlier bindings and reports in place, and its own binding.
+    /// Each node is finished when it is bound: nothing planning does after a
+    /// child has returned its plan changes that plan, except forms raising
+    /// their form's node to the room when they grow in height, which the
+    /// form, given that growth, has already done (`plan_width`).
+    ///
+    /// The one difference from binding as planning went: a report callback
+    /// now runs once for each node of the finished plan that its child
+    /// made, and no longer also for the trial plans that were discarded or
+    /// for plans that failed. A report callback must be pure
+    /// (`report_information`), so what it reports is the same.
     fn bind_geometry(&self, level: Level, mut plan: GeometryPlan) -> GeometryPlan {
+        self.bind(level, &mut plan);
+        plan
+    }
+
+    /// The walk of `bind_geometry`, over a node in place.
+    fn bind(&self, level: Level, plan: &mut GeometryPlan) {
+        if !plan.hidden {
+            match &self.kind {
+                Kind::Leaf(_) => {}
+                Kind::Composition(composition) => {
+                    for placed in &mut plan.children {
+                        if let Some(child) = composition.children.get(placed.index) {
+                            child.bind(level, &mut placed.geometry);
+                        }
+                    }
+                }
+                Kind::Frame(frame) => {
+                    if let Some(placed) = plan.children.first_mut() {
+                        frame.content.bind(level, &mut placed.geometry);
+                    }
+                }
+                Kind::Forms(forms) => forms.select(level).bind(level, plan),
+            }
+        }
         plan.bindings.push((self.preparation.clone(), level));
         if !plan.hidden
             && let Some(information) = &self.information
         {
-            let losses = (information.report)(level, &plan);
+            let losses = (information.report)(level, plan);
             plan.source_reports.push(SourceReport {
                 source: information.source,
                 revision: information.revision,
@@ -678,7 +759,6 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 owner: self.preparation.clone(),
             });
         }
-        plan
     }
 
     fn has_composition(&self, level: Level) -> bool {
@@ -949,6 +1029,8 @@ impl<'a, Message: 'a> Child<'a, Message> {
     /// Allocate first, then measure native content at its allocated width with
     /// unbounded height. Thus a clipped height can never certify a fit. A useful
     /// minimum narrower than intrinsic width must be explicitly declared.
+    // Planning makes the plan; binding it to this child, with the reports,
+    // follows once it is finished (`bind_geometry`).
     pub fn query_at(
         &self,
         level: Level,
@@ -970,8 +1052,12 @@ impl<'a, Message: 'a> Child<'a, Message> {
             allocated
         };
         self.plan_width(level, renderer, width, available.height)
+            .map(|plan| self.bind_geometry(level, plan))
     }
 
+    /// Plan this child in `width` × `height`, as its parent does: the plan
+    /// has no bindings and no reports, which `query_at` adds to the plan it
+    /// returns (`bind_geometry`).
     fn plan_width(
         &self,
         level: Level,
@@ -980,7 +1066,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         height: f32,
     ) -> Result<GeometryPlan, AllocationError> {
         if self.is_hidden(level) {
-            return Ok(self.bind_geometry(level, GeometryPlan::hidden()));
+            return Ok(GeometryPlan::hidden());
         }
         if self.invalid {
             // An invalid child has no plan (`invalid_unless`).
@@ -1078,6 +1164,15 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 plan
             }
         };
+        // For forms, `plan` is the node their form made, and nothing below
+        // changes it. A forms child never has a fixed dimension or a reserved
+        // width: `fixed_dimensions` and `fill_width` put the child they are
+        // given in a column, whose node is another. And the form was planned
+        // in this same width and height, with the family's growth in height
+        // when that is above zero, so it has already raised its height to
+        // the room and passed both fit checks below. That is why the form's
+        // report, made when the finished plan is bound (`bind_geometry`), is
+        // given the node it would have been given here.
         if fixed.width.is_some() || self.reserve_width {
             plan.size.width = width;
         }
@@ -1099,7 +1194,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 available: height,
             });
         }
-        Ok(self.bind_geometry(level, plan))
+        Ok(plan)
     }
 
     fn render(
