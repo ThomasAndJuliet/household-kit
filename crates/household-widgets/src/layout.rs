@@ -2701,6 +2701,10 @@ mod tolerance_tests;
 mod decision_tests;
 
 #[cfg(test)]
+#[path = "layout_binding_tests.rs"]
+mod binding_tests;
+
+#[cfg(test)]
 mod renderer_minimum_tests {
     use super::*;
     use cosmic::iced::advanced::renderer::Headless;
