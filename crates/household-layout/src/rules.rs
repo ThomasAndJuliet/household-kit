@@ -31,6 +31,10 @@ pub struct Rules {
     /// The level from which a distance below its ideal is accepted
     /// (semantics A7). Compositions take the same value for their gaps.
     pub squeeze_from: Level,
+    /// How a connector leaves its text, the forms of path it may take,
+    /// the angles it keeps, and when it runs along a line rather than
+    /// crossing it ([`crate::leaders`]).
+    pub connectors: Connectors,
 }
 
 impl Default for Rules {
@@ -47,9 +51,148 @@ impl Default for Rules {
                     Match::kinds(Kind::ValueLine).with_role(Role::zero_line()),
                     Match::kinds(Kind::DataMark),
                 ),
+                // "Comparison mark | its bar | across it": the mark is drawn
+                // over its bar, so a leader ending on the mark where it lies
+                // on the bar meets the mark, not the bar.
+                Beneath::new(
+                    Match::kinds(Kind::DataMark),
+                    Match::kinds(Kind::ComparisonMark),
+                ),
             ],
             cuts: Cuts::default(),
             squeeze_from: Level::Strong,
+            connectors: Connectors::default(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Connectors
+// ---------------------------------------------------------------------------
+
+/// The forms a connector's path may take, tried in the order of
+/// [`Connectors::paths`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PathForm {
+    /// One straight piece from the text's edge to the target.
+    Straight,
+    /// One smooth bend (design-draft §9.5: "at most one smooth bend, of up
+    /// to about 90°"). Not built yet: a place tried with it finds no path
+    /// of this form.
+    OneBend,
+}
+
+/// Where a connector's path breaks one of her path rules, for the rows of
+/// [`Connectors::rows`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PathAt {
+    /// It leaves its text's edge more than [`Connectors::leave_within`]
+    /// from square.
+    LeavesOblique,
+    /// It leaves its edge back over its own text: 90° or more from square.
+    LeavesInward,
+    /// It arrives at its target at less than [`Connectors::arrive_at_least`]
+    /// to the outline it lands on.
+    ArrivesShallow,
+}
+
+/// One row of the path rules.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathRow {
+    /// The row's words, for reports.
+    pub name: String,
+    pub at: PathAt,
+    pub verdict: Verdict,
+}
+
+/// The connector rules that are not a meeting with something recorded:
+/// where a connector starts, the forms of path tried, her angles, and when
+/// meeting a line counts as running along it. Her rules (design-draft §9.5,
+/// G3, 8 Nov: "yes (d) works"): a connector "leaves its edge within about
+/// 45° of square", "makes at most one smooth bend", "arrives steeply at its
+/// target: at least about 60°, ideally square", "keeps out of the data, and
+/// crosses nothing"; of the edges, "the one that gives the shortest path
+/// meeting the rules". "45°, 90° and 60° are *starting values*, to check on
+/// examples."
+#[derive(Clone, Debug, PartialEq)]
+pub struct Connectors {
+    /// The edges of its text a connector may start from, each at the
+    /// edge's midpoint ("a connector starts at the midpoint of an edge of
+    /// its text", design §9, provisional). Of those that give a path, the
+    /// one with the best position in the list of places wins, then the
+    /// shortest; on a tie, the first here.
+    pub edges: Vec<crate::labels::Side>,
+    /// How far out from its text's edge a connector starts. Design §9 says
+    /// at the edge's midpoint; design-draft §9.5 (25 Oct) said "at the
+    /// related gap from the text". Zero by default, as design §9 has it.
+    pub start_off: Measure,
+    /// The most a connector may leave its edge off square, in degrees.
+    pub leave_within: f64,
+    /// The least angle, in degrees, at which a connector arrives at the
+    /// outline it lands on.
+    pub arrive_at_least: f64,
+    /// A connector meeting a line at less than this angle, in degrees, and
+    /// overlapping it along the line by more than the least distance, runs
+    /// along it rather than crossing it ([`Contact::Along`]). A starting
+    /// value with no ruling behind it.
+    pub along_below: f64,
+    /// The forms of path, in the order tried.
+    pub paths: Vec<PathForm>,
+    /// The verdict for each way a path breaks the angle rules. Every row
+    /// that applies gives a finding.
+    pub rows: Vec<PathRow>,
+}
+
+impl Connectors {
+    /// The first row for `at`, by index, with its verdict.
+    pub fn verdict(&self, at: PathAt) -> Option<(usize, Verdict)> {
+        self.rows
+            .iter()
+            .position(|row| row.at == at)
+            .map(|index| (index, self.rows[index].verdict))
+    }
+
+    /// The index of the row with this name, for a caller changing it.
+    pub fn row_named(&self, name: &str) -> Option<usize> {
+        self.rows.iter().position(|row| row.name == name)
+    }
+}
+
+impl Default for Connectors {
+    /// Her angles as starting values. Only overlap, contrast and meaning
+    /// reject, so an angle off her rule is less preferred, never refused;
+    /// a connector leaving back over its own text overlaps it and is.
+    fn default() -> Self {
+        use crate::labels::Side;
+        let row = |name: &str, at, verdict| PathRow {
+            name: name.into(),
+            at,
+            verdict,
+        };
+        Self {
+            edges: vec![Side::Above, Side::Below, Side::Left, Side::Right],
+            start_off: Measure::em(0.0),
+            leave_within: 45.0,
+            arrive_at_least: 60.0,
+            along_below: 30.0,
+            paths: vec![PathForm::Straight, PathForm::OneBend],
+            rows: vec![
+                row(
+                    "a connector leaving its edge more than about 45° from square",
+                    PathAt::LeavesOblique,
+                    Verdict::LessPreferred,
+                ),
+                row(
+                    "a connector leaving back over its own text",
+                    PathAt::LeavesInward,
+                    Verdict::Never,
+                ),
+                row(
+                    "a connector arriving at less than about 60°",
+                    PathAt::ArrivesShallow,
+                    Verdict::LessPreferred,
+                ),
+            ],
         }
     }
 }
@@ -634,6 +777,23 @@ pub struct CoveringRow {
     /// distance and the ideal; below the least distance the pair is
     /// rejected as any other (semantics C8).
     pub near: bool,
+    /// Which meetings the row applies to: any, or only those where the
+    /// placed thing runs along what it meets ("Connector | a gridline | may
+    /// cross, never runs along").
+    pub contact: Contact,
+}
+
+/// Which meetings of two things a covering row applies to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Contact {
+    /// Every meeting.
+    #[default]
+    Any,
+    /// Only a meeting where a line runs along a line: the two meet at less
+    /// than [`Connectors::along_below`] to each other and overlap along
+    /// their length by more than the least distance between their kinds.
+    /// Crossing is not running along.
+    Along,
 }
 
 impl CoveringRow {
@@ -651,12 +811,20 @@ impl CoveringRow {
             ownership,
             verdict,
             near: false,
+            contact: Contact::Any,
         }
     }
 
     /// This row with its verdict holding within the distance as well.
     pub fn near(mut self) -> Self {
         self.near = true;
+        self
+    }
+
+    /// This row applying only where the placed thing runs along what it
+    /// meets.
+    pub fn along(mut self) -> Self {
+        self.contact = Contact::Along;
         self
     }
 }
@@ -683,12 +851,27 @@ pub struct Covering {
 }
 
 impl Covering {
-    /// The verdict for a placed thing meeting an occupant, and its row.
+    /// The verdict for a placed thing meeting an occupant, and its row. A
+    /// row for running along ([`Contact::Along`]) does not apply: see
+    /// [`Self::verdict_along`].
     pub fn verdict(
         &self,
         placed: (Kind, Option<&Role>),
         met: (Kind, Option<&Role>),
         own: bool,
+    ) -> (Verdict, CoveringRef) {
+        self.verdict_along(placed, met, own, false)
+    }
+
+    /// The verdict for a placed thing meeting an occupant, and its row,
+    /// where `along` says whether the placed thing runs along what it
+    /// meets.
+    pub fn verdict_along(
+        &self,
+        placed: (Kind, Option<&Role>),
+        met: (Kind, Option<&Role>),
+        own: bool,
+        along: bool,
     ) -> (Verdict, CoveringRef) {
         self.rows
             .iter()
@@ -696,6 +879,7 @@ impl Covering {
                 row.placed.matches(placed.0, placed.1)
                     && matches!(&row.meets, Meets::Occupant(m) if m.matches(met.0, met.1))
                     && row.ownership.matches(own)
+                    && (row.contact == Contact::Any || along)
             })
             .map_or((self.unlisted, CoveringRef::Unlisted), |index| {
                 (self.rows[index].verdict, CoveringRef::Row(index))
@@ -866,10 +1050,22 @@ impl Default for Covering {
                     NotOwn,
                     Never,
                 ),
+                // Before its own target: a connector running along its own
+                // comparison line would be read as that line.
+                row(
+                    "a connector along a value line",
+                    Match::kinds(Connector),
+                    on(ValueLine.into()),
+                    Any,
+                    Never,
+                )
+                .along(),
+                // Its target may be of any kind: a bar, a comparison mark,
+                // a line (semantics C1: it is its target's own).
                 row(
                     "a connector and its own target",
                     Match::kinds(Connector),
-                    on(DataMark.into()),
+                    on(Kinds::ANY),
                     Own,
                     MeantToMeet,
                 ),
@@ -877,6 +1073,13 @@ impl Default for Covering {
                     "a connector through a data mark not its target",
                     Match::kinds(Connector),
                     on(DataMark.into()),
+                    NotOwn,
+                    Never,
+                ),
+                row(
+                    "a connector through a comparison mark not its target",
+                    Match::kinds(Connector),
+                    on(ComparisonMark.into()),
                     NotOwn,
                     Never,
                 ),

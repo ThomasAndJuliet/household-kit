@@ -85,6 +85,25 @@
 //! only, and is never flagged as squeezed. The comment on the relation
 //! says what the caller must be able to show to declare it.
 //!
+//! # Connectors
+//!
+//! A connector is entered as a segment owned by its text and by its target
+//! ([`Occupant::also_owned_by`]); its target may be of any kind. Two
+//! things about meeting are particular to lines:
+//!
+//! - **Running along is not crossing.** Where a segment meets a segment at
+//!   less than the rules' [`crate::rules::Connectors::along_below`] and
+//!   overlaps it along its length by more than the least distance, it runs
+//!   along it ([`Record::runs_along`]), and the covering table's rows
+//!   marked [`crate::rules::Contact::Along`] apply before the rest: "may
+//!   cross, never runs along" is two rows, one for each.
+//! - **A target covers what it lies on.** Where a connector meets an area
+//!   only inside its own target, and the order of drawing puts that area
+//!   beneath the target, the area is not judged: a leader ending on a
+//!   comparison mark where the mark lies across its bar meets the mark.
+//!
+//! How a leader is built from these is in [`crate::leaders`].
+//!
 //! Not yet here: the record's judging puts no upper bound on a related
 //! distance (Juliet's "clearly belongs" test, near and far; label sets
 //! that share lines use near). This version searches a list; an index for
@@ -212,6 +231,37 @@ fn segment_segment_distance(a0: Point, a1: Point, b0: Point, b1: Point) -> f64 {
         .min(point_segment_distance(a1, b0, b1))
         .min(point_segment_distance(b0, a0, a1))
         .min(point_segment_distance(b1, a0, a1))
+}
+
+/// The unit vector from `a` to `b`, if they differ.
+pub(crate) fn unit(a: Point, b: Point) -> Option<Point> {
+    let length = (b.x - a.x).hypot(b.y - a.y);
+    (length > 0.0).then(|| Point::new((b.x - a.x) / length, (b.y - a.y) / length))
+}
+
+/// The stretch of the segment from `a` to `b` inside `r`, if any
+/// (Liang and Barsky's clipping).
+fn clip(a: Point, b: Point, r: Rect) -> Option<(Point, Point)> {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let (mut low, mut high) = (0.0_f64, 1.0_f64);
+    for (p, q) in [
+        (-dx, a.x - r.x),
+        (dx, r.right() - a.x),
+        (-dy, a.y - r.y),
+        (dy, r.bottom() - a.y),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else if p < 0.0 {
+            low = low.max(q / p);
+        } else {
+            high = high.min(q / p);
+        }
+    }
+    let at = |t: f64| Point::new(a.x + t * dx, a.y + t * dy);
+    (low <= high).then(|| (at(low), at(high)))
 }
 
 fn segment_rect_distance(a: Point, b: Point, r: Rect) -> f64 {
@@ -595,7 +645,9 @@ impl Record {
             });
         }
         for &occupant in &everything {
-            if self.hidden_from(candidate, occupant, everything.iter().copied()) {
+            if self.hidden_from(candidate, occupant, everything.iter().copied())
+                || self.covered_by_target(candidate, occupant, &everything)
+            {
                 continue;
             }
             let against = || Against::Occupant(occupant.id.clone());
@@ -707,17 +759,92 @@ impl Record {
     }
 
     /// The covering table's verdict for a candidate meeting an occupant,
-    /// unless the caller declared the pair meant to meet.
+    /// unless the caller declared the pair meant to meet. Rows for running
+    /// along apply where the candidate runs along the occupant
+    /// ([`Self::runs_along`]).
     fn meeting_verdict(&self, candidate: &Occupant, occupant: &Occupant) -> (Verdict, CoveringRef) {
         if self.relation(candidate, occupant) == Relation::MeantToMeet {
             (Verdict::MeantToMeet, CoveringRef::Declared)
         } else {
-            self.rules.covering.verdict(
+            self.rules.covering.verdict_along(
                 (candidate.kind, candidate.role.as_ref()),
                 (occupant.kind, occupant.role.as_ref()),
                 candidate.is_own(occupant),
+                self.runs_along(candidate, occupant),
             )
         }
+    }
+
+    /// Whether `candidate`, drawn as a segment, runs along `occupant`, a
+    /// segment it meets: the two lie at less than the rules'
+    /// [`crate::rules::Connectors::along_below`] to each other, and the
+    /// candidate overlaps the occupant along its length by more than the
+    /// least distance between their kinds. A line crossing another at a
+    /// wider angle, or touching it only end to end, does not run along it.
+    pub fn runs_along(&self, candidate: &Occupant, occupant: &Occupant) -> bool {
+        let (
+            Ink::Segment {
+                from: a0, to: a1, ..
+            },
+            Ink::Segment {
+                from: b0, to: b1, ..
+            },
+        ) = (candidate.ink, occupant.ink)
+        else {
+            return false;
+        };
+        let (Some(u), Some(v)) = (unit(a0, a1), unit(b0, b1)) else {
+            return false;
+        };
+        let angle = (u.x * v.x + u.y * v.y).abs().min(1.0).acos().to_degrees();
+        if angle >= self.rules.connectors.along_below {
+            return false;
+        }
+        // The overlap along the occupant: the candidate's ends projected on
+        // its line, clipped to its length.
+        let along = |p: Point| (p.x - b0.x) * v.x + (p.y - b0.y) * v.y;
+        let length = (b1.x - b0.x).hypot(b1.y - b0.y);
+        let (s, t) = (along(a0), along(a1));
+        let overlap = s.max(t).min(length) - s.min(t).max(0.0);
+        let (least, _) =
+            self.rules
+                .distances
+                .diagram
+                .least_between(candidate.kind, occupant.kind, &self.sizes);
+        overlap > least + FIT_EPSILON
+    }
+
+    /// Whether, where `candidate` (a segment) meets `occupant` (an area),
+    /// it meets only inside a target of its own that the rules draw above
+    /// the occupant: a leader ending on a comparison mark where the mark
+    /// lies across its bar meets the mark, and the bar is covered there.
+    /// The target must be the candidate's own and meant to meet it.
+    fn covered_by_target(
+        &self,
+        candidate: &Occupant,
+        occupant: &Occupant,
+        everything: &[&Occupant],
+    ) -> bool {
+        let (Ink::Segment { from, to, width }, Ink::Rect(met)) = (candidate.ink, occupant.ink)
+        else {
+            return false;
+        };
+        let reach = width / 2.0;
+        let Some((a, b)) = clip(from, to, met.grown(reach)) else {
+            return false;
+        };
+        let lower = (occupant.kind, occupant.role.as_ref());
+        everything.iter().any(|&target| {
+            target.id != occupant.id
+                && candidate.owners.contains(&target.id)
+                && matches!(target.ink, Ink::Rect(area)
+                    if area.grown(reach + FIT_EPSILON).holds(a)
+                        && area.grown(reach + FIT_EPSILON).holds(b))
+                && self
+                    .rules
+                    .drawn_beneath(lower, (target.kind, target.role.as_ref()))
+                && self.meeting_verdict(candidate, target).0 == Verdict::MeantToMeet
+        })
     }
 
     /// A finding by the cut table's row for `at`, if it has one.

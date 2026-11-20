@@ -69,6 +69,8 @@
 //! - [`halo`]: where a line is cut round a text standing in it, what a
 //!   caller enters for a line, and how a cut is judged.
 //! - [`labels`]: anchors, and label sets placed by pattern.
+//! - [`leaders`]: a label joined to what it names by a connector, its
+//!   place and its leader judged together.
 
 pub mod engine;
 pub mod geometry;
@@ -76,6 +78,7 @@ pub mod halo;
 pub mod identity;
 pub mod kinds;
 pub mod labels;
+pub mod leaders;
 pub mod level;
 pub mod presentation;
 pub mod record;
