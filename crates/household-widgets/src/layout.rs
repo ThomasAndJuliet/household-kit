@@ -65,10 +65,7 @@ pub use presentation::{
 mod attached;
 #[path = "layout_hover.rs"]
 mod hover;
-pub use attached::{
-    Alignment, AnchorCandidate, AttachedPlan, Attachment, PlacementPreference, Side,
-    choose_attached, commit_attached,
-};
+pub use attached::{AttachedPlan, Attachment, choose_attached, commit_attached};
 pub(crate) use attached::{
     ChainCard, ChainFailure, RetainedGeometry, choose_attached_avoiding, choose_attached_chain,
     commit_attached_retaining, commit_attached_retaining_avoiding,
@@ -82,7 +79,10 @@ pub(crate) use hover::{HoverRetained, commit_hover_retaining};
 // paths; the rest of this file converts iced's `Size` to and from the
 // core's at the edge, and the arithmetic is the core's, written once.
 pub(crate) use household_layout::FIT_EPSILON;
-pub use household_layout::{AllocationError, Arrangement, Level, WidthCapacity, allocate_width};
+pub use household_layout::{
+    Alignment, AllocationError, AnchorCandidate, Arrangement, Level, PlacementPreference, Side,
+    WidthCapacity, allocate_width,
+};
 use household_layout::{Host, Kind, LeafHeight, Measured, Offer, is_amount};
 
 /// Query representations without retaining the result of any rejected query.
@@ -139,6 +139,36 @@ fn core_size(size: Size) -> household_layout::Size {
 
 fn toolkit_size(size: household_layout::Size) -> Size {
     Size::new(size.width, size.height)
+}
+
+// Placing a popup or a hover card is the core's, over its own rectangles and
+// padding, which have iced's fields; these convert at the edge, number for
+// number.
+fn core_rect(rect: Rectangle) -> household_layout::Rectangle {
+    household_layout::Rectangle {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+fn toolkit_rect(rect: household_layout::Rectangle) -> Rectangle {
+    Rectangle {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+fn core_padding(padding: cosmic::iced::Padding) -> household_layout::Padding {
+    household_layout::Padding {
+        top: padding.top,
+        right: padding.right,
+        bottom: padding.bottom,
+        left: padding.left,
+    }
 }
 
 /// Geometry proposed by a pure query. No widget state is retained here.

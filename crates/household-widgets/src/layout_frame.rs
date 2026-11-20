@@ -23,16 +23,7 @@ pub fn framed_child<'a, Message: 'a>(
 ) -> Child<'a, Message> {
     let padding = padding.into();
     let decorate: ViewMap<'a, Message> = Rc::new(decorate);
-    Child::from_part(Part::frame(
-        content.part,
-        household_layout::Padding {
-            top: padding.top,
-            right: padding.right,
-            bottom: padding.bottom,
-            left: padding.left,
-        },
-        decorate,
-    ))
+    Child::from_part(Part::frame(content.part, core_padding(padding), decorate))
 }
 
 /// Render the frame from its plan, its content with the growth in height it

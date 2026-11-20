@@ -234,6 +234,7 @@
 
 pub mod allocation;
 mod arrange;
+pub mod attach;
 pub mod frame;
 pub mod host;
 pub mod level;
@@ -246,6 +247,11 @@ pub mod stage;
 pub use allocation::{
     AllocationError, FIT_EPSILON, WidthCapacity, allocate_one, allocate_width, allocate_with_growth,
 };
+pub use attach::{
+    Alignment, AnchorCandidate, AttachedPlan, Attachment, ChainCard, ChainFailure, ChainSelection,
+    PlacementPreference, Side, choose_attached, choose_attached_avoiding, choose_attached_chain,
+    choose_attached_excluding,
+};
 pub use frame::{Frame, Padding};
 pub use host::{Host, Offer};
 pub use level::{Arrangement, Level};
@@ -253,5 +259,7 @@ pub use part::{
     Child, Composition, Fixed, Forms, Kind, Leaf, LeafHeight, MinimumQuery, Sharing, is_amount,
 };
 pub use plan::{Placed, Plan};
-pub use size::{Measured, Point, Size, finite_size, valid_available, validate_measurement};
+pub use size::{
+    Measured, Point, Rectangle, Size, finite_size, valid_available, validate_measurement,
+};
 pub use stage::{AsStage, NoFit, Stage, StagePlan, choose_stage};

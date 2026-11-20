@@ -1,63 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Attached geometry is a query and commit extension of the staged engine.
-//! A candidate offers a real region before measurement. Nothing is moved back
-//! into the window after measurement, and scrolling remains an explicit Child.
+//!
+//! Choosing where an attached surface goes (its stage, side and alignment)
+//! is geometry over stages and rectangles, and it is the engine's
+//! (`household_layout::attach`, which says how placement is meant to work).
+//! Here are the interface's own types over iced's rectangles and padding,
+//! which convert to the engine's at the edge, number for number, and
+//! committing the choice: rendering the chosen stage, laying the native
+//! content out, checking it agrees with the plan, retaining it between
+//! layouts, and trying the next pair when it disagrees.
+//!
+//! The engine chooses with plans it has not bound. So a placement that is
+//! tried and not chosen is no longer converted and bound, and a report
+//! callback (`Child::report_information`) no longer runs for it; it runs for
+//! the chosen plan only (`StagePlan::from_core`). A report callback must be
+//! pure, so what is reported is the same.
 
 use super::*;
+#[cfg(test)]
 use cosmic::iced::Point;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Side {
-    Below,
-    Above,
-    Right,
-    Left,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Alignment {
-    Start,
-    End,
-    Center,
-    /// Prefer the source's start, bounded by the entire offered region. This
-    /// equation participates in measurement and never changes the primary side.
-    StartBounded,
-    /// Centred on the source along the attached side, shifted only as far as
-    /// needed to stay inside the entire offered region. Information cards
-    /// use this and no gap: flush with the control.
-    CenterBounded,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AnchorCandidate {
-    pub side: Side,
-    pub alignment: Alignment,
-    pub gap: f32,
-}
-
-impl AnchorCandidate {
-    pub fn new(side: Side, alignment: Alignment) -> Self {
-        Self {
-            side,
-            alignment,
-            gap: 0.0,
-        }
-    }
-    pub fn gap(mut self, gap: f32) -> Self {
-        self.gap = gap;
-        self
-    }
-}
-
-/// Callers choose which preference is stronger; list and panel policies need
-/// not share an ordering. Each stage still forwards one exact shared Level.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PlacementPreference {
-    #[default]
-    RepresentationFirst,
-    AnchorFirst,
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attachment {
@@ -113,6 +75,17 @@ impl Attachment {
         self.fill_width = true;
         self
     }
+
+    /// The engine's attachment: the same, with its rectangle and padding.
+    pub(super) fn to_core(&self) -> household_layout::Attachment {
+        household_layout::Attachment {
+            anchor: core_rect(self.anchor),
+            candidates: self.candidates.clone(),
+            preference: self.preference,
+            fill_width: self.fill_width,
+            surface_insets: core_padding(self.surface_insets),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,8 +95,25 @@ pub struct AttachedPlan {
     pub bounds: Rectangle,
 }
 
+impl AttachedPlan {
+    /// The engine's placement among `stages`, as the interface's: the
+    /// chosen stage's plan bound to its child (`StagePlan::from_core`), and
+    /// the bounds in iced's rectangle.
+    pub(super) fn from_core<'a, Message: 'a>(
+        stages: &[Stage<'a, Message>],
+        chosen: &household_layout::AttachedPlan,
+    ) -> Self {
+        Self {
+            stage: StagePlan::from_core(stages, &chosen.stage),
+            candidate_index: chosen.candidate_index,
+            bounds: toolkit_rect(chosen.bounds),
+        }
+    }
+}
+
 /// The offer and the origin are derived from the same anchor equation. A
-/// candidate is rejected when its complete queried bounds do not fit.
+/// candidate is rejected when its complete queried bounds do not fit
+/// (`household_layout::choose_attached`).
 pub fn choose_attached<'a, Message: 'a>(
     stages: &[Stage<'a, Message>],
     renderer: &Renderer,
@@ -133,6 +123,8 @@ pub fn choose_attached<'a, Message: 'a>(
     choose_attached_inner(stages, renderer, window, attachment, &[], &[])
 }
 
+/// The engine's choice (`household_layout::choose_attached_excluding`), over
+/// iced's rectangles, bound to the chosen stage's child.
 fn choose_attached_inner<'a, Message: 'a>(
     stages: &[Stage<'a, Message>],
     renderer: &Renderer,
@@ -141,66 +133,16 @@ fn choose_attached_inner<'a, Message: 'a>(
     rejected: &[(usize, usize)],
     obstacles: &[Rectangle],
 ) -> Result<AttachedPlan, NoFit> {
-    let attempted = stages.len().saturating_mul(attachment.candidates.len());
-    if !valid_rect(window) || !valid_rect(attachment.anchor) {
-        return Err(NoFit { attempted });
-    }
-    // Each stage and candidate comes with its index, which the plan records.
-    let query = |(stage_index, stage): (usize, &Stage<'a, Message>),
-                 (candidate_index, &candidate): (usize, &AnchorCandidate)| {
-        if rejected.contains(&(stage_index, candidate_index)) {
-            return None;
-        }
-        let anchor = paint_anchor(attachment.anchor, candidate.side, attachment.surface_insets);
-        let mut available = offer(window, anchor, candidate)?;
-        if !attachment.fill_width {
-            available.width = available
-                .width
-                .min(stage.content.query(stage.level, renderer).preferred.width);
-        }
-        let geometry = stage
-            .content
-            .query_at(stage.level, renderer, available)
-            .ok()?;
-        let position = origin(window, anchor, candidate, geometry.size);
-        let bounds = Rectangle::new(position, geometry.size);
-        (contains(window, bounds)
-            && !obstacles.iter().any(|obstacle| {
-                bounds
-                    .intersection(obstacle)
-                    .is_some_and(|area| area.width > 0.0 && area.height > 0.0)
-            }))
-        .then_some(AttachedPlan {
-            stage: StagePlan {
-                stage_index,
-                level: stage.level,
-                geometry,
-            },
-            candidate_index,
-            bounds,
-        })
-    };
-    match attachment.preference {
-        PlacementPreference::RepresentationFirst => {
-            for stage in stages.iter().enumerate() {
-                for candidate in attachment.candidates.iter().enumerate() {
-                    if let Some(plan) = query(stage, candidate) {
-                        return Ok(plan);
-                    }
-                }
-            }
-        }
-        PlacementPreference::AnchorFirst => {
-            for candidate in attachment.candidates.iter().enumerate() {
-                for stage in stages.iter().enumerate() {
-                    if let Some(plan) = query(stage, candidate) {
-                        return Ok(plan);
-                    }
-                }
-            }
-        }
-    }
-    Err(NoFit { attempted })
+    let obstacles: Vec<_> = obstacles.iter().copied().map(core_rect).collect();
+    household_layout::choose_attached_excluding(
+        stages,
+        renderer,
+        core_rect(window),
+        &attachment.to_core(),
+        rejected,
+        &obstacles,
+    )
+    .map(|chosen| AttachedPlan::from_core(stages, &chosen))
 }
 
 /// Query a permitted attachment while protecting earlier ancestor surfaces.
@@ -216,74 +158,21 @@ pub(crate) fn choose_attached_avoiding<'a, Message: 'a>(
     choose_attached_inner(stages, renderer, window, attachment, &[], obstacles)
 }
 
-/// One physical box can embed several consecutive logical chain levels. The
-/// component supplies every composition; the engine knows only their spans.
-#[derive(Clone)]
-pub(crate) struct ChainCard {
-    pub index: usize,
-    pub span: usize,
-    pub plan: AttachedPlan,
-}
+// A chain of surfaces is scheduled by the engine; a card's plan is the
+// interface's.
+pub(crate) use household_layout::ChainFailure;
+pub(crate) type ChainCard = household_layout::ChainCard<AttachedPlan>;
+pub(crate) type ChainSelection = household_layout::ChainSelection<AttachedPlan>;
 
-pub(crate) enum ChainFailure {
-    MissingSource(NoFit),
-    NoFit(NoFit),
-}
-
-pub(crate) struct ChainSelection {
-    pub cards: Vec<ChainCard>,
-    pub no_fit: Option<(usize, NoFit)>,
-}
-
-/// Negotiate ordinary attachments before a component-declared embedded form.
-/// Queries receive the accepted prefix, allowing a native adapter to resolve
-/// descendant anchors in a disposable transaction. No runtime state belongs to
-/// this scheduler, and it never enumerates a descendant's internal forms.
+/// Negotiate ordinary attachments before a component-declared embedded form:
+/// the engine's scheduler (`household_layout::choose_attached_chain`), with
+/// the interface's plan as each card's.
 pub(crate) fn choose_attached_chain(
     count: usize,
     max_span: impl Fn(usize) -> usize,
-    mut query: impl FnMut(&[ChainCard], usize, usize) -> Result<AttachedPlan, ChainFailure>,
+    query: impl FnMut(&[ChainCard], usize, usize) -> Result<AttachedPlan, ChainFailure>,
 ) -> ChainSelection {
-    let mut cards: Vec<ChainCard> = Vec::new();
-    // The span each level is tried with, one entry per level: the loop runs
-    // while `index` names a level.
-    let mut spans = vec![1; count];
-    let mut index = 0;
-    while let Some(&span) = spans.get(index) {
-        match query(&cards, index, span) {
-            Ok(plan) => {
-                cards.push(ChainCard { index, span, plan });
-                index += span;
-            }
-            Err(failure) => {
-                let (error, can_embed) = match failure {
-                    ChainFailure::MissingSource(error) => (error, false),
-                    ChainFailure::NoFit(error) => (error, true),
-                };
-                if can_embed && let Some(parent) = cards.last() {
-                    let combined = parent.span + span;
-                    // The parent card was accepted at a level the loop named,
-                    // so its span is there to widen.
-                    if combined <= max_span(parent.index)
-                        && let Some(parent_span) = spans.get_mut(parent.index)
-                    {
-                        *parent_span = combined;
-                        index = parent.index;
-                        cards.pop();
-                        continue;
-                    }
-                }
-                return ChainSelection {
-                    cards,
-                    no_fit: Some((index, error)),
-                };
-            }
-        }
-    }
-    ChainSelection {
-        cards,
-        no_fit: None,
-    }
+    household_layout::choose_attached_chain(count, max_span, query)
 }
 
 /// Select and commit in the declared order, trying the next pair when live
@@ -454,133 +343,11 @@ impl AttachedPlan {
     }
 }
 
-fn valid_rect(rect: Rectangle) -> bool {
-    rect.x.is_finite()
-        && rect.y.is_finite()
-        && finite_size(rect.size())
-        && rect.width >= 0.0
-        && rect.height >= 0.0
-}
+/// Whether `rect` lies inside `window`, edges included: the engine's
+/// (`household_layout::attach::contains`), on iced's rectangles.
+#[cfg(test)]
 fn contains(window: Rectangle, rect: Rectangle) -> bool {
-    rect.x >= window.x
-        && rect.y >= window.y
-        && rect.x + rect.width <= window.x + window.width
-        && rect.y + rect.height <= window.y + window.height
-}
-// Convert the visible attachment equation to the full paint-box equation.
-// This does not reposition a committed plan: both offer and origin use the
-// same inset-aware anchor before the content is measured.
-fn paint_anchor(mut anchor: Rectangle, side: Side, insets: cosmic::iced::Padding) -> Rectangle {
-    match side {
-        Side::Right | Side::Left => {
-            anchor.y -= insets.top;
-            anchor.height += insets.top + insets.bottom;
-            if side == Side::Right {
-                anchor.width -= insets.left;
-            } else {
-                anchor.x += insets.right;
-                anchor.width -= insets.right;
-            }
-        }
-        Side::Below | Side::Above => {
-            anchor.x -= insets.left;
-            anchor.width += insets.left + insets.right;
-            if side == Side::Below {
-                anchor.height -= insets.top;
-            } else {
-                anchor.y += insets.bottom;
-                anchor.height -= insets.bottom;
-            }
-        }
-    }
-    anchor
-}
-
-fn offer(window: Rectangle, anchor: Rectangle, candidate: AnchorCandidate) -> Option<Size> {
-    if !candidate.gap.is_finite() || candidate.gap < 0.0 {
-        return None;
-    }
-    let vertical = matches!(candidate.side, Side::Above | Side::Below);
-    let (a_start, a_end, w_start, w_end) = if vertical {
-        (
-            anchor.x,
-            anchor.x + anchor.width,
-            window.x,
-            window.x + window.width,
-        )
-    } else {
-        (
-            anchor.y,
-            anchor.y + anchor.height,
-            window.y,
-            window.y + window.height,
-        )
-    };
-    let cross = match candidate.alignment {
-        Alignment::Start => w_end - a_start,
-        Alignment::End => a_end - w_start,
-        Alignment::Center => {
-            let center = (a_start + a_end) / 2.0;
-            2.0 * (center - w_start).min(w_end - center)
-        }
-        Alignment::StartBounded | Alignment::CenterBounded => w_end - w_start,
-    };
-    let main = match candidate.side {
-        Side::Below => window.y + window.height - anchor.y - anchor.height - candidate.gap,
-        Side::Above => anchor.y - window.y - candidate.gap,
-        Side::Right => window.x + window.width - anchor.x - anchor.width - candidate.gap,
-        Side::Left => anchor.x - window.x - candidate.gap,
-    };
-    (cross >= 0.0 && main >= 0.0).then_some(if vertical {
-        Size::new(cross, main)
-    } else {
-        Size::new(main, cross)
-    })
-}
-fn origin(window: Rectangle, anchor: Rectangle, candidate: AnchorCandidate, size: Size) -> Point {
-    let align = |start: f32, length: f32, actual: f32, region_start: f32, region_length: f32| {
-        match candidate.alignment {
-            Alignment::Start => start,
-            Alignment::End => start + length - actual,
-            Alignment::Center => start + (length - actual) / 2.0,
-            Alignment::StartBounded => start
-                .max(region_start)
-                .min(region_start + region_length - actual),
-            Alignment::CenterBounded => (start + (length - actual) / 2.0)
-                .min(region_start + region_length - actual)
-                .max(region_start),
-        }
-    };
-    match candidate.side {
-        Side::Below => Point::new(
-            align(anchor.x, anchor.width, size.width, window.x, window.width),
-            anchor.y + anchor.height + candidate.gap,
-        ),
-        Side::Above => Point::new(
-            align(anchor.x, anchor.width, size.width, window.x, window.width),
-            anchor.y - size.height - candidate.gap,
-        ),
-        Side::Right => Point::new(
-            anchor.x + anchor.width + candidate.gap,
-            align(
-                anchor.y,
-                anchor.height,
-                size.height,
-                window.y,
-                window.height,
-            ),
-        ),
-        Side::Left => Point::new(
-            anchor.x - size.width - candidate.gap,
-            align(
-                anchor.y,
-                anchor.height,
-                size.height,
-                window.y,
-                window.height,
-            ),
-        ),
-    }
+    household_layout::attach::contains(core_rect(window), core_rect(rect))
 }
 
 #[cfg(test)]
