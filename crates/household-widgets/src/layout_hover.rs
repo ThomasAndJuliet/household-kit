@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Informational attachments prefer obstacle-free regions before covering menus.
+//!
+//! Where a hover card goes is the engine's (`household_layout::hover`, which
+//! says how a card is placed: one rule for every card, what counts as an
+//! obstacle, clear regions first). Here the interface's rectangles convert
+//! to the engine's at the edge, and the chosen plan is bound to its stage's
+//! child; committing the card, region by region, is the widgets'.
 use super::*;
-use std::cmp::Ordering;
 
 /// Query the declared candidate order against unobstructed regions first,
-/// then against the whole window. Popup rectangles are finite obstacles.
+/// then against the whole window. Popup rectangles are finite obstacles
+/// (`household_layout::choose_hover`).
 pub fn choose_hover<'a, Message: 'a>(
     stages: &[Stage<'a, Message>],
     renderer: &Renderer,
@@ -13,38 +19,15 @@ pub fn choose_hover<'a, Message: 'a>(
     attachment: &Attachment,
     obstacles: &[Rectangle],
 ) -> Result<AttachedPlan, NoFit> {
-    for fallback in [false, true] {
-        for ((stage_index, stage), (candidate_index, declared)) in pairs(stages, attachment) {
-            let a = single_attachment(attachment, declared);
-            let obstacles = &flush_obstacles(obstacles, &a, declared.side);
-            let stage = std::slice::from_ref(stage);
-            let offers = if fallback {
-                vec![window]
-            } else {
-                ordered_regions(
-                    stage,
-                    renderer,
-                    window,
-                    &a,
-                    declared.side,
-                    &regions(window, obstacles),
-                    obstacles,
-                )
-            };
-            for region in offers {
-                if let Ok(mut plan) = choose_attached(stage, renderer, region, &a)
-                    && (fallback || !obstacles.iter().any(|r| intersects(*r, plan.bounds)))
-                {
-                    plan.stage.stage_index = stage_index;
-                    plan.candidate_index = candidate_index;
-                    return Ok(plan);
-                }
-            }
-        }
-    }
-    Err(NoFit {
-        attempted: stages.len() * attachment.candidates.len(),
-    })
+    let obstacles: Vec<_> = obstacles.iter().copied().map(core_rect).collect();
+    household_layout::choose_hover(
+        stages,
+        renderer,
+        core_rect(window),
+        &attachment.to_core(),
+        &obstacles,
+    )
+    .map(|chosen| AttachedPlan::from_core(stages, &chosen))
 }
 
 #[derive(Default)]
@@ -59,7 +42,10 @@ impl HoverRetained {
     }
 }
 
-// This mirrors commit_attached_retaining, with obstacles as the one extra input.
+// The engine's search for a card's place (`household_layout::place_hover`),
+// with each region it offers committed here as commit_attached_retaining
+// commits a popup; the first committed card clear of the obstacles (or, in
+// the fallback pass, any committed card) is kept.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn commit_hover_retaining<'a, Message: 'a>(
     stages: &[Stage<'a, Message>],
@@ -71,222 +57,55 @@ pub(crate) fn commit_hover_retaining<'a, Message: 'a>(
     tree: &mut Tree,
     retained: &mut HoverRetained,
 ) -> Result<(AttachedPlan, layout::Node), NoFit> {
-    for fallback in [false, true] {
-        for ((stage_index, stage), (candidate_index, declared)) in pairs(stages, attachment) {
-            let a = single_attachment(attachment, declared);
-            let obstacles = &flush_obstacles(obstacles, &a, declared.side);
-            let stage = std::slice::from_ref(stage);
-            let offers = if fallback {
-                vec![window]
-            } else {
-                ordered_regions(
-                    stage,
-                    renderer,
-                    window,
-                    &a,
-                    declared.side,
-                    &regions(window, obstacles),
-                    obstacles,
-                )
-            };
-            for region in offers {
-                // A retained one-stage plan uses a local stage index of zero;
-                // invalidate it when the selected representation changes.
-                if retained.stage != Some(stage_index) {
-                    retained.clear();
-                }
-                if let Ok((mut plan, node)) = commit_attached_retaining(
-                    stage,
-                    renderer,
-                    region,
-                    &a,
-                    content,
-                    tree,
-                    &mut retained.geometry,
-                ) && (fallback || !obstacles.iter().any(|r| intersects(*r, plan.bounds)))
-                {
-                    retained.stage = Some(stage_index);
-                    plan.stage.stage_index = stage_index;
-                    plan.candidate_index = candidate_index;
-                    return Ok((plan, node));
-                }
+    let obstacles: Vec<_> = obstacles.iter().copied().map(core_rect).collect();
+    let placed = household_layout::place_hover(
+        stages,
+        renderer,
+        core_rect(window),
+        &attachment.to_core(),
+        &obstacles,
+        |stage_index, stage, region, a| {
+            // A retained one-stage plan uses a local stage index of zero;
+            // invalidate it when the selected representation changes.
+            if retained.stage != Some(stage_index) {
+                retained.clear();
             }
+            commit_attached_retaining(
+                stage,
+                renderer,
+                toolkit_rect(region),
+                &Attachment::from_core(a),
+                content,
+                tree,
+                &mut retained.geometry,
+            )
+            .ok()
+        },
+        |(plan, _)| core_rect(plan.bounds),
+    );
+    match placed {
+        Ok(household_layout::HoverChoice {
+            value: (mut plan, node),
+            stage_index,
+            candidate_index,
+        }) => {
+            retained.stage = Some(stage_index);
+            plan.stage.stage_index = stage_index;
+            plan.candidate_index = candidate_index;
+            Ok((plan, node))
+        }
+        Err(error) => {
+            retained.clear();
+            Err(error)
         }
     }
-    retained.clear();
-    Err(NoFit {
-        attempted: stages.len() * attachment.candidates.len(),
-    })
 }
 
-// Rank actual fitting geometries, rather than the size of their containing
-// rectangles. This keeps a bounded alignment near its window position even
-// when a larger clear strip would move it away from the source.
-fn ordered_regions<'a, Message: 'a>(
-    stages: &[Stage<'a, Message>],
-    renderer: &Renderer,
-    window: Rectangle,
-    attachment: &Attachment,
-    side: Side,
-    regions: &[Rectangle],
-    obstacles: &[Rectangle],
-) -> Vec<Rectangle> {
-    let vertical = matches!(side, Side::Above | Side::Below);
-    let cross = |bounds: Rectangle| if vertical { bounds.x } else { bounds.y };
-    let reference = choose_attached(stages, renderer, window, attachment)
-        .map(|plan| cross(plan.bounds))
-        .unwrap_or_else(|_| cross(attachment.anchor));
-    let mut offers: Vec<_> = regions
-        .iter()
-        .filter_map(|&region| {
-            let plan = choose_attached(stages, renderer, region, attachment).ok()?;
-            if obstacles
-                .iter()
-                .any(|obstacle| intersects(*obstacle, plan.bounds))
-            {
-                return None;
-            }
-            Some((region, (cross(plan.bounds) - reference).abs()))
-        })
-        .collect();
-    offers.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
-    offers.into_iter().map(|(region, _)| region).collect()
-}
-
-/// A stage and a declared candidate, each with its index.
-type Pair<'s, S> = ((usize, &'s S), (usize, AnchorCandidate));
-
-/// Every stage with every declared candidate, in the order the attachment's
-/// preference gives.
-fn pairs<'s, S>(stages: &'s [S], attachment: &Attachment) -> Vec<Pair<'s, S>> {
-    let mut pairs = Vec::new();
-    match attachment.preference {
-        PlacementPreference::RepresentationFirst => {
-            for stage in stages.iter().enumerate() {
-                for (index, &candidate) in attachment.candidates.iter().enumerate() {
-                    pairs.push((stage, (index, candidate)));
-                }
-            }
-        }
-        PlacementPreference::AnchorFirst => {
-            for (index, &candidate) in attachment.candidates.iter().enumerate() {
-                for stage in stages.iter().enumerate() {
-                    pairs.push((stage, (index, candidate)));
-                }
-            }
-        }
-    }
-    pairs
-}
-/// Every information card is placed by one rule, whatever its source declared:
-/// flush with the control (no gap), centred on it along the attached side,
-/// and shifted only as far as needed to stay inside the window.
-fn single_attachment(attachment: &Attachment, declared: AnchorCandidate) -> Attachment {
-    let placed = AnchorCandidate::new(declared.side, Alignment::CenterBounded);
-    let mut a = Attachment::new(attachment.anchor, vec![placed]);
-    a.surface_insets = attachment.surface_insets;
-    if attachment.fill_width {
-        a.fill_width()
-    } else {
-        a
-    }
-}
-
-/// A surface holding the source (a menu round its row) is an obstacle to a
-/// card only beyond the source's own edge on the card's side: the margin
-/// between the control and its surface's edge is where a flush card sits.
-/// `side` is the side of the source the card is on.
-fn flush_obstacles(obstacles: &[Rectangle], attachment: &Attachment, side: Side) -> Vec<Rectangle> {
-    let anchor = attachment.anchor;
-    let contains = |o: &Rectangle| {
-        o.x <= anchor.x
-            && o.y <= anchor.y
-            && o.x + o.width >= anchor.x + anchor.width
-            && o.y + o.height >= anchor.y + anchor.height
-    };
-    obstacles
-        .iter()
-        .map(|&o| {
-            if !contains(&o) {
-                return o;
-            }
-            let mut o = o;
-            match side {
-                Side::Left => {
-                    o.width -= anchor.x - o.x;
-                    o.x = anchor.x;
-                }
-                Side::Right => o.width = anchor.x + anchor.width - o.x,
-                Side::Above => {
-                    o.height -= anchor.y - o.y;
-                    o.y = anchor.y;
-                }
-                Side::Below => o.height = anchor.y + anchor.height - o.y,
-            }
-            o
-        })
-        .collect()
-}
-
+/// Whether `a` and `b` overlap with an area: the engine's
+/// (`household_layout::hover::intersects`), on iced's rectangles.
+#[cfg(test)]
 fn intersects(a: Rectangle, b: Rectangle) -> bool {
-    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
-}
-
-// Empty rectangles are bounded by window or obstacle edges. Enumerating
-// edge pairs also admits clear space beside a short panel, not just full strips.
-fn regions(window: Rectangle, obstacles: &[Rectangle]) -> Vec<Rectangle> {
-    if !window.x.is_finite()
-        || !window.y.is_finite()
-        || !window.width.is_finite()
-        || !window.height.is_finite()
-        || window.width <= 0.0
-        || window.height <= 0.0
-    {
-        return Vec::new();
-    }
-    let mut xs = vec![window.x, window.x + window.width];
-    let mut ys = vec![window.y, window.y + window.height];
-    for o in obstacles.iter().filter_map(|o| o.intersection(&window)) {
-        xs.extend([o.x, o.x + o.width]);
-        ys.extend([o.y, o.y + o.height]);
-    }
-    for axis in [&mut xs, &mut ys] {
-        axis.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-        axis.dedup();
-    }
-    let mut result = Vec::new();
-    let vertical = spans(&ys);
-    for (x, right) in spans(&xs) {
-        for &(y, bottom) in &vertical {
-            let r = Rectangle {
-                x,
-                y,
-                width: right - x,
-                height: bottom - y,
-            };
-            if !obstacles.iter().any(|o| intersects(*o, r)) {
-                result.push(r);
-            }
-        }
-    }
-    result.sort_by(|a, b| {
-        (b.width * b.height)
-            .partial_cmp(&(a.width * a.height))
-            .unwrap_or(Ordering::Equal)
-    });
-    result
-}
-
-/// Every edge paired with each later edge on one axis, in order: the spans a
-/// clear rectangle can take on that axis.
-fn spans(edges: &[f32]) -> Vec<(f32, f32)> {
-    let mut spans = Vec::new();
-    let mut rest = edges;
-    while let Some((&start, later)) = rest.split_first() {
-        spans.extend(later.iter().map(|&end| (start, end)));
-        rest = later;
-    }
-    spans
+    household_layout::hover::intersects(core_rect(a), core_rect(b))
 }
 
 #[cfg(test)]

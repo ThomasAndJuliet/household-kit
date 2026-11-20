@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Sizes and points in `f32`, as the native geometry has them, and the
-//! checks every size passes before the engine uses it.
+//! Sizes, points and rectangles in `f32`, as the native geometry has them,
+//! and the checks every size passes before the engine uses it.
 //!
 //! These are the core's own types, with the fields a toolkit's have, so
 //! that nothing here names a toolkit. A toolkit layer converts at its edge
-//! (household-widgets converts iced's `Size` and its `MeasuredSize`).
+//! (household-widgets converts iced's `Size`, its `MeasuredSize` and iced's
+//! `Rectangle`).
 
 use crate::AllocationError;
 
@@ -38,6 +39,70 @@ pub struct Point {
 impl Point {
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
+    }
+}
+
+/// A rectangle: its top left corner (`x`, `y`) and its size. Placing a
+/// popup or a hover card is geometry over rectangles: the window, the
+/// anchor, the region a candidate offers and the bounds placed in it
+/// (`attach`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rectangle {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Rectangle {
+    pub const fn new(position: Point, size: Size) -> Self {
+        Self {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+        }
+    }
+
+    /// A rectangle of `size` at the origin.
+    pub const fn with_size(size: Size) -> Self {
+        Self::new(Point::new(0.0, 0.0), size)
+    }
+
+    /// Its top left corner.
+    pub fn position(self) -> Point {
+        Point::new(self.x, self.y)
+    }
+
+    /// Its width and height.
+    pub fn size(self) -> Size {
+        Size::new(self.width, self.height)
+    }
+
+    /// Where it overlaps `other`, if they overlap with an area: none when
+    /// they only touch along an edge or at a corner. The arithmetic is the
+    /// toolkit's (iced's `Rectangle::intersection`), so a host's answers
+    /// are the same either way.
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+
+        let lower_right_x = (self.x + self.width).min(other.x + other.width);
+        let lower_right_y = (self.y + self.height).min(other.y + other.height);
+
+        let width = lower_right_x - x;
+        let height = lower_right_y - y;
+
+        if width > 0.0 && height > 0.0 {
+            Some(Self {
+                x,
+                y,
+                width,
+                height,
+            })
+        } else {
+            None
+        }
     }
 }
 

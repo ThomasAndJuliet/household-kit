@@ -65,10 +65,7 @@ pub use presentation::{
 mod attached;
 #[path = "layout_hover.rs"]
 mod hover;
-pub use attached::{
-    Alignment, AnchorCandidate, AttachedPlan, Attachment, PlacementPreference, Side,
-    choose_attached, commit_attached,
-};
+pub use attached::{AttachedPlan, Attachment, choose_attached, commit_attached};
 pub(crate) use attached::{
     ChainCard, ChainFailure, RetainedGeometry, choose_attached_avoiding, choose_attached_chain,
     commit_attached_retaining, commit_attached_retaining_avoiding,
@@ -82,7 +79,10 @@ pub(crate) use hover::{HoverRetained, commit_hover_retaining};
 // paths; the rest of this file converts iced's `Size` to and from the
 // core's at the edge, and the arithmetic is the core's, written once.
 pub(crate) use household_layout::FIT_EPSILON;
-pub use household_layout::{AllocationError, Arrangement, Level, WidthCapacity, allocate_width};
+pub use household_layout::{
+    Alignment, AllocationError, AnchorCandidate, Arrangement, Level, PlacementPreference, Side,
+    WidthCapacity, allocate_width,
+};
 use household_layout::{Host, Kind, LeafHeight, Measured, Offer, is_amount};
 
 /// Query representations without retaining the result of any rejected query.
@@ -139,6 +139,45 @@ fn core_size(size: Size) -> household_layout::Size {
 
 fn toolkit_size(size: household_layout::Size) -> Size {
     Size::new(size.width, size.height)
+}
+
+// Placing a popup or a hover card is the core's, over its own rectangles and
+// padding, which have iced's fields; these convert at the edge, number for
+// number.
+fn core_rect(rect: Rectangle) -> household_layout::Rectangle {
+    household_layout::Rectangle {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+fn toolkit_rect(rect: household_layout::Rectangle) -> Rectangle {
+    Rectangle {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+fn core_padding(padding: cosmic::iced::Padding) -> household_layout::Padding {
+    household_layout::Padding {
+        top: padding.top,
+        right: padding.right,
+        bottom: padding.bottom,
+        left: padding.left,
+    }
+}
+
+fn toolkit_padding(padding: household_layout::Padding) -> cosmic::iced::Padding {
+    cosmic::iced::Padding {
+        top: padding.top,
+        right: padding.right,
+        bottom: padding.bottom,
+        left: padding.left,
+    }
 }
 
 /// Geometry proposed by a pure query. No widget state is retained here.
@@ -1146,37 +1185,64 @@ pub struct StagePlan {
     pub geometry: GeometryPlan,
 }
 
-/// No declared stage supplied complete fitting geometry. Nothing is implicitly
-/// hidden, clipped, scrolled or promoted to a stronger undeclared level.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct NoFit {
-    pub attempted: usize,
+// The engine reads the widgets' stages as they are: a level and the part
+// the child is a handle on. So it chooses over the caller's own slice, with
+// no copy of a child.
+impl<'a, Message> household_layout::AsStage<'a, Native<'a, Message>> for Stage<'a, Message> {
+    fn level(&self) -> Level {
+        self.level
+    }
+
+    fn part(&self) -> &Part<'a, Message> {
+        &self.content.part
+    }
 }
 
+impl StagePlan {
+    /// The engine's choice of a stage among `stages`, as the interface's: its
+    /// plan converted (`GeometryPlan::from_core`) and bound to the chosen
+    /// stage's child at its level (`Child::bind_geometry`), which is what
+    /// `Child::query_at` returns for that stage.
+    ///
+    /// Only the plan chosen is bound. The engine chooses with plans it has
+    /// not bound (`household_layout::Child::query_at`), so a stage or a
+    /// placement that is tried and not chosen is never converted or bound,
+    /// and a report callback (`Child::report_information`) runs only for the
+    /// plan returned: where the engine's choosing went through
+    /// `Child::query_at`, it ran for every plan that was made. A report
+    /// callback must be pure, so what is reported is the same.
+    ///
+    /// The engine chose from `stages`, so the stage is there. Were it not,
+    /// the plan is left unbound, and `render` refuses an unbound plan.
+    fn from_core<'a, Message: 'a>(
+        stages: &[Stage<'a, Message>],
+        chosen: &household_layout::StagePlan,
+    ) -> Self {
+        let geometry = GeometryPlan::from_core(&chosen.plan);
+        Self {
+            stage_index: chosen.stage_index,
+            level: chosen.level,
+            geometry: match stages.get(chosen.stage_index) {
+                Some(stage) => stage.content.bind_geometry(chosen.level, geometry),
+                None => geometry,
+            },
+        }
+    }
+}
+
+// No declared stage supplied complete fitting geometry: the engine's answer,
+// re-exported at the interface's path.
+pub use household_layout::NoFit;
+
+/// The first declared stage that fits in `available`: the engine's first fit
+/// (`household_layout::choose_stage`), its plan bound to the stage's child.
 pub fn choose_stage<'a, Message: 'a>(
     stages: &[Stage<'a, Message>],
     renderer: &Renderer,
     available: Size,
 ) -> Result<StagePlan, NoFit> {
-    choose_stage_inner(stages, renderer, available)
-}
-fn choose_stage_inner<'a, Message: 'a>(
-    stages: &[Stage<'a, Message>],
-    renderer: &Renderer,
-    available: Size,
-) -> Result<StagePlan, NoFit> {
-    for (stage_index, stage) in stages.iter().enumerate() {
-        if let Ok(geometry) = stage.content.query_at(stage.level, renderer, available) {
-            return Ok(StagePlan {
-                stage_index,
-                level: stage.level,
-                geometry,
-            });
-        }
-    }
-    Err(NoFit {
-        attempted: stages.len(),
-    })
+    household_layout::choose_stage(stages, renderer, core_size(available))
+        .map(|chosen| StagePlan::from_core(stages, &chosen))
 }
 
 pub fn stages<'a, Message: 'a>(stages: Vec<Stage<'a, Message>>) -> ResponsiveLevels<'a, Message> {

@@ -105,6 +105,18 @@
 //! more (the widgets bind every node to the part that made it) makes its own
 //! plan from this one.
 //!
+//! **Stages and attached surfaces.** A host rarely asks for one plan: it
+//! declares stages, (level, part) pairs in the order it prefers them, and
+//! keeps the first that fits ([`choose_stage`]). A popup or a card attached
+//! to a control chooses its stage together with where it goes: a side of
+//! the control and an alignment, each of which offers a real region of the
+//! window before anything is measured, so that what fits is placed where
+//! it was measured for and is never moved back into the window afterwards
+//! ([`choose_attached`]). A hover card prefers the regions clear of the
+//! surfaces already open, and covers them only when nothing else fits
+//! ([`choose_hover`]). Committing the choice (drawing it, and checking what
+//! is drawn agrees with the plan) is the host's.
+//!
 //! # A worked example
 //!
 //! A host whose leaves are boxes of a fixed size and paragraphs that are
@@ -201,10 +213,21 @@
 //! - [`level`]: [`Level`], how much a part may compromise, and
 //!   [`Arrangement`], how a part sets out its immediate parts (row, column
 //!   or wrap).
-//! - [`size`]: [`Size`], [`Point`] and [`Measured`] (a preferred and a
-//!   useful minimum size), and the checks a size passes before the engine
-//!   uses it ([`finite_size`], [`valid_available`],
+//! - [`size`]: [`Size`], [`Point`], [`Rectangle`] and [`Measured`] (a
+//!   preferred and a useful minimum size), and the checks a size passes
+//!   before the engine uses it ([`finite_size`], [`valid_available`],
 //!   [`validate_measurement`]).
+//! - [`stage`]: a host's stages as the engine reads them ([`AsStage`],
+//!   with the engine's own [`Stage`]), the first that fits
+//!   ([`choose_stage`], [`StagePlan`]), and [`NoFit`] when none does.
+//! - [`attach`]: placing a popup against an anchor in a window: the
+//!   [`Attachment`] and its candidates ([`Side`], [`Alignment`],
+//!   [`AnchorCandidate`], [`PlacementPreference`]), the placement chosen
+//!   ([`AttachedPlan`]), and the scheduler of a chain of surfaces
+//!   ([`choose_attached_chain`]). Its documentation says how placement
+//!   works, with a worked example.
+//! - [`hover`]: placing a hover card, clear of the surfaces already open
+//!   where it can be ([`choose_hover`], [`place_hover`]).
 //! - [`allocation`]: [`WidthCapacity`] and the sharing of a length among
 //!   parts ([`allocate_width`], [`allocate_with_growth`], [`allocate_one`]),
 //!   its errors ([`AllocationError`]) and the tolerance of every fit
@@ -250,13 +273,16 @@
 
 pub mod allocation;
 mod arrange;
+pub mod attach;
 pub mod frame;
 pub mod host;
+pub mod hover;
 pub mod level;
 mod measure;
 pub mod part;
 pub mod plan;
 pub mod size;
+pub mod stage;
 
 // The earlier port of the apps' engine, which the charts still lay out
 // with. It is not repaired, only deleted once the charts move onto the core,
@@ -294,11 +320,20 @@ pub mod rules;
 pub use allocation::{
     AllocationError, FIT_EPSILON, WidthCapacity, allocate_one, allocate_width, allocate_with_growth,
 };
+pub use attach::{
+    Alignment, AnchorCandidate, AttachedPlan, Attachment, ChainCard, ChainFailure, ChainSelection,
+    PlacementPreference, Side, choose_attached, choose_attached_avoiding, choose_attached_chain,
+    choose_attached_excluding,
+};
 pub use frame::{Frame, Padding};
 pub use host::{Host, Offer};
+pub use hover::{HoverChoice, choose_hover, place_hover};
 pub use level::{Arrangement, Level};
 pub use part::{
     Child, Composition, Fixed, Forms, Kind, Leaf, LeafHeight, MinimumQuery, Sharing, is_amount,
 };
 pub use plan::{Placed, Plan};
-pub use size::{Measured, Point, Size, finite_size, valid_available, validate_measurement};
+pub use size::{
+    Measured, Point, Rectangle, Size, finite_size, valid_available, validate_measurement,
+};
+pub use stage::{AsStage, NoFit, Stage, StagePlan, choose_stage};
