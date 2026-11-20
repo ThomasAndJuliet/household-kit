@@ -425,8 +425,8 @@ struct Leaf<'a, Message> {
 ///
 /// A column shares a shortage of height only among the parts whose plans
 /// record a floor below their height, which only a viewport's plan, or a
-/// plan containing one, does (`Composition::plan`); a wrap does the same
-/// between its rows.
+/// plan containing one, does (`Composition::plan_column`); a wrap does the
+/// same between its rows (`Composition::plan_wrap`).
 ///
 /// The public name of the declaration stays `scroll_child`
 /// (`scroll_child_with_minimum`), because that is how the apps declare their
@@ -1030,6 +1030,16 @@ impl<'a, Message: 'a> Child<'a, Message> {
         }
     }
 
+    /// This child's capacity for width, from its measurement at a level: its
+    /// preferred and minimum widths, and its weight.
+    fn width_capacity(&self, measured: MeasuredSize) -> WidthCapacity {
+        WidthCapacity {
+            preferred: measured.preferred.width,
+            minimum: measured.minimum.width,
+            weight: self.weight,
+        }
+    }
+
     /// Allocate first, then measure native content at its allocated width with
     /// unbounded height. Thus a clipped height can never certify a fit. A useful
     /// minimum narrower than intrinsic width must be explicitly declared.
@@ -1047,15 +1057,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         }
         let measured = self.query(level, renderer);
         validate_measurement(measured)?;
-        let allocated = allocate_one(
-            available.width,
-            WidthCapacity {
-                preferred: measured.preferred.width,
-                minimum: measured.minimum.width,
-                weight: self.weight,
-            },
-            self.grow,
-        )?;
+        let allocated = allocate_one(available.width, self.width_capacity(measured), self.grow)?;
         let width = if self.has_composition(level) && available.width.is_finite() {
             available.width
         } else {
@@ -1749,7 +1751,30 @@ fn allocate_one(
         .ok_or(AllocationError::InvalidInput)
 }
 
+/// A visible child of a composition, as planning carries it: its index among
+/// the declared children (which its placement records), the child, and its
+/// measurement at the level.
+type Visible<'c, 'a, Message> = (usize, &'c Child<'a, Message>, MeasuredSize);
+
+/// A planned row's height (its tallest placement's) and its floor of height
+/// (its highest placement floor): what a wrap shares a shortage of height
+/// with between its rows.
+struct RowExtent {
+    height: f32,
+    minimum_height: f32,
+}
+
 impl<'a, Message: 'a> Composition<'a, Message> {
+    /// What the arrangement measures from its visible children, each
+    /// measured once at the level. A child's minimum width here is the width
+    /// it cannot go below: its minimum, or its preferred width when its
+    /// weight is zero. Spacing goes between visible children only.
+    ///
+    /// One function with an arm per arrangement, not three: the arms share
+    /// the measured children and the gap, and each arm is whole on its own.
+    /// The row and the wrap prefer the same size; they differ in the
+    /// minimum width, which for a row counts every gap and for a wrap counts
+    /// none.
     fn measure(&self, level: Level, renderer: &Renderer) -> MeasuredSize {
         let measured: Vec<_> = self
             .children
@@ -1758,44 +1783,53 @@ impl<'a, Message: 'a> Composition<'a, Message> {
             .map(|child| (child, child.query(level, renderer)))
             .collect();
         let gap = self.spacing * measured.len().saturating_sub(1) as f32;
+        let floor = |child: &Child<'a, Message>, size: &MeasuredSize| {
+            if child.weight == 0.0 {
+                size.preferred.width
+            } else {
+                size.minimum.width
+            }
+        };
         let mut result = MeasuredSize {
             preferred: Size::ZERO,
             minimum: Size::ZERO,
         };
-        for (child, size) in &measured {
-            let minimum_width = if child.weight == 0.0 {
-                size.preferred.width
-            } else {
-                size.minimum.width
-            };
-            match self.arrangement {
-                Arrangement::Row | Arrangement::Wrap => {
+        match self.arrangement {
+            // Side by side on one line: the widths and the gaps add up, in
+            // the minimum as in the preferred; the height is the tallest.
+            Arrangement::Row => {
+                for (child, size) in &measured {
                     result.preferred.width += size.preferred.width;
                     result.preferred.height = result.preferred.height.max(size.preferred.height);
-                    if self.arrangement == Arrangement::Row {
-                        result.minimum.width += minimum_width;
-                        result.minimum.height = result.minimum.height.max(size.minimum.height);
-                    } else {
-                        result.minimum.width = result.minimum.width.max(minimum_width);
-                        // A height bound, not the height at that width. plan() measures rows.
-                        result.minimum.height = result.minimum.height.max(size.minimum.height);
-                    }
+                    result.minimum.width += floor(child, size);
+                    result.minimum.height = result.minimum.height.max(size.minimum.height);
                 }
-                Arrangement::Column => {
-                    result.preferred.width = result.preferred.width.max(size.preferred.width);
-                    result.minimum.width = result.minimum.width.max(minimum_width);
-                    result.preferred.height += size.preferred.height;
-                    result.minimum.height += size.minimum.height;
-                }
-            }
-        }
-        match self.arrangement {
-            Arrangement::Row => {
                 result.preferred.width += gap;
                 result.minimum.width += gap;
             }
-            Arrangement::Wrap => result.preferred.width += gap,
+            // Preferred on one line, as a row. At its minimum width every
+            // child has a row of its own, so that width is the widest floor,
+            // with no gap. The minimum height is a bound, the tallest child's
+            // floor, not the height of the rows at that width: `plan_wrap`
+            // measures rows.
+            Arrangement::Wrap => {
+                for (child, size) in &measured {
+                    result.preferred.width += size.preferred.width;
+                    result.preferred.height = result.preferred.height.max(size.preferred.height);
+                    result.minimum.width = result.minimum.width.max(floor(child, size));
+                    result.minimum.height = result.minimum.height.max(size.minimum.height);
+                }
+                result.preferred.width += gap;
+            }
+            // Stacked: the width is the widest; the heights and the gaps add
+            // up, in the minimum as in the preferred.
             Arrangement::Column => {
+                for (child, size) in &measured {
+                    result.preferred.width = result.preferred.width.max(size.preferred.width);
+                    result.minimum.width = result.minimum.width.max(floor(child, size));
+                    result.preferred.height += size.preferred.height;
+                    result.minimum.height += size.minimum.height;
+                }
                 result.preferred.height += gap;
                 result.minimum.height += gap;
             }
@@ -1803,6 +1837,8 @@ impl<'a, Message: 'a> Composition<'a, Message> {
         result
     }
 
+    /// Plan the arrangement in `width` × `height`. Each arrangement has a
+    /// function of its own, over the helpers below for what they share.
     fn plan(
         &self,
         level: Level,
@@ -1810,89 +1846,145 @@ impl<'a, Message: 'a> Composition<'a, Message> {
         width: f32,
         height: f32,
     ) -> Result<GeometryPlan, AllocationError> {
-        // Each visible child is carried with its index among the declared
-        // children (which its placement records) and its measurement.
-        let active: Vec<_> = self
+        match self.arrangement {
+            Arrangement::Column => self.plan_column(level, renderer, width, height),
+            Arrangement::Row => self.plan_row(level, renderer, width, height),
+            Arrangement::Wrap => self.plan_wrap(level, renderer, width, height),
+        }
+    }
+
+    /// The visible children, in their declared order, each with its index
+    /// among the declared children and its measurement at the level. Every
+    /// one is measured first, and then each measurement is checked in order,
+    /// so the first that is not a valid size fails the plan with
+    /// `InvalidInput` before anything is allocated.
+    fn measure_visible(
+        &self,
+        level: Level,
+        renderer: &Renderer,
+    ) -> Result<Vec<Visible<'_, 'a, Message>>, AllocationError> {
+        let visible: Vec<_> = self
             .children
             .iter()
             .enumerate()
             .filter(|(_, child)| !child.is_hidden(level))
             .map(|(index, child)| (index, child, child.query(level, renderer)))
             .collect();
-        for (_, _, size) in &active {
+        for (_, _, size) in &visible {
             validate_measurement(*size)?;
         }
-        let capacity = |child: &Child<'a, Message>, measured: MeasuredSize| WidthCapacity {
-            preferred: measured.preferred.width,
-            minimum: measured.minimum.width,
-            weight: child.weight,
-        };
+        Ok(visible)
+    }
+
+    /// A column stacks its visible children from the top, with the spacing
+    /// between them, each at the left.
+    ///
+    /// The gaps come first: wider than the room's height, they fail the
+    /// column before anything is planned. Then width: each child is
+    /// allocated the column's whole width on its own, by its capacity and
+    /// its growth (`allocate_one`), and is planned at that width with
+    /// unbounded height. Its plan therefore gives the height it needs at
+    /// that width, and its floor of height, which is below its height only
+    /// for a viewport or a plan that holds one (`LeafHeight`).
+    ///
+    /// Then height: the room's height less the gaps is shared among the
+    /// children as a length with growth (`allocate_with_growth`). Each child
+    /// offers its planned height down to its floor at its own weight, so a
+    /// weight of zero protects a preferred height here as it does a width,
+    /// and takes a share of a surplus by its `grow_height`. An ordinary
+    /// child's height is its floor, so a shortage falls on the viewports
+    /// alone, and with none to take it the column does not fit. A child
+    /// given a height other than the one it was planned at is planned again
+    /// at it. The column is as wide as its widest child, and its floor of
+    /// height is its gaps and every child's floor.
+    fn plan_column(
+        &self,
+        level: Level,
+        renderer: &Renderer,
+        width: f32,
+        height: f32,
+    ) -> Result<GeometryPlan, AllocationError> {
+        let visible = self.measure_visible(level, renderer)?;
         let mut result = GeometryPlan::leaf(Size::ZERO);
-        if self.arrangement == Arrangement::Column {
-            let gap = self.spacing * active.len().saturating_sub(1) as f32;
-            if gap > height {
-                return Err(AllocationError::NoFit {
-                    required: gap,
-                    available: height,
-                });
-            }
-            let mut proposals = Vec::new();
-            for (index, child, measured) in active {
-                let allocated = allocate_one(width, capacity(child, measured), child.grow)?;
-                let geometry = child.plan_width(level, renderer, allocated, f32::INFINITY)?;
-                proposals.push((index, child, allocated, geometry));
-            }
-            // Width-dependent ordinary heights are hard floors. Only explicitly
-            // declared viewports (possibly nested) offer vertical capacity
-            // (`LeafHeight`).
-            let heights = allocate_with_growth(
-                height - gap,
-                &proposals
-                    .iter()
-                    .map(|(_, child, _, plan)| WidthCapacity {
-                        preferred: plan.size.height,
-                        minimum: plan.minimum_height,
-                        weight: child.weight,
-                    })
-                    .collect::<Vec<_>>(),
-                &proposals
-                    .iter()
-                    .map(|(_, child, _, _)| child.grow_height)
-                    .collect::<Vec<_>>(),
-            )?;
-            result.minimum_height = gap;
-            for ((index, child, allocated, proposal), allocated_height) in
-                proposals.into_iter().zip(heights)
-            {
-                let geometry = if (allocated_height - proposal.size.height).abs() > FIT_EPSILON {
-                    child.plan_width(level, renderer, allocated, allocated_height)?
-                } else {
-                    proposal
-                };
-                if !result.children.is_empty() {
-                    result.size.height += self.spacing;
-                }
-                let position = cosmic::iced::Point::new(0.0, result.size.height);
-                result.size.height += geometry.size.height;
-                result.size.width = result.size.width.max(geometry.size.width);
-                result.minimum_height += geometry.minimum_height;
-                result.children.push(Placement {
-                    index,
-                    position,
-                    geometry,
-                });
-            }
-            return Ok(result);
+        let gap = self.spacing * visible.len().saturating_sub(1) as f32;
+        if gap > height {
+            return Err(AllocationError::NoFit {
+                required: gap,
+                available: height,
+            });
         }
-        // Pack using useful minima, including zero-weight protection. Each new
-        // row gets a fresh allocation from that stage's preferred dimensions.
-        // `row` is the row being filled, with `used` its width so far; it
-        // joins `rows` when the next child does not fit beside it, and after
-        // the last child. A row is never empty in `rows`.
-        let mut rows: Vec<Vec<(usize, &Child<'a, Message>, MeasuredSize)>> = Vec::new();
-        let mut row: Vec<(usize, &Child<'a, Message>, MeasuredSize)> = Vec::new();
-        let mut used = 0.0;
-        for (index, child, measured) in active {
+        let mut proposals = Vec::new();
+        for (index, child, measured) in visible {
+            let allocated = allocate_one(width, child.width_capacity(measured), child.grow)?;
+            let geometry = child.plan_width(level, renderer, allocated, f32::INFINITY)?;
+            proposals.push((index, child, allocated, geometry));
+        }
+        let heights = allocate_with_growth(
+            height - gap,
+            &proposals
+                .iter()
+                .map(|(_, child, _, plan)| WidthCapacity {
+                    preferred: plan.size.height,
+                    minimum: plan.minimum_height,
+                    weight: child.weight,
+                })
+                .collect::<Vec<_>>(),
+            &proposals
+                .iter()
+                .map(|(_, child, _, _)| child.grow_height)
+                .collect::<Vec<_>>(),
+        )?;
+        result.minimum_height = gap;
+        for ((index, child, allocated, proposal), allocated_height) in
+            proposals.into_iter().zip(heights)
+        {
+            let geometry = if (allocated_height - proposal.size.height).abs() > FIT_EPSILON {
+                child.plan_width(level, renderer, allocated, allocated_height)?
+            } else {
+                proposal
+            };
+            if !result.children.is_empty() {
+                result.size.height += self.spacing;
+            }
+            let position = cosmic::iced::Point::new(0.0, result.size.height);
+            result.size.height += geometry.size.height;
+            result.size.width = result.size.width.max(geometry.size.width);
+            result.minimum_height += geometry.minimum_height;
+            result.children.push(Placement {
+                index,
+                position,
+                geometry,
+            });
+        }
+        Ok(result)
+    }
+
+    /// A row sets its visible children side by side on one line from the
+    /// left, with the spacing between them, each centred on the row's
+    /// height or, for `row_child_top`, aligned to its top.
+    ///
+    /// Width first. A child's floor is the width it cannot go below (its
+    /// minimum width, or its preferred width when its weight is zero); a
+    /// floor wider than the row fails it, child by child in order, before
+    /// anything is allocated. Then the row's width less its gaps is shared
+    /// among the children by their capacities: a shortage by weight, a
+    /// surplus by growth (`place_row`).
+    ///
+    /// Then height: each child is planned at its width within the room's
+    /// height, so a viewport takes at once what the row has, and a child
+    /// taller than the row fails it there. This is where a row and a wrap
+    /// differ: a row has one line, so the room's height is the line's, and
+    /// there is no shortage left to share afterwards. The row is as high as
+    /// its tallest child, and its floor of height is its highest floor.
+    fn plan_row(
+        &self,
+        level: Level,
+        renderer: &Renderer,
+        width: f32,
+        height: f32,
+    ) -> Result<GeometryPlan, AllocationError> {
+        let visible = self.measure_visible(level, renderer)?;
+        for (_, child, measured) in &visible {
             let minimum = if child.weight == 0.0 {
                 measured.preferred.width
             } else {
@@ -1904,11 +1996,68 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                     available: width,
                 });
             }
-            let extra = if row.is_empty() { 0.0 } else { self.spacing };
-            if self.arrangement == Arrangement::Wrap
-                && !row.is_empty()
-                && used + extra + minimum > width + FIT_EPSILON
-            {
+        }
+        let mut result = GeometryPlan::leaf(Size::ZERO);
+        if !visible.is_empty() {
+            self.place_row(level, renderer, visible, width, height, &mut result)?;
+            // The spacing `place_row` adds after a row.
+            result.size.height -= self.spacing;
+            result.minimum_height -= self.spacing;
+        }
+        Ok(result)
+    }
+
+    /// A wrap fills rows from the left and starts a new row below when the
+    /// next child does not fit beside the ones before it, with the spacing
+    /// between children and between rows. A wrap is never top-aligned (only
+    /// `row_child_top` declares that), so its children are centred on their
+    /// row's height.
+    ///
+    /// Width first. The children are packed into rows in order by their
+    /// floors, the width each cannot go below (its minimum width, or its
+    /// preferred width when its weight is zero): a child whose floor, after
+    /// a gap, would take its row past the room starts the next row, and a
+    /// child whose floor alone is wider than the room fails the wrap. Each
+    /// row is then given the whole width afresh and shared among its
+    /// children as a row's is (`place_row`).
+    ///
+    /// Then height, in a second pass. A wrap's children are planned with
+    /// unbounded height, unlike a row's, because no row's height is known
+    /// until every row is planned. If the rows stacked are taller than the
+    /// room, the wrap is shared as a column of atomic rows: the room less the
+    /// gaps between rows is shared among the rows, each offering its height
+    /// down to its floor (`RowExtent`) at weight 1 and with no growth, so a
+    /// shortage falls on the rows that hold a viewport. A placement taller
+    /// than its row's new height is planned again at that height, and each
+    /// placement is centred on it. The plan's floor of height stays the one
+    /// the rows were first planned with.
+    fn plan_wrap(
+        &self,
+        level: Level,
+        renderer: &Renderer,
+        width: f32,
+        height: f32,
+    ) -> Result<GeometryPlan, AllocationError> {
+        let visible = self.measure_visible(level, renderer)?;
+        // `row` is the row being filled, with `used` its width so far; it
+        // joins `rows` when the next child does not fit beside it, and after
+        // the last child. A row is never empty in `rows`.
+        let mut rows: Vec<Vec<Visible<'_, 'a, Message>>> = Vec::new();
+        let mut row: Vec<Visible<'_, 'a, Message>> = Vec::new();
+        let mut used = 0.0;
+        for (index, child, measured) in visible {
+            let minimum = if child.weight == 0.0 {
+                measured.preferred.width
+            } else {
+                measured.minimum.width
+            };
+            if minimum > width + FIT_EPSILON {
+                return Err(AllocationError::NoFit {
+                    required: minimum,
+                    available: width,
+                });
+            }
+            if !row.is_empty() && used + self.spacing + minimum > width + FIT_EPSILON {
                 rows.push(std::mem::take(&mut row));
                 used = 0.0;
             }
@@ -1922,76 +2071,25 @@ impl<'a, Message: 'a> Composition<'a, Message> {
             rows.push(row);
         }
         // The child each placement was planned from, in the placements'
-        // order, and each row's height and floor as a capacity: a wrap shares
-        // a shortage of height between its rows with these, below.
+        // order, and each row's height and floor, for the second pass.
+        let mut result = GeometryPlan::leaf(Size::ZERO);
         let mut planned: Vec<&Child<'a, Message>> = Vec::new();
         let mut row_extents: Vec<WidthCapacity> = Vec::new();
         for row in rows {
-            let gap = self.spacing * row.len().saturating_sub(1) as f32;
-            if gap > width {
-                return Err(AllocationError::NoFit {
-                    required: gap,
-                    available: width,
-                });
-            }
-            let capacities: Vec<_> = row
-                .iter()
-                .map(|(_, child, measured)| capacity(child, *measured))
-                .collect();
-            let grows: Vec<_> = row.iter().map(|(_, child, _)| child.grow).collect();
-            let widths = allocate_with_growth(width - gap, &capacities, &grows)?;
-            let start = result.children.len();
-            let mut row_width = 0.0;
-            let mut row_height: f32 = 0.0;
-            let mut row_minimum_height: f32 = 0.0;
-            for ((index, child, _), allocated) in row.into_iter().zip(widths) {
-                let geometry = child.plan_width(
-                    level,
-                    renderer,
-                    allocated,
-                    if self.arrangement == Arrangement::Row {
-                        height
-                    } else {
-                        f32::INFINITY
-                    },
-                )?;
-                if result.children.len() > start {
-                    row_width += self.spacing;
-                }
-                let position = cosmic::iced::Point::new(row_width, result.size.height);
-                row_width += geometry.size.width;
-                row_height = row_height.max(geometry.size.height);
-                row_minimum_height = row_minimum_height.max(geometry.minimum_height);
-                result.children.push(Placement {
-                    index,
-                    position,
-                    geometry,
-                });
-                planned.push(child);
-            }
-            // The row's placements are the ones pushed since `start`.
-            for placed in result.children.iter_mut().skip(start) {
-                if !self.top_aligned {
-                    placed.position.y += (row_height - placed.geometry.size.height) / 2.0;
-                }
-            }
+            planned.extend(row.iter().map(|(_, child, _)| *child));
+            let extent = self.place_row(level, renderer, row, width, f32::INFINITY, &mut result)?;
             row_extents.push(WidthCapacity {
-                preferred: row_height,
-                minimum: row_minimum_height,
+                preferred: extent.height,
+                minimum: extent.minimum_height,
                 weight: 1.0,
             });
-            result.rows.push((start..result.children.len()).collect());
-            result.size.width = result.size.width.max(row_width);
-            result.size.height += row_height + self.spacing;
-            result.minimum_height += row_minimum_height + self.spacing;
         }
         if !result.rows.is_empty() {
+            // The spacing `place_row` adds after the last row.
             result.size.height -= self.spacing;
             result.minimum_height -= self.spacing;
         }
-        // A wrap is a column of atomic rows. Share a vertical shortage only
-        // where those rows contain declared viewport capacity.
-        if self.arrangement == Arrangement::Wrap && result.size.height > height + FIT_EPSILON {
+        if result.size.height > height + FIT_EPSILON {
             let gap = self.spacing * result.rows.len().saturating_sub(1) as f32;
             if gap > height {
                 return Err(AllocationError::NoFit {
@@ -1999,10 +2097,8 @@ impl<'a, Message: 'a> Composition<'a, Message> {
                     available: height,
                 });
             }
-            // Each row offers its height (its tallest placement's) down to its
-            // floor (its highest placement floor), as recorded while the row
-            // was planned (`row_extents`); no placement's geometry has
-            // changed since.
+            // No placement's geometry has changed since `row_extents` was
+            // recorded.
             let heights =
                 allocate_with_growth(height - gap, &row_extents, &vec![0.0; row_extents.len()])?;
             let mut y = 0.0;
@@ -2027,6 +2123,79 @@ impl<'a, Message: 'a> Composition<'a, Message> {
             result.size.height = (y - self.spacing).max(0.0);
         }
         Ok(result)
+    }
+
+    /// Place one row of children (never empty) below the rows already in
+    /// `result`, as a row and each of a wrap's rows are placed.
+    ///
+    /// The row's gaps come first: wider than `width`, they fail it. The rest
+    /// of `width` is shared among the children by their capacities, a
+    /// shortage by weight and a surplus by growth (`allocate_with_growth`),
+    /// and each child is planned at its width within `offered_height` (the
+    /// caller says which height a row offers; see `plan_row` and
+    /// `plan_wrap`). The children are set side by side from the left, at the
+    /// top of the row, then each is moved down to the middle of the row's
+    /// height unless the composition is top-aligned.
+    ///
+    /// The row joins `result.rows` as the indices of its placements; the
+    /// plan is as wide as its widest row, and its height and floor of height
+    /// grow by the row's and by one spacing after it, which the caller takes
+    /// off after its last row. Returns the row's height and floor.
+    fn place_row(
+        &self,
+        level: Level,
+        renderer: &Renderer,
+        row: Vec<Visible<'_, 'a, Message>>,
+        width: f32,
+        offered_height: f32,
+        result: &mut GeometryPlan,
+    ) -> Result<RowExtent, AllocationError> {
+        let gap = self.spacing * row.len().saturating_sub(1) as f32;
+        if gap > width {
+            return Err(AllocationError::NoFit {
+                required: gap,
+                available: width,
+            });
+        }
+        let capacities: Vec<_> = row
+            .iter()
+            .map(|(_, child, measured)| child.width_capacity(*measured))
+            .collect();
+        let grows: Vec<_> = row.iter().map(|(_, child, _)| child.grow).collect();
+        let widths = allocate_with_growth(width - gap, &capacities, &grows)?;
+        let start = result.children.len();
+        let mut row_width = 0.0;
+        let mut row_height: f32 = 0.0;
+        let mut row_minimum_height: f32 = 0.0;
+        for ((index, child, _), allocated) in row.into_iter().zip(widths) {
+            let geometry = child.plan_width(level, renderer, allocated, offered_height)?;
+            if result.children.len() > start {
+                row_width += self.spacing;
+            }
+            let position = cosmic::iced::Point::new(row_width, result.size.height);
+            row_width += geometry.size.width;
+            row_height = row_height.max(geometry.size.height);
+            row_minimum_height = row_minimum_height.max(geometry.minimum_height);
+            result.children.push(Placement {
+                index,
+                position,
+                geometry,
+            });
+        }
+        // The row's placements are the ones pushed since `start`.
+        for placed in result.children.iter_mut().skip(start) {
+            if !self.top_aligned {
+                placed.position.y += (row_height - placed.geometry.size.height) / 2.0;
+            }
+        }
+        result.rows.push((start..result.children.len()).collect());
+        result.size.width = result.size.width.max(row_width);
+        result.size.height += row_height + self.spacing;
+        result.minimum_height += row_minimum_height + self.spacing;
+        Ok(RowExtent {
+            height: row_height,
+            minimum_height: row_minimum_height,
+        })
     }
 }
 
