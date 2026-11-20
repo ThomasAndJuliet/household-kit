@@ -56,11 +56,16 @@ pub struct PresentationFamily {
 }
 
 impl PresentationFamily {
-    pub fn new(default: Presentation, supported: Vec<Presentation>) -> Self {
-        assert!(
-            supported.contains(&default),
-            "family default must be supported"
-        );
+    /// The default is always supported. A caller who leaves it out of
+    /// `supported` gets a family that counts it as supported anyway, added
+    /// after the pairs it lists, so the invariant holds by construction: a
+    /// missing default is the caller's slip in writing the catalogue, never a
+    /// reason to take the app down, and it never makes the family refuse its
+    /// own default.
+    pub fn new(default: Presentation, mut supported: Vec<Presentation>) -> Self {
+        if !supported.contains(&default) {
+            supported.push(default);
+        }
         Self { default, supported }
     }
 

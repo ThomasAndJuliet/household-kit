@@ -322,7 +322,31 @@ struct Composition<'a, Message> {
     top_aligned: bool,
 }
 
-type Forms<'a, Message> = Rc<Vec<(Level, Child<'a, Message>)>>;
+/// A component family's forms (`forms`): the first form, which holds from
+/// `Preferred`, and the later ones, each from its threshold.
+///
+/// The first form is a field of its own, so the form selected at a level
+/// always exists: it is the last later form whose threshold the level has
+/// reached, or else the first. Forms built from thresholds that do not start
+/// at `Preferred` or do not strictly increase make an invalid child
+/// (`Child::invalid_unless`), which is never measured or planned, so the
+/// selection over such thresholds only decides where that child is hidden.
+struct Forms<'a, Message> {
+    first: Child<'a, Message>,
+    later: Vec<(Level, Child<'a, Message>)>,
+}
+
+impl<'a, Message> Forms<'a, Message> {
+    /// The form that stands for the family at `level`.
+    fn select(&self, level: Level) -> &Child<'a, Message> {
+        self.later
+            .iter()
+            .rev()
+            .find(|(threshold, _)| *threshold <= level)
+            .map_or(&self.first, |(_, form)| form)
+    }
+}
+
 type ViewFactory<'a, Message> = Rc<dyn Fn(Level) -> Element<'a, Message> + 'a>;
 type ViewMap<'a, Message> = Rc<dyn Fn(Element<'a, Message>) -> Element<'a, Message> + 'a>;
 type MinimumQuery<'a> = Rc<dyn Fn(Level, &Renderer) -> Size + 'a>;
@@ -353,7 +377,7 @@ enum Kind<'a, Message> {
     Leaf(Leaf<'a, Message>),
     Composition(Rc<Composition<'a, Message>>),
     Frame(Rc<Frame<'a, Message>>),
-    Forms(Forms<'a, Message>),
+    Forms(Rc<Forms<'a, Message>>),
 }
 
 /// A native view, and how it takes height.
@@ -572,10 +596,18 @@ pub struct Child<'a, Message> {
     grow_height: f32,
     reserve_width: bool,
     fixed: Fixed,
+    /// A builder was given a number it cannot use (`invalid_unless`).
+    invalid: bool,
     preparation: PreparedId,
     presentation: Option<Presentation>,
     information: Option<SourceInformation<'a>>,
     regions: Vec<Region>,
+}
+
+/// Whether a number a caller gives as a length, a weight or a growth factor
+/// can be used: finite and not negative.
+fn is_amount(value: f32) -> bool {
+    value.is_finite() && value >= 0.0
 }
 
 impl<Message> Clone for Child<'_, Message> {
@@ -590,6 +622,7 @@ impl<Message> Clone for Child<'_, Message> {
             grow_height: self.grow_height,
             reserve_width: self.reserve_width,
             fixed: self.fixed,
+            invalid: self.invalid,
             preparation: self.preparation.clone(),
             presentation: self.presentation,
             information: self.information.clone(),
@@ -604,8 +637,8 @@ impl<'a, Message: 'a> Child<'a, Message> {
     /// it takes height; everything a caller may declare afterwards starts
     /// here at its neutral value: no measuring adjustments, visible,
     /// undecorated, weight 1 and no
-    /// growth, no reserved or fixed dimensions, no presentation, reports or
-    /// regions, and a fresh preparation identity.
+    /// growth, no reserved or fixed dimensions, valid, no presentation,
+    /// reports or regions, and a fresh preparation identity.
     fn new(kind: Kind<'a, Message>) -> Self {
         Self {
             kind,
@@ -617,11 +650,47 @@ impl<'a, Message: 'a> Child<'a, Message> {
             grow_height: 0.0,
             reserve_width: false,
             fixed: Fixed::default(),
+            invalid: false,
             preparation: PreparedId::new(),
             presentation: None,
             information: None,
             regions: Vec::new(),
         }
+    }
+
+    /// Mark this child invalid unless `valid`: the one way a child is marked
+    /// invalid.
+    ///
+    /// An invalid child is one whose builder was given something it cannot
+    /// use: a weight, growth factor, spacing, padding, spacer width, viewport
+    /// floor or fixed dimension that is NaN, infinite or negative
+    /// (`is_amount`), or forms whose thresholds do not start at `Preferred`
+    /// or do not strictly increase. It is still built, it keeps the number it
+    /// was given, and later builders keep the mark (it is never cleared, and
+    /// the wrappers `fill_width` and `fixed_dimensions` take it on).
+    ///
+    /// An invalid child has no valid size. Measuring it (`query`) gives NaN
+    /// in every dimension: that is the one place the mark becomes an invalid
+    /// measurement, and every measurement that includes it is checked as any
+    /// measurement is (`validate_measurement`). Planning it (`plan_width`)
+    /// fails at once, so a plan cannot pass through it on a path that does
+    /// not measure it first. Every query and plan that includes it therefore
+    /// fails with `AllocationError::InvalidInput`, as for a bad native
+    /// measurement: that stage does not fit, the next declared stage is
+    /// tried, and with none left the caller's fallback shows. Where it is
+    /// hidden at a level it takes no part there, as any hidden child, and the
+    /// rest lays out.
+    ///
+    /// Not a panic, because these numbers come from drags and measurements
+    /// while an app runs, and a user application must never go down for one.
+    /// Not a clamp or a default, because a number the engine made usable
+    /// would lay out something the caller never declared, and the mistake
+    /// would never show. The bad number is kept rather than replaced, so a
+    /// path that reached it would compute with it and fail at the engine's
+    /// own checks, not succeed quietly.
+    fn invalid_unless(mut self, valid: bool) -> Self {
+        self.invalid |= !valid;
+        self
     }
 
     fn refresh_preparation(&mut self) {
@@ -685,7 +754,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
             Kind::Leaf(_) => false,
             Kind::Composition(_) => true,
             Kind::Frame(frame) => frame.content.has_composition(level),
-            Kind::Forms(forms) => select_form(forms, level).has_composition(level),
+            Kind::Forms(forms) => forms.select(level).has_composition(level),
         }
     }
 
@@ -698,7 +767,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
                     .iter()
                     .all(|child| child.is_hidden(level)),
                 Kind::Frame(frame) => frame.content.is_hidden(level),
-                Kind::Forms(forms) => select_form(forms, level).is_hidden(level),
+                Kind::Forms(forms) => forms.select(level).is_hidden(level),
             }
     }
 
@@ -735,6 +804,14 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 minimum: Size::ZERO,
             };
         }
+        if self.invalid {
+            // An invalid child has no valid size (`invalid_unless`).
+            let invalid = Size::new(f32::NAN, f32::NAN);
+            return MeasuredSize {
+                preferred: invalid,
+                minimum: invalid,
+            };
+        }
         self.measure_adjusted(&self.adjustments, level, renderer)
     }
 
@@ -755,7 +832,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
             }
             Kind::Composition(composition) => composition.measure(level, renderer),
             Kind::Frame(frame) => frame.measure(level, renderer),
-            Kind::Forms(forms) => select_form(forms, level).query(level, renderer),
+            Kind::Forms(forms) => forms.select(level).query(level, renderer),
         }
     }
 
@@ -971,6 +1048,10 @@ impl<'a, Message: 'a> Child<'a, Message> {
         if self.is_hidden(level) {
             return Ok(self.bind_geometry(level, GeometryPlan::hidden()));
         }
+        if self.invalid {
+            // An invalid child has no plan (`invalid_unless`).
+            return Err(AllocationError::InvalidInput);
+        }
         let fixed = self.fixed.sizes(|| self.query(level, renderer));
         let width = match fixed.width {
             Some(requested) => {
@@ -998,7 +1079,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         };
         let mut plan = match &self.kind {
             Kind::Forms(forms) => {
-                let mut selected = select_form(forms, level).clone();
+                let mut selected = forms.select(level).clone();
                 if self.grow_height > 0.0 {
                     selected.grow_height = self.grow_height;
                 }
@@ -1151,7 +1232,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         // below, where its rows or column are built from the plan's placements.
         let composition = match &self.kind {
             Kind::Forms(forms) => {
-                let mut selected = select_form(forms, level).clone();
+                let mut selected = forms.select(level).clone();
                 if self.grow_height > 0.0 {
                     selected.grow_height = self.grow_height;
                 }
@@ -1262,12 +1343,13 @@ impl<'a, Message: 'a> Child<'a, Message> {
     pub fn fill_width(self) -> Self {
         let weight = self.weight;
         let grow_height = self.grow_height;
+        let invalid = self.invalid;
         let mut result = column_child(vec![self], 0.0);
         result.weight = weight;
         result.grow_height = grow_height;
         result.reserve_width = true;
         result.grow = 1.0;
-        result
+        result.invalid_unless(!invalid)
     }
 
     /// Reserve exact dimensions for this prepared component. A dimension below
@@ -1275,14 +1357,9 @@ impl<'a, Message: 'a> Child<'a, Message> {
     /// available space fails the stage rather than shrinking the request.
     /// Apply this to the expanded form, before declaring a collapsed form.
     /// The inner child remains an ordinary nested composition and keeps its
-    /// reports and native state. Values must be finite and nonnegative.
+    /// reports and native state. Values must be finite and nonnegative; any
+    /// other makes the child invalid (`invalid_unless`).
     pub fn fixed_dimensions(self, width: Option<f32>, height: Option<f32>) -> Self {
-        assert!(
-            [width, height]
-                .into_iter()
-                .flatten()
-                .all(|n| n.is_finite() && n >= 0.0)
-        );
         if width.is_none() && height.is_none() {
             return self;
         }
@@ -1290,6 +1367,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         let weight = self.weight;
         let grow = self.grow;
         let grow_height = self.grow_height;
+        let invalid = self.invalid;
         let mut result = column_child(vec![self], 0.0);
         result.weight = weight;
         result.grow = grow;
@@ -1303,7 +1381,8 @@ impl<'a, Message: 'a> Child<'a, Message> {
         result
             .adjustments
             .push(Adjustment::FixedDimensions { width, height });
-        result
+        let valid = !invalid && [width, height].into_iter().flatten().all(is_amount);
+        result.invalid_unless(valid)
     }
 
     /// Decorate this component's rendered content without changing its geometry.
@@ -1324,28 +1403,27 @@ impl<'a, Message: 'a> Child<'a, Message> {
         self
     }
 
+    /// Finite and nonnegative; any other weight makes the child invalid
+    /// (`invalid_unless`), as for `grow` and `grow_height`.
     pub fn weight(mut self, weight: f32) -> Self {
-        assert!(weight.is_finite() && weight >= 0.0);
         self.weight = weight;
         self.refresh_preparation();
-        self
+        self.invalid_unless(is_amount(weight))
     }
 
     /// Share surplus only after shrinking has finished.
     pub fn grow(mut self, grow: f32) -> Self {
-        assert!(grow.is_finite() && grow >= 0.0);
         self.grow = grow;
         self.refresh_preparation();
-        self
+        self.invalid_unless(is_amount(grow))
     }
 
     /// Share surplus height in a column independently of width growth. Native
     /// content keeps its measured height floor; a declared viewport expands.
     pub fn grow_height(mut self, grow: f32) -> Self {
-        assert!(grow.is_finite() && grow >= 0.0);
         self.grow_height = grow;
         self.refresh_preparation();
-        self
+        self.invalid_unless(is_amount(grow))
     }
 
     /// Explicit component permission to omit this form. No layout slot, gap,
@@ -1422,28 +1500,26 @@ pub fn child<'a, Message: 'a>(
 /// increase. Every selected form receives the requested level, so an inherited
 /// composite still forwards Mild/Strong rules to its own immediate children.
 /// The returned child's outward weights are independent of the form's internals.
+/// Thresholds that break either rule make the child invalid (`invalid_unless`).
 pub fn forms<'a, Message: 'a>(
     alternatives: Vec<(Level, Child<'a, Message>)>,
 ) -> Child<'a, Message> {
-    assert!(
-        alternatives
-            .first()
-            .is_some_and(|(level, _)| *level == Level::Preferred)
-    );
-    assert!(alternatives.windows(2).all(|pair| pair[0].0 < pair[1].0));
-    Child::new(Kind::Forms(Rc::new(alternatives)))
-}
-
-fn select_form<'a, 'forms, Message>(
-    alternatives: &'forms [(Level, Child<'a, Message>)],
-    level: Level,
-) -> &'forms Child<'a, Message> {
-    &alternatives
+    let mut alternatives = alternatives.into_iter();
+    let Some((first_threshold, first)) = alternatives.next() else {
+        // No form at all: there is nothing to stand for the family, so the
+        // invalid child is a leaf that shows nothing. Being invalid, it is
+        // never measured or planned.
+        return child(|_| widget::space().width(0).height(0).into()).invalid_unless(false);
+    };
+    let later: Vec<_> = alternatives.collect();
+    let increasing = later
         .iter()
-        .rev()
-        .find(|(threshold, _)| *threshold <= level)
-        .expect("Preferred form is always inherited")
-        .1
+        .try_fold(first_threshold, |previous, (threshold, _)| {
+            (previous < *threshold).then_some(*threshold)
+        })
+        .is_some();
+    Child::new(Kind::Forms(Rc::new(Forms { first, later })))
+        .invalid_unless(first_threshold == Level::Preferred && increasing)
 }
 
 /// Declare a native scrolling viewport, including its scrollbar and any other
@@ -1455,8 +1531,9 @@ pub fn scroll_child<'a, Message: 'a>(
     view: impl Fn(Level) -> Element<'a, Message> + 'a,
     minimum: Size,
 ) -> Child<'a, Message> {
-    assert!(finite_size(minimum));
-    scroll_child_with_minimum(view, move |_, _| minimum)
+    // The measuring interpreter rejects a bad floor too (`ViewportFloor`),
+    // but a replaced measurement discards that entry; the mark does not go.
+    scroll_child_with_minimum(view, move |_, _| minimum).invalid_unless(finite_size(minimum))
 }
 
 /// Declare a scrolling viewport whose useful floor is measured with the same
@@ -1483,7 +1560,6 @@ pub fn scroll_child_with_minimum<'a, Message: 'a>(
 }
 
 pub fn spacer<'a, Message: 'a>(minimum: f32) -> Child<'a, Message> {
-    assert!(minimum.is_finite() && minimum >= 0.0);
     child(|_| widget::Space::new().width(Length::Fill).height(0).into())
         .with_measurement(move |_, _| MeasuredSize {
             preferred: Size::new(minimum, 0.0),
@@ -1491,6 +1567,7 @@ pub fn spacer<'a, Message: 'a>(minimum: f32) -> Child<'a, Message> {
         })
         .weight(0.0)
         .grow(1.0)
+        .invalid_unless(is_amount(minimum))
 }
 
 impl<'a, Message: 'a> Child<'a, Message> {
@@ -1552,14 +1629,13 @@ fn compose_aligned<'a, Message: 'a>(
     arrangement: Arrangement,
     top_aligned: bool,
 ) -> Child<'a, Message> {
-    assert!(spacing.is_finite() && spacing >= 0.0);
     let composition = Rc::new(Composition {
         children,
         arrangement,
         spacing,
         top_aligned,
     });
-    Child::new(Kind::Composition(composition))
+    Child::new(Kind::Composition(composition)).invalid_unless(is_amount(spacing))
 }
 
 pub(crate) const FIT_EPSILON: f32 = 0.001;
@@ -2482,6 +2558,10 @@ mod measuring_tests;
 #[cfg(test)]
 #[path = "layout_height_tests.rs"]
 mod height_tests;
+
+#[cfg(test)]
+#[path = "layout_invalid_tests.rs"]
+mod invalid_tests;
 
 #[cfg(test)]
 mod renderer_minimum_tests {

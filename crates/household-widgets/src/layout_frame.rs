@@ -15,23 +15,24 @@ pub(super) struct Frame<'a, Message> {
 /// verification rejects disagreement. Include border/shadow allowance here or
 /// in another declared outer frame. All geometry, forms, minima, source facts
 /// and requested levels of the immediate child remain part of the same engine.
-/// Hidden content omits the entire frame and its spacing.
+/// Hidden content omits the entire frame and its spacing. Padding must be
+/// finite and nonnegative; any other makes the frame invalid
+/// (`Child::invalid_unless`).
 pub fn framed_child<'a, Message: 'a>(
     content: Child<'a, Message>,
     padding: impl Into<Padding>,
     decorate: impl Fn(Element<'a, Message>) -> Element<'a, Message> + 'a,
 ) -> Child<'a, Message> {
     let padding = padding.into();
-    assert!(
-        [padding.left, padding.right, padding.top, padding.bottom]
-            .iter()
-            .all(|value| value.is_finite() && *value >= 0.0)
-    );
+    let valid = [padding.left, padding.right, padding.top, padding.bottom]
+        .into_iter()
+        .all(is_amount);
     Child::new(Kind::Frame(Rc::new(Frame {
         content,
         padding,
         decorate: Rc::new(decorate),
     })))
+    .invalid_unless(valid)
 }
 
 impl<'a, Message: 'a> Frame<'a, Message> {
