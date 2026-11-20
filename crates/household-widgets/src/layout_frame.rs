@@ -27,36 +27,36 @@ pub fn framed_child<'a, Message: 'a>(
             .iter()
             .all(|value| value.is_finite() && *value >= 0.0)
     );
-    let frame = Rc::new(Frame {
+    Child::new(Kind::Frame(Rc::new(Frame {
         content,
         padding,
         decorate: Rc::new(decorate),
-    });
-    let measure = frame.clone();
-    Child::new(
-        Kind::Frame(frame),
-        Rc::new(move |level, renderer| {
-            let inner = measure.content.query(level, renderer);
-            let chrome = Size::new(measure.padding.x(), measure.padding.y());
-            MeasuredSize {
-                preferred: Size::new(
-                    inner.preferred.width + chrome.width,
-                    inner.preferred.height + chrome.height,
-                ),
-                minimum: Size::new(
-                    if measure.content.weight == 0.0 {
-                        inner.preferred.width
-                    } else {
-                        inner.minimum.width
-                    } + chrome.width,
-                    inner.minimum.height + chrome.height,
-                ),
-            }
-        }),
-    )
+    })))
 }
 
 impl<'a, Message: 'a> Frame<'a, Message> {
+    /// The content's measurement with the padding added round it. A weight of
+    /// zero protects the content's preferred width, so for such content that
+    /// width, not its minimum, is what the frame's minimum width adds to.
+    pub fn measure(&self, level: Level, renderer: &Renderer) -> MeasuredSize {
+        let inner = self.content.query(level, renderer);
+        let chrome = Size::new(self.padding.x(), self.padding.y());
+        MeasuredSize {
+            preferred: Size::new(
+                inner.preferred.width + chrome.width,
+                inner.preferred.height + chrome.height,
+            ),
+            minimum: Size::new(
+                if self.content.weight == 0.0 {
+                    inner.preferred.width
+                } else {
+                    inner.minimum.width
+                } + chrome.width,
+                inner.minimum.height + chrome.height,
+            ),
+        }
+    }
+
     pub fn plan(
         &self,
         level: Level,

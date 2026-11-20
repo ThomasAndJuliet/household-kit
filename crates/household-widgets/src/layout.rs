@@ -368,17 +368,126 @@ impl<Message> Clone for Kind<'_, Message> {
     }
 }
 
+type PreferredWidth<'a> = Rc<dyn Fn(Level, &Renderer, MeasuredSize) -> f32 + 'a>;
+type MinimumWidth<'a> = Rc<dyn Fn(Level, &Renderer, Size) -> f32 + 'a>;
+
+/// One change a builder declares to how a child is measured. A child keeps
+/// these in `Child::adjustments` in the order the builders were called, and
+/// `Child::measure_adjusted` applies them in that order to the measurement
+/// its kind gives (`Child::base_measurement`).
+///
+/// Before these were data, each builder took the child's measuring closure
+/// and wrapped it in another, and the list below is exactly those closures,
+/// each kept as the values it captured:
+///
+/// - The four constructors built the first closure from the kind: a leaf
+///   measured its native view with unbounded room (`child`); forms asked the
+///   form selected at the level (`forms`); a composition summed or stacked
+///   its children (`row_child`, `row_child_top`, `column_child`,
+///   `wrap_child`, and the column that `fill_width` and `fixed_dimensions`
+///   put a child in); a frame added its padding to its content's measurement
+///   (`framed_child`). That is now `base_measurement`, which is a `match` on
+///   the kind and nothing else.
+/// - `with_measurement` replaced the closure with the caller's
+///   (`Replaced`). `spacer` and the inline and formula content use it.
+/// - `round_width_up` wrapped it, capturing nothing (`RoundWidthUp`).
+/// - `preferred_width_with` wrapped it, capturing the caller's function;
+///   `preferred_width` passes a function that returns its number
+///   (`PreferredWidth`).
+/// - `minimum_width_with` wrapped it, capturing the caller's function and,
+///   when the child was a leaf, the leaf's view factory to probe;
+///   `minimum_width` passes a function that ignores the renderer
+///   (`MinimumWidth`). The interpreter now reads the leaf's view from the
+///   kind, which never changes after a child is built.
+/// - `fixed_dimensions` wrapped the closure of the column it puts the child
+///   in, capturing the width and height (`FixedDimensions`).
+/// - `scroll_child_with_minimum` wrapped the new leaf's closure, capturing
+///   the caller's floor and the view factory to probe (`ViewportFloor`);
+///   `scroll_child` passes a function that returns its size.
+/// - `Child::new` received the first closure and `Child`'s `Clone` shared
+///   it; they now start and copy the list.
+///
+/// Nothing else built, replaced or wrapped it. A typical caller declares a
+/// leaf's floors, then rounding, then a preferred width, as a menu row does:
+/// `child(view).minimum_width_with(..).round_width_up().preferred_width(..)`.
+///
+/// Why the order matters: each adjustment acts on the measurement as the
+/// ones before it left it. Take a leaf whose view measures 5 wide, given a
+/// minimum width of 7.5, then rounded up, then a preferred width of 3. The
+/// minimum width makes the minimum 7.5 and raises the preferred width to
+/// 7.5; rounding up makes both 8; the preferred width of 3 is below the
+/// minimum it finds, so the preferred width stays 8. Rounding up first
+/// would have rounded 5 and left both at 7.5: the fraction the rounding was
+/// declared to remove. `layout_measuring_tests.rs` builds every pair of
+/// adjustments whose order changes the result both ways round.
+enum Adjustment<'a, Message> {
+    /// The caller's measurement in place of everything before it. The kind's
+    /// own measurement and the adjustments declared earlier are not consulted:
+    /// `with_measurement` empties the list before recording this, so a
+    /// replacement is always the first entry, and the interpreter never looks
+    /// behind one.
+    Replaced(SizeQuery<'a>),
+    /// Round the preferred and the minimum width up to whole pixels.
+    RoundWidthUp,
+    /// The caller's preferred width, given the measurement so far. Never
+    /// below the minimum width; not a finite nonnegative number: invalid.
+    PreferredWidth(PreferredWidth<'a>),
+    /// The caller's useful width floor, given the preferred size so far. A
+    /// leaf with no intrinsic width is probed at the floor.
+    MinimumWidth(MinimumWidth<'a>),
+    /// Exact dimensions, each raised to the minimum measured so far.
+    FixedDimensions {
+        width: Option<f32>,
+        height: Option<f32>,
+    },
+    /// A scrolling viewport's floor, measured by the caller with the same
+    /// renderer, and the viewport's view to probe at that floor when it has
+    /// no intrinsic size.
+    ViewportFloor {
+        minimum: MinimumQuery<'a>,
+        view: ViewFactory<'a, Message>,
+    },
+}
+
+// Written by hand, as for `Kind`: every variant holds `Rc`s or numbers.
+impl<Message> Clone for Adjustment<'_, Message> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Replaced(query) => Self::Replaced(query.clone()),
+            Self::RoundWidthUp => Self::RoundWidthUp,
+            Self::PreferredWidth(preferred) => Self::PreferredWidth(preferred.clone()),
+            Self::MinimumWidth(minimum) => Self::MinimumWidth(minimum.clone()),
+            Self::FixedDimensions { width, height } => Self::FixedDimensions {
+                width: *width,
+                height: *height,
+            },
+            Self::ViewportFloor { minimum, view } => Self::ViewportFloor {
+                minimum: minimum.clone(),
+                view: view.clone(),
+            },
+        }
+    }
+}
+
 /// A queryable leaf or composite. Only the root selects a level. Composites
 /// forward that exact level; outward weights never replace internal weights.
 ///
 /// A child is its `kind` (what it is) together with what any kind may carry:
-/// the measuring query, which every kind answers, and the declarations a
-/// caller adds with the builder methods below (weights and growth, hiding,
+/// the adjustments to its measurement and the other declarations a caller
+/// adds with the builder methods below (weights and growth, hiding,
 /// decoration, reports, regions). Every child is built by `Child::new` from
-/// its kind and query, with nothing else declared yet.
+/// its kind alone, with nothing else declared yet.
+///
+/// How a child is measured (`query`): a hidden child measures zero.
+/// Otherwise its kind gives the unadjusted measurement (`base_measurement`),
+/// and the adjustments the builders declared are applied to it one after
+/// another in the order they were declared (`measure_adjusted`). The list
+/// can be read to see what a child is; the order is the order of the calls,
+/// and it matters, because each adjustment acts on what the ones before it
+/// left (see `Adjustment` for an example).
 pub struct Child<'a, Message> {
     kind: Kind<'a, Message>,
-    query: SizeQuery<'a>,
+    adjustments: Vec<Adjustment<'a, Message>>,
     decorator: Option<ViewMap<'a, Message>>,
     hidden: Rc<dyn Fn(Level) -> bool + 'a>,
     viewport: Option<MinimumQuery<'a>>,
@@ -398,7 +507,7 @@ impl<Message> Clone for Child<'_, Message> {
     fn clone(&self) -> Self {
         Self {
             kind: self.kind.clone(),
-            query: self.query.clone(),
+            adjustments: self.adjustments.clone(),
             decorator: self.decorator.clone(),
             hidden: self.hidden.clone(),
             viewport: self.viewport.clone(),
@@ -417,15 +526,16 @@ impl<Message> Clone for Child<'_, Message> {
 }
 
 impl<'a, Message: 'a> Child<'a, Message> {
-    /// The one place a child is built. The public constructors choose the kind
-    /// and how it is measured; everything a caller may declare afterwards
-    /// starts here at its neutral value: visible, undecorated, no viewport,
-    /// weight 1 and no growth, no reserved or fixed dimensions, no
-    /// presentation, reports or regions, and a fresh preparation identity.
-    fn new(kind: Kind<'a, Message>, query: SizeQuery<'a>) -> Self {
+    /// The one place a child is built. The public constructors choose the
+    /// kind, which also says how the child is measured; everything a caller
+    /// may declare afterwards starts here at its neutral value: no measuring
+    /// adjustments, visible, undecorated, no viewport, weight 1 and no
+    /// growth, no reserved or fixed dimensions, no presentation, reports or
+    /// regions, and a fresh preparation identity.
+    fn new(kind: Kind<'a, Message>) -> Self {
         Self {
             kind,
-            query,
+            adjustments: Vec::new(),
             decorator: None,
             hidden: Rc::new(|_| false),
             viewport: None,
@@ -553,7 +663,184 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 minimum: Size::ZERO,
             };
         }
-        (self.query)(level, renderer)
+        self.measure_adjusted(&self.adjustments, level, renderer)
+    }
+
+    /// What the child's kind measures at a level, before any adjustment. A
+    /// leaf lays out its native view with unbounded room and offers that size
+    /// as both its preferred and its minimum; forms measure the form selected
+    /// at the level (zero if that form is hidden); a composition combines its
+    /// visible children (`Composition::measure`); a frame adds its padding to
+    /// its content's measurement (`Frame::measure`).
+    fn base_measurement(&self, level: Level, renderer: &Renderer) -> MeasuredSize {
+        match &self.kind {
+            Kind::Leaf(view) => {
+                let size = measure_element(|| view(level), renderer);
+                MeasuredSize {
+                    preferred: size,
+                    minimum: size,
+                }
+            }
+            Kind::Composition(composition) => composition.measure(level, renderer),
+            Kind::Frame(frame) => frame.measure(level, renderer),
+            Kind::Forms(forms) => select_form(forms, level).query(level, renderer),
+        }
+    }
+
+    /// The one interpreter of a child's measuring adjustments: the
+    /// measurement after `adjustments` (a prefix of `self.adjustments`) have
+    /// been applied, in order, to the kind's base measurement.
+    ///
+    /// The measurement after a list is its last adjustment applied to the
+    /// measurement after the entries before it, and with no entries it is the
+    /// base measurement. It is written from the last entry back, rather than
+    /// as a loop from the base forward, so that each adjustment takes the
+    /// earlier measurement at the moment it needs it and not before: a
+    /// replacement never takes it at all (the kind's view is not even
+    /// measured), and a viewport asks the caller for its floor before its
+    /// view is measured, just as the wrapped closures did. Every arm does
+    /// the arithmetic and the validity checks of the builder that declared
+    /// it, in the same order, so the result is the same to the bit.
+    fn measure_adjusted(
+        &self,
+        adjustments: &[Adjustment<'a, Message>],
+        level: Level,
+        renderer: &Renderer,
+    ) -> MeasuredSize {
+        let Some((adjustment, earlier)) = adjustments.split_last() else {
+            return self.base_measurement(level, renderer);
+        };
+        let measure_earlier = || self.measure_adjusted(earlier, level, renderer);
+        match adjustment {
+            Adjustment::Replaced(query) => query(level, renderer),
+            Adjustment::RoundWidthUp => {
+                let mut measured = measure_earlier();
+                measured.preferred.width = measured.preferred.width.ceil();
+                measured.minimum.width = measured.minimum.width.ceil();
+                measured
+            }
+            Adjustment::PreferredWidth(preferred) => {
+                let mut measured = measure_earlier();
+                let width = preferred(level, renderer, measured);
+                measured.preferred.width = if width.is_finite() && width >= 0.0 {
+                    width.max(measured.minimum.width)
+                } else {
+                    f32::NAN
+                };
+                measured
+            }
+            Adjustment::MinimumWidth(minimum) => {
+                let mut measured = measure_earlier();
+                // Only a leaf has a native view to probe at the declared floor.
+                let native = match &self.kind {
+                    Kind::Leaf(view) => Some(view),
+                    Kind::Composition(_) | Kind::Frame(_) | Kind::Forms(_) => None,
+                };
+                // The native view to probe, when this leaf has no intrinsic width.
+                let recoverable = native.filter(|_| {
+                    measured.preferred.width == f32::INFINITY
+                        && measured.preferred.height.is_finite()
+                        && measured.preferred.height >= 0.0
+                        && measured.minimum.height.is_finite()
+                        && measured.minimum.height >= 0.0
+                });
+                if (measured.preferred.width.is_finite() && measured.preferred.width >= 0.0)
+                    || recoverable.is_some()
+                {
+                    let floor = minimum(level, renderer, measured.preferred);
+                    if floor.is_finite() && floor >= 0.0 {
+                        if let Some(native) = recoverable {
+                            // Some native Fill controls have no intrinsic width.
+                            // The component's declared floor is the finite offer;
+                            // never substitute an arbitrary window or probe width.
+                            let bounded = measure_element_in(
+                                || native(level),
+                                renderer,
+                                Size::new(floor, f32::INFINITY),
+                                true,
+                            );
+                            if finite_size(bounded) && bounded.width <= floor + FIT_EPSILON {
+                                measured.preferred = Size::new(floor, bounded.height);
+                                measured.minimum.width = floor;
+                                measured.minimum.height =
+                                    measured.minimum.height.min(bounded.height);
+                            } else {
+                                measured.minimum.width = f32::NAN;
+                            }
+                        } else {
+                            // An all-Fill native subtree can report intrinsic zero.
+                            measured.minimum.width = floor;
+                            measured.preferred.width = measured.preferred.width.max(floor);
+                        }
+                    } else {
+                        measured.minimum.width = f32::NAN;
+                    }
+                } else {
+                    measured.minimum.width = f32::NAN;
+                }
+                measured
+            }
+            Adjustment::FixedDimensions { width, height } => {
+                let mut measured = measure_earlier();
+                if let Some(width) = *width {
+                    let width = width.max(measured.minimum.width);
+                    measured.minimum.width = width;
+                    measured.preferred.width = width;
+                }
+                if let Some(height) = *height {
+                    let height = height.max(measured.minimum.height);
+                    measured.minimum.height = height;
+                    measured.preferred.height = height;
+                }
+                measured
+            }
+            Adjustment::ViewportFloor { minimum, view } => {
+                let minimum = minimum(level, renderer);
+                let measured = measure_earlier();
+                if !finite_size(minimum) {
+                    return MeasuredSize {
+                        preferred: Size::new(f32::NAN, f32::NAN),
+                        minimum,
+                    };
+                }
+                let invalid = |value: f32| value.is_nan() || value < 0.0;
+                if invalid(measured.preferred.width) || invalid(measured.preferred.height) {
+                    return MeasuredSize {
+                        preferred: measured.preferred,
+                        minimum,
+                    };
+                }
+                let mut preferred = measured.preferred;
+                if preferred.width.is_infinite() || preferred.height.is_infinite() {
+                    // This component explicitly declares a scrolling viewport.
+                    // Validate its whole native box, including controls, at
+                    // that finite minimum.
+                    let bounded = measure_element_in(|| view(level), renderer, minimum, false);
+                    if !finite_size(bounded)
+                        || bounded.width > minimum.width + FIT_EPSILON
+                        || bounded.height > minimum.height + FIT_EPSILON
+                    {
+                        return MeasuredSize {
+                            preferred: Size::new(f32::NAN, f32::NAN),
+                            minimum,
+                        };
+                    }
+                    if preferred.width.is_infinite() {
+                        preferred.width = minimum.width;
+                    }
+                    if preferred.height.is_infinite() {
+                        preferred.height = minimum.height;
+                    }
+                }
+                MeasuredSize {
+                    preferred: Size::new(
+                        preferred.width.max(minimum.width),
+                        preferred.height.max(minimum.height),
+                    ),
+                    minimum,
+                }
+            }
+        }
     }
 
     /// Allocate first, then measure native content at its allocated width with
@@ -922,21 +1209,9 @@ impl<'a, Message: 'a> Child<'a, Message> {
         result.grow_height = grow_height;
         result.fixed_width = width;
         result.fixed_height = height;
-        let query = result.query.clone();
-        result.query = Rc::new(move |level, renderer| {
-            let mut measured = query(level, renderer);
-            if let Some(width) = width {
-                let width = width.max(measured.minimum.width);
-                measured.minimum.width = width;
-                measured.preferred.width = width;
-            }
-            if let Some(height) = height {
-                let height = height.max(measured.minimum.height);
-                measured.minimum.height = height;
-                measured.preferred.height = height;
-            }
-            measured
-        });
+        result
+            .adjustments
+            .push(Adjustment::FixedDimensions { width, height });
         result
     }
 
@@ -992,13 +1267,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
 
     pub fn round_width_up(mut self) -> Self {
         self.refresh_preparation();
-        let query = self.query.clone();
-        self.query = Rc::new(move |level, renderer| {
-            let mut measured = query(level, renderer);
-            measured.preferred.width = measured.preferred.width.ceil();
-            measured.minimum.width = measured.minimum.width.ceil();
-            measured
-        });
+        self.adjustments.push(Adjustment::RoundWidthUp);
         self
     }
 
@@ -1017,17 +1286,8 @@ impl<'a, Message: 'a> Child<'a, Message> {
         preferred: impl Fn(Level, &Renderer, MeasuredSize) -> f32 + 'a,
     ) -> Self {
         self.refresh_preparation();
-        let query = self.query.clone();
-        self.query = Rc::new(move |level, renderer| {
-            let mut measured = query(level, renderer);
-            let width = preferred(level, renderer, measured);
-            measured.preferred.width = if width.is_finite() && width >= 0.0 {
-                width.max(measured.minimum.width)
-            } else {
-                f32::NAN
-            };
-            measured
-        });
+        self.adjustments
+            .push(Adjustment::PreferredWidth(Rc::new(preferred)));
         self
     }
 
@@ -1051,57 +1311,8 @@ impl<'a, Message: 'a> Child<'a, Message> {
         minimum: impl Fn(Level, &Renderer, Size) -> f32 + 'a,
     ) -> Self {
         self.refresh_preparation();
-        let query = self.query.clone();
-        // Only a leaf has a native view to probe at the declared floor.
-        let native = match &self.kind {
-            Kind::Leaf(view) => Some(view.clone()),
-            Kind::Composition(_) | Kind::Frame(_) | Kind::Forms(_) => None,
-        };
-        self.query = Rc::new(move |level, renderer| {
-            let mut measured = query(level, renderer);
-            // The native view to probe, when this leaf has no intrinsic width.
-            let recoverable = native.as_ref().filter(|_| {
-                measured.preferred.width == f32::INFINITY
-                    && measured.preferred.height.is_finite()
-                    && measured.preferred.height >= 0.0
-                    && measured.minimum.height.is_finite()
-                    && measured.minimum.height >= 0.0
-            });
-            if (measured.preferred.width.is_finite() && measured.preferred.width >= 0.0)
-                || recoverable.is_some()
-            {
-                let floor = minimum(level, renderer, measured.preferred);
-                if floor.is_finite() && floor >= 0.0 {
-                    if let Some(native) = recoverable {
-                        // Some native Fill controls have no intrinsic width.
-                        // The component's declared floor is the finite offer;
-                        // never substitute an arbitrary window or probe width.
-                        let bounded = measure_element_in(
-                            || native(level),
-                            renderer,
-                            Size::new(floor, f32::INFINITY),
-                            true,
-                        );
-                        if finite_size(bounded) && bounded.width <= floor + FIT_EPSILON {
-                            measured.preferred = Size::new(floor, bounded.height);
-                            measured.minimum.width = floor;
-                            measured.minimum.height = measured.minimum.height.min(bounded.height);
-                        } else {
-                            measured.minimum.width = f32::NAN;
-                        }
-                    } else {
-                        // An all-Fill native subtree can report intrinsic zero.
-                        measured.minimum.width = floor;
-                        measured.preferred.width = measured.preferred.width.max(floor);
-                    }
-                } else {
-                    measured.minimum.width = f32::NAN;
-                }
-            } else {
-                measured.minimum.width = f32::NAN;
-            }
-            measured
-        });
+        self.adjustments
+            .push(Adjustment::MinimumWidth(Rc::new(minimum)));
         self
     }
 }
@@ -1109,24 +1320,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
 pub fn child<'a, Message: 'a>(
     view: impl Fn(Level) -> Element<'a, Message> + 'a,
 ) -> Child<'a, Message> {
-    leaf_child(Rc::new(view))
-}
-
-/// A native leaf measured by laying out its view with unbounded room. Kept
-/// apart from `child` so a caller that also probes the view itself
-/// (`scroll_child_with_minimum`) shares the one factory.
-fn leaf_child<'a, Message: 'a>(view: ViewFactory<'a, Message>) -> Child<'a, Message> {
-    let measure = view.clone();
-    Child::new(
-        Kind::Leaf(view),
-        Rc::new(move |level, renderer| {
-            let size = measure_element(|| measure(level), renderer);
-            MeasuredSize {
-                preferred: size,
-                minimum: size,
-            }
-        }),
-    )
+    Child::new(Kind::Leaf(Rc::new(view)))
 }
 
 /// A component family's own structured forms, inherited until the next
@@ -1143,12 +1337,7 @@ pub fn forms<'a, Message: 'a>(
             .is_some_and(|(level, _)| *level == Level::Preferred)
     );
     assert!(alternatives.windows(2).all(|pair| pair[0].0 < pair[1].0));
-    let alternatives = Rc::new(alternatives);
-    let query_forms = alternatives.clone();
-    Child::new(
-        Kind::Forms(alternatives),
-        Rc::new(move |level, renderer| select_form(&query_forms, level).query(level, renderer)),
-    )
+    Child::new(Kind::Forms(Rc::new(alternatives)))
 }
 
 fn select_form<'a, 'forms, Message>(
@@ -1185,56 +1374,13 @@ pub fn scroll_child_with_minimum<'a, Message: 'a>(
     minimum: impl Fn(Level, &Renderer) -> Size + 'a,
 ) -> Child<'a, Message> {
     let minimum: MinimumQuery<'a> = Rc::new(minimum);
-    let viewport = minimum.clone();
-    let native: ViewFactory<'a, Message> = Rc::new(view);
-    let mut child = leaf_child(native.clone());
-    let query = child.query.clone();
-    child.query = Rc::new(move |level, renderer| {
-        let minimum = minimum(level, renderer);
-        let measured = query(level, renderer);
-        if !finite_size(minimum) {
-            return MeasuredSize {
-                preferred: Size::new(f32::NAN, f32::NAN),
-                minimum,
-            };
-        }
-        let invalid = |value: f32| value.is_nan() || value < 0.0;
-        if invalid(measured.preferred.width) || invalid(measured.preferred.height) {
-            return MeasuredSize {
-                preferred: measured.preferred,
-                minimum,
-            };
-        }
-        let mut preferred = measured.preferred;
-        if preferred.width.is_infinite() || preferred.height.is_infinite() {
-            // This component explicitly declares a scrolling viewport. Validate
-            // its whole native box, including controls, at that finite minimum.
-            let bounded = measure_element_in(|| native(level), renderer, minimum, false);
-            if !finite_size(bounded)
-                || bounded.width > minimum.width + FIT_EPSILON
-                || bounded.height > minimum.height + FIT_EPSILON
-            {
-                return MeasuredSize {
-                    preferred: Size::new(f32::NAN, f32::NAN),
-                    minimum,
-                };
-            }
-            if preferred.width.is_infinite() {
-                preferred.width = minimum.width;
-            }
-            if preferred.height.is_infinite() {
-                preferred.height = minimum.height;
-            }
-        }
-        MeasuredSize {
-            preferred: Size::new(
-                preferred.width.max(minimum.width),
-                preferred.height.max(minimum.height),
-            ),
-            minimum,
-        }
+    let view: ViewFactory<'a, Message> = Rc::new(view);
+    let mut child = Child::new(Kind::Leaf(view.clone()));
+    child.adjustments.push(Adjustment::ViewportFloor {
+        minimum: minimum.clone(),
+        view,
     });
-    child.viewport = Some(viewport);
+    child.viewport = Some(minimum);
     child
 }
 
@@ -1250,12 +1396,17 @@ pub fn spacer<'a, Message: 'a>(minimum: f32) -> Child<'a, Message> {
 }
 
 impl<'a, Message: 'a> Child<'a, Message> {
+    /// Measure this child with `query` instead: what its kind measures and
+    /// every adjustment declared so far no longer count, as the list shows by
+    /// starting again from the replacement. Adjustments declared after this
+    /// apply to the replacement.
     pub(crate) fn with_measurement(
         mut self,
         query: impl Fn(Level, &Renderer) -> MeasuredSize + 'a,
     ) -> Self {
         self.refresh_preparation();
-        self.query = Rc::new(query);
+        self.adjustments.clear();
+        self.adjustments.push(Adjustment::Replaced(Rc::new(query)));
         self
     }
 }
@@ -1310,11 +1461,7 @@ fn compose_aligned<'a, Message: 'a>(
         spacing,
         top_aligned,
     });
-    let query = composition.clone();
-    Child::new(
-        Kind::Composition(composition),
-        Rc::new(move |level, renderer| query.measure(level, renderer)),
-    )
+    Child::new(Kind::Composition(composition))
 }
 
 pub(crate) const FIT_EPSILON: f32 = 0.001;
