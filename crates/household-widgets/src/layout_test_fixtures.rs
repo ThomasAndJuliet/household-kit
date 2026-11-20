@@ -64,6 +64,20 @@ pub(super) fn shaped(shape: impl Fn(Size) -> Size + 'static) -> Child<'static, (
     child(view_of(shape))
 }
 
+/// A viewport (`scroll_child`) with the declared `floor`, whose native view
+/// takes `shape(offer)`.
+pub(super) fn shaped_viewport(
+    shape: impl Fn(Size) -> Size + 'static,
+    floor: Size,
+) -> Child<'static, ()> {
+    scroll_child(view_of(shape), floor)
+}
+
+/// A leaf that is `width` × `height` whatever it is offered.
+pub(super) fn sized(width: f32, height: f32) -> Child<'static, ()> {
+    shaped(move |_| Size::new(width, height))
+}
+
 /// A box `height` high that fills the width it is given (none, when the
 /// width is unbounded), preferring `preferred` and usable down to `minimum`:
 /// the part of `layout_arrangement_tests.rs`.
@@ -107,6 +121,16 @@ pub(super) fn query_at(
     height: f32,
 ) -> Result<GeometryPlan, AllocationError> {
     child.query_at(Level::Preferred, &renderer(), Size::new(width, height))
+}
+
+/// The child planned by the planner itself at exactly `width` × `height`, as
+/// a parent plans it, so that the root's allocation does not answer first.
+pub(super) fn plan(
+    child: &Child<'static, ()>,
+    width: f32,
+    height: f32,
+) -> Result<GeometryPlan, AllocationError> {
+    child.plan_width(Level::Preferred, &renderer(), width, height)
 }
 
 /// Each placement as (declared index, [x, y], [width, height]).

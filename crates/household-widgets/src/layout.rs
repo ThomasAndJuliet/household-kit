@@ -2847,6 +2847,10 @@ mod test_fixtures;
 mod width_dependent_tests;
 
 #[cfg(test)]
+#[path = "layout_overflow_tests.rs"]
+mod overflow_tests;
+
+#[cfg(test)]
 mod renderer_minimum_tests {
     use super::*;
     use cosmic::iced::advanced::renderer::Headless;
