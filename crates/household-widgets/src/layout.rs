@@ -2381,6 +2381,10 @@ mod presentation_tests;
 mod measuring_tests;
 
 #[cfg(test)]
+#[path = "layout_height_tests.rs"]
+mod height_tests;
+
+#[cfg(test)]
 mod renderer_minimum_tests {
     use super::*;
     use cosmic::iced::advanced::renderer::Headless;
