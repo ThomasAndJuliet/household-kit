@@ -1,4 +1,15 @@
 // Forward only the hooks named by each wrapper; interception stays in its impl.
+//
+// A wrapper's content has its own tree, which `children` and `diff` keep as
+// the first child of the wrapper's tree. Every hook that passes that tree on
+// takes it by checked access (`first`/`first_mut`), never by index: a tree
+// without it was not built for this wrapper, and a user application must
+// never panic over one. There the hook does nothing and answers with its
+// neutral value: a layout of no size, no interaction, no overlay, an empty
+// tree of accessibility nodes. Where the child is present, the content is
+// called exactly as before. The layout engine's own wrappers do the same in
+// their hand-written hooks (`src/layout.rs`), and its modules deny unchecked
+// indexing, which reaches into these expansions.
 macro_rules! forward_widget {
     ($message:ty, $theme:ty, $renderer:ty; $($hook:ident),* $(,)?) => {
         $(forward_widget!(@hook $message, $theme, $renderer; $hook);)*
@@ -20,12 +31,17 @@ macro_rules! forward_widget {
     };
     (@hook $message:ty, $theme:ty, $renderer:ty; layout) => {
         fn layout(&mut self, tree: &mut Tree, renderer: &$renderer, limits: &layout::Limits) -> layout::Node {
-                self.content.as_widget_mut().layout(&mut tree.children[0], renderer, limits)
+                let Some(content) = tree.children.first_mut() else {
+                    return layout::Node::new(cosmic::iced::Size::ZERO);
+                };
+                self.content.as_widget_mut().layout(content, renderer, limits)
             }
     };
     (@hook $message:ty, $theme:ty, $renderer:ty; operate) => {
         fn operate(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &$renderer, operation: &mut dyn Operation) {
-                self.content.as_widget_mut().operate(&mut tree.children[0], layout, renderer, operation);
+                if let Some(content) = tree.children.first_mut() {
+                    self.content.as_widget_mut().operate(content, layout, renderer, operation);
+                }
             }
     };
     (@hook $message:ty, $theme:ty, $renderer:ty; size_hint) => {
@@ -41,7 +57,10 @@ macro_rules! forward_widget {
             tree: &Tree,
             cursor: mouse::Cursor,
         ) -> iced_accessibility::A11yTree {
-            self.content.as_widget().a11y_nodes(layout, &tree.children[0], cursor)
+            let Some(content) = tree.children.first() else {
+                return iced_accessibility::A11yTree::default();
+            };
+            self.content.as_widget().a11y_nodes(layout, content, cursor)
         }
     };
     (@hook $message:ty, $theme:ty, $renderer:ty; update) => {
@@ -56,7 +75,9 @@ macro_rules! forward_widget {
                 shell: &mut Shell<'_, $message>,
                 viewport: &Rectangle,
             ) {
-                self.content.as_widget_mut().update(&mut tree.children[0], event, layout, cursor, renderer, clipboard, shell, viewport);
+                if let Some(content) = tree.children.first_mut() {
+                    self.content.as_widget_mut().update(content, event, layout, cursor, renderer, clipboard, shell, viewport);
+                }
             }
     };
     (@hook $message:ty, $theme:ty, $renderer:ty; draw) => {
@@ -70,12 +91,17 @@ macro_rules! forward_widget {
                 cursor: mouse::Cursor,
                 viewport: &Rectangle,
             ) {
-                self.content.as_widget().draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+                if let Some(content) = tree.children.first() {
+                    self.content.as_widget().draw(content, renderer, theme, style, layout, cursor, viewport);
+                }
             }
     };
     (@hook $message:ty, $theme:ty, $renderer:ty; mouse_interaction) => {
         fn mouse_interaction(&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle, renderer: &$renderer) -> mouse::Interaction {
-                self.content.as_widget().mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+                let Some(content) = tree.children.first() else {
+                    return mouse::Interaction::default();
+                };
+                self.content.as_widget().mouse_interaction(content, layout, cursor, viewport, renderer)
             }
     };
     (@hook $message:ty, $theme:ty, $renderer:ty; overlay) => {
@@ -87,12 +113,15 @@ macro_rules! forward_widget {
                 viewport: &Rectangle,
                 translation: Vector,
             ) -> Option<overlay::Element<'b, $message, $theme, $renderer>> {
-                self.content.as_widget_mut().overlay(&mut tree.children[0], layout, renderer, viewport, translation)
+                let content = tree.children.first_mut()?;
+                self.content.as_widget_mut().overlay(content, layout, renderer, viewport, translation)
             }
     };
     (@hook $message:ty, $theme:ty, $renderer:ty; drag_destinations) => {
         fn drag_destinations(&self, tree: &Tree, layout: Layout<'_>, renderer: &$renderer, dnd_rectangles: &mut cosmic::iced::advanced::clipboard::DndDestinationRectangles) {
-                self.content.as_widget().drag_destinations(&tree.children[0], layout, renderer, dnd_rectangles);
+                if let Some(content) = tree.children.first() {
+                    self.content.as_widget().drag_destinations(content, layout, renderer, dnd_rectangles);
+                }
             }
     };
 }

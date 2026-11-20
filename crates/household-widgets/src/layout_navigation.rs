@@ -94,15 +94,12 @@ impl<Message> Widget<Message, Theme, Renderer> for RegionObserver<'_, Message> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        // Without its content's tree there is nothing to update or observe.
+        let Some(content) = tree.children.first_mut() else {
+            return;
+        };
         self.content.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
+            content, event, layout, cursor, renderer, clipboard, shell, viewport,
         );
         if !matches!(
             event,
@@ -115,7 +112,7 @@ impl<Message> Widget<Message, Theme, Renderer> for RegionObserver<'_, Message> {
         let mut reports = RegionReports::default();
         self.content
             .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, &mut reports);
+            .operate(content, layout, renderer, &mut reports);
         let state = tree.state.downcast_mut::<ObserverState>();
         if state.previous.as_ref() != Some(&reports) {
             state.previous = Some(reports.clone());
@@ -186,9 +183,13 @@ impl<Message> Widget<Message, Theme, Renderer> for RegionMarker<'_, Message> {
             bounds,
         };
         operation.custom(None, bounds, &mut report);
-        self.content
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
+        // The marker's own box is reported; without its content's tree there
+        // is no content to operate on.
+        if let Some(content) = tree.children.first_mut() {
+            self.content
+                .as_widget_mut()
+                .operate(content, layout, renderer, operation);
+        }
     }
 
     #[cfg(feature = "a11y")]
@@ -198,9 +199,10 @@ impl<Message> Widget<Message, Theme, Renderer> for RegionMarker<'_, Message> {
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        self.content
-            .as_widget()
-            .a11y_nodes(layout, &tree.children[0], cursor)
+        let Some(content) = tree.children.first() else {
+            return iced_accessibility::A11yTree::default();
+        };
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
 }
 
@@ -235,13 +237,14 @@ fn contains(a: Rectangle, b: Rectangle) -> bool {
 /// One geometric result per column. `viewport` is the intersection of all
 /// applicable clipping viewports in the same window coordinate space.
 pub fn viewing_section(viewport: Rectangle, sections: &[SectionGeometry]) -> Option<RegionId> {
-    let index = sections
+    // The first section in view, and the sections after it in order.
+    let mut from_first = sections
         .iter()
-        .position(|s| intersects(s.bounds, viewport))?;
-    let first = sections[index];
+        .skip_while(|s| !intersects(s.bounds, viewport));
+    let first = from_first.next()?;
     let midpoint = first.bounds.y + first.bounds.height / 2.0;
     if viewport.y >= midpoint
-        && let Some(next) = sections.get(index + 1)
+        && let Some(next) = from_first.next()
         && next
             .introduction
             .is_some_and(|intro| contains(viewport, intro))

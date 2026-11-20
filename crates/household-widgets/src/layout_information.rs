@@ -126,9 +126,12 @@ impl<Message> Widget<Message, Theme, Renderer> for VerifiedBox<'_, Message> {
         if !self.binding_matches {
             self.agreement.set(false);
         }
+        let Some(content) = tree.children.first_mut() else {
+            return refused_node(&self.agreement);
+        };
         self.content
             .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
+            .layout(content, renderer, limits)
     }
 
     fn operate(
@@ -159,12 +162,13 @@ impl<Message> Widget<Message, Theme, Renderer> for VerifiedBox<'_, Message> {
                 };
                 operation.custom(None, layout.bounds(), &mut accepted);
             }
-            self.content.as_widget_mut().operate(
-                &mut tree.children[0],
-                layout,
-                renderer,
-                operation,
-            );
+            // Without its content's tree there is no content to operate on
+            // (and laid out so, the box refused its stage: `refused_node`).
+            if let Some(content) = tree.children.first_mut() {
+                self.content
+                    .as_widget_mut()
+                    .operate(content, layout, renderer, operation);
+            }
         }
     }
 
@@ -175,8 +179,9 @@ impl<Message> Widget<Message, Theme, Renderer> for VerifiedBox<'_, Message> {
         tree: &Tree,
         cursor: mouse::Cursor,
     ) -> iced_accessibility::A11yTree {
-        self.content
-            .as_widget()
-            .a11y_nodes(layout, &tree.children[0], cursor)
+        let Some(content) = tree.children.first() else {
+            return iced_accessibility::A11yTree::default();
+        };
+        self.content.as_widget().a11y_nodes(layout, content, cursor)
     }
 }
