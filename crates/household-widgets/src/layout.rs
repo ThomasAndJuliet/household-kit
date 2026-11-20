@@ -2661,6 +2661,10 @@ mod invalid_tests;
 mod mismatch_tests;
 
 #[cfg(test)]
+#[path = "layout_arrangement_tests.rs"]
+mod arrangement_tests;
+
+#[cfg(test)]
 mod renderer_minimum_tests {
     use super::*;
     use cosmic::iced::advanced::renderer::Headless;
