@@ -36,9 +36,10 @@ pub fn framed_child<'a, Message: 'a>(
 }
 
 impl<'a, Message: 'a> Frame<'a, Message> {
-    /// The content's measurement with the padding added round it. A weight of
-    /// zero protects the content's preferred width, so for such content that
-    /// width, not its minimum, is what the frame's minimum width adds to.
+    /// The content's measurement with the padding added round it. The
+    /// frame's minimum width adds the padding to the width the content
+    /// cannot go below (`WidthCapacity::least`): for content of weight zero,
+    /// its preferred width, not its minimum.
     pub fn measure(&self, level: Level, renderer: &Renderer) -> MeasuredSize {
         let inner = self.content.query(level, renderer);
         let chrome = Size::new(self.padding.x(), self.padding.y());
@@ -48,11 +49,7 @@ impl<'a, Message: 'a> Frame<'a, Message> {
                 inner.preferred.height + chrome.height,
             ),
             minimum: Size::new(
-                if self.content.weight == 0.0 {
-                    inner.preferred.width
-                } else {
-                    inner.minimum.width
-                } + chrome.width,
+                self.content.width_capacity(inner).least() + chrome.width,
                 inner.minimum.height + chrome.height,
             ),
         }

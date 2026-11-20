@@ -126,6 +126,29 @@ pub struct WidthCapacity {
     pub weight: f32,
 }
 
+impl WidthCapacity {
+    /// The width this capacity cannot be given less than: its minimum, or
+    /// its preferred width when its weight is zero.
+    ///
+    /// This is the one statement of the rule "a weight of zero protects the
+    /// preferred width". A weight says how fast a part gives width up in a
+    /// shortage, and a part that gives none up offers its preferred width as
+    /// its minimum. Every place that needs that width asks here: what
+    /// `allocate_width` requires, the minimum width a composition and a frame
+    /// measure (`Composition::measure`, `Frame::measure`), and the floor by
+    /// which a row and a wrap check and pack their children
+    /// (`Composition::plan_row`, `Composition::plan_wrap`). A column shares
+    /// height with the same capacities, so there it protects a preferred
+    /// height (`Composition::plan_column`).
+    fn least(self) -> f32 {
+        if self.weight == 0.0 {
+            self.preferred
+        } else {
+            self.minimum
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AllocationError {
     InvalidInput,
@@ -158,13 +181,7 @@ pub fn allocate_width(
     }
     let required: f64 = capacities
         .iter()
-        .map(|capacity| {
-            f64::from(if capacity.weight == 0.0 {
-                capacity.preferred
-            } else {
-                capacity.minimum
-            })
-        })
+        .map(|capacity| f64::from(capacity.least()))
         .sum();
     // Native geometry uses f32. Summing neighbouring requested dimensions in
     // f64 can exceed their f32 total by a few ULPs after a divider drag. Use
@@ -1767,8 +1784,8 @@ struct RowExtent {
 impl<'a, Message: 'a> Composition<'a, Message> {
     /// What the arrangement measures from its visible children, each
     /// measured once at the level. A child's minimum width here is the width
-    /// it cannot go below: its minimum, or its preferred width when its
-    /// weight is zero. Spacing goes between visible children only.
+    /// it cannot go below (`WidthCapacity::least`). Spacing goes between
+    /// visible children only.
     ///
     /// One function with an arm per arrangement, not three: the arms share
     /// the measured children and the gap, and each arm is whole on its own.
@@ -1783,13 +1800,6 @@ impl<'a, Message: 'a> Composition<'a, Message> {
             .map(|child| (child, child.query(level, renderer)))
             .collect();
         let gap = self.spacing * measured.len().saturating_sub(1) as f32;
-        let floor = |child: &Child<'a, Message>, size: &MeasuredSize| {
-            if child.weight == 0.0 {
-                size.preferred.width
-            } else {
-                size.minimum.width
-            }
-        };
         let mut result = MeasuredSize {
             preferred: Size::ZERO,
             minimum: Size::ZERO,
@@ -1799,9 +1809,10 @@ impl<'a, Message: 'a> Composition<'a, Message> {
             // the minimum as in the preferred; the height is the tallest.
             Arrangement::Row => {
                 for (child, size) in &measured {
+                    let least = child.width_capacity(*size).least();
                     result.preferred.width += size.preferred.width;
                     result.preferred.height = result.preferred.height.max(size.preferred.height);
-                    result.minimum.width += floor(child, size);
+                    result.minimum.width += least;
                     result.minimum.height = result.minimum.height.max(size.minimum.height);
                 }
                 result.preferred.width += gap;
@@ -1814,9 +1825,10 @@ impl<'a, Message: 'a> Composition<'a, Message> {
             // measures rows.
             Arrangement::Wrap => {
                 for (child, size) in &measured {
+                    let least = child.width_capacity(*size).least();
                     result.preferred.width += size.preferred.width;
                     result.preferred.height = result.preferred.height.max(size.preferred.height);
-                    result.minimum.width = result.minimum.width.max(floor(child, size));
+                    result.minimum.width = result.minimum.width.max(least);
                     result.minimum.height = result.minimum.height.max(size.minimum.height);
                 }
                 result.preferred.width += gap;
@@ -1825,8 +1837,9 @@ impl<'a, Message: 'a> Composition<'a, Message> {
             // up, in the minimum as in the preferred.
             Arrangement::Column => {
                 for (child, size) in &measured {
+                    let least = child.width_capacity(*size).least();
                     result.preferred.width = result.preferred.width.max(size.preferred.width);
-                    result.minimum.width = result.minimum.width.max(floor(child, size));
+                    result.minimum.width = result.minimum.width.max(least);
                     result.preferred.height += size.preferred.height;
                     result.minimum.height += size.minimum.height;
                 }
@@ -1963,10 +1976,10 @@ impl<'a, Message: 'a> Composition<'a, Message> {
     /// left, with the spacing between them, each centred on the row's
     /// height or, for `row_child_top`, aligned to its top.
     ///
-    /// Width first. A child's floor is the width it cannot go below (its
-    /// minimum width, or its preferred width when its weight is zero); a
-    /// floor wider than the row fails it, child by child in order, before
-    /// anything is allocated. Then the row's width less its gaps is shared
+    /// Width first. A child's floor is the width it cannot go below
+    /// (`WidthCapacity::least`); a floor wider than the row fails it, child
+    /// by child in order, before anything is allocated. Then the row's width
+    /// less its gaps is shared
     /// among the children by their capacities: a shortage by weight, a
     /// surplus by growth (`place_row`).
     ///
@@ -1985,11 +1998,7 @@ impl<'a, Message: 'a> Composition<'a, Message> {
     ) -> Result<GeometryPlan, AllocationError> {
         let visible = self.measure_visible(level, renderer)?;
         for (_, child, measured) in &visible {
-            let minimum = if child.weight == 0.0 {
-                measured.preferred.width
-            } else {
-                measured.minimum.width
-            };
+            let minimum = child.width_capacity(*measured).least();
             if minimum > width + FIT_EPSILON {
                 return Err(AllocationError::NoFit {
                     required: minimum,
@@ -2014,10 +2023,10 @@ impl<'a, Message: 'a> Composition<'a, Message> {
     /// row's height.
     ///
     /// Width first. The children are packed into rows in order by their
-    /// floors, the width each cannot go below (its minimum width, or its
-    /// preferred width when its weight is zero): a child whose floor, after
-    /// a gap, would take its row past the room starts the next row, and a
-    /// child whose floor alone is wider than the room fails the wrap. Each
+    /// floors, the width each cannot go below (`WidthCapacity::least`): a
+    /// child whose floor, after a gap, would take its row past the room
+    /// starts the next row, and a child whose floor alone is wider than the
+    /// room fails the wrap. Each
     /// row is then given the whole width afresh and shared among its
     /// children as a row's is (`place_row`).
     ///
@@ -2046,11 +2055,7 @@ impl<'a, Message: 'a> Composition<'a, Message> {
         let mut row: Vec<Visible<'_, 'a, Message>> = Vec::new();
         let mut used = 0.0;
         for (index, child, measured) in visible {
-            let minimum = if child.weight == 0.0 {
-                measured.preferred.width
-            } else {
-                measured.minimum.width
-            };
+            let minimum = child.width_capacity(measured).least();
             if minimum > width + FIT_EPSILON {
                 return Err(AllocationError::NoFit {
                     required: minimum,
