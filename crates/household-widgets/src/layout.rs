@@ -2156,14 +2156,6 @@ struct VerifiedDecoration<'a, Message> {
     agreement: Rc<Cell<bool>>,
     check_constraints: bool,
 }
-// `forward_widget!` (src/forward.rs, outside the layout modules) passes the
-// tree's first child unchecked (`tree.children[0]`) in each hook it forwards
-// in this impl. Brief E5b leaves code outside the layout modules alone, and
-// Rust ignores a lint attribute on a macro invocation, so the allow is on the
-// impl; its own methods take the child with `first`/`first_mut`. The macro
-// doing the same, with nothing done or the neutral value answered when the
-// child is missing, would let this allow go.
-#[allow(clippy::indexing_slicing)]
 impl<Message> Widget<Message, Theme, Renderer> for VerifiedDecoration<'_, Message> {
     forward_widget!(Message, Theme, Renderer; children, diff, size, draw, update, operate, mouse_interaction, overlay, drag_destinations);
     fn layout(
@@ -2224,14 +2216,6 @@ struct VerifiedLeaf<'a, Message> {
     compress_height: bool,
     agreement: Rc<Cell<bool>>,
 }
-// `forward_widget!` (src/forward.rs, outside the layout modules) passes the
-// tree's first child unchecked (`tree.children[0]`) in each hook it forwards
-// in this impl. Brief E5b leaves code outside the layout modules alone, and
-// Rust ignores a lint attribute on a macro invocation, so the allow is on the
-// impl; its own methods take the child with `first`/`first_mut`. The macro
-// doing the same, with nothing done or the neutral value answered when the
-// child is missing, would let this allow go.
-#[allow(clippy::indexing_slicing)]
 impl<Message> Widget<Message, Theme, Renderer> for VerifiedLeaf<'_, Message> {
     forward_widget!(Message, Theme, Renderer; children, diff, size, draw, update, operate, mouse_interaction, overlay, drag_destinations);
     fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, _: &layout::Limits) -> layout::Node {
@@ -2275,14 +2259,6 @@ struct FixedComponent<'a, Message> {
     level: Level,
     content: Element<'a, Message>,
 }
-// `forward_widget!` (src/forward.rs, outside the layout modules) passes the
-// tree's first child unchecked (`tree.children[0]`) in each hook it forwards
-// in this impl. Brief E5b leaves code outside the layout modules alone, and
-// Rust ignores a lint attribute on a macro invocation, so the allow is on the
-// impl; its own methods take the child with `first`/`first_mut`. The macro
-// doing the same, with nothing done or the neutral value answered when the
-// child is missing, would let this allow go.
-#[allow(clippy::indexing_slicing)]
 impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for FixedComponent<'a, Message> {
     forward_widget!(Message, Theme, Renderer; draw, update, operate, mouse_interaction, overlay, drag_destinations);
     fn diff(&mut self, _: &mut Tree) {}

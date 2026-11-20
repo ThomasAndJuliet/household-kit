@@ -72,14 +72,6 @@ struct ObserverState {
     previous: Option<RegionReports>,
 }
 
-// `forward_widget!` (src/forward.rs, outside the layout modules) passes the
-// tree's first child unchecked (`tree.children[0]`) in each hook it forwards
-// in this impl. Brief E5b leaves code outside the layout modules alone, and
-// Rust ignores a lint attribute on a macro invocation, so the allow is on the
-// impl; its own methods take the child with `first`/`first_mut`. The macro
-// doing the same, with nothing done or the neutral value answered when the
-// child is missing, would let this allow go.
-#[allow(clippy::indexing_slicing)]
 impl<Message> Widget<Message, Theme, Renderer> for RegionObserver<'_, Message> {
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<ObserverState>()
@@ -172,14 +164,6 @@ struct RegionMarker<'a, Message> {
     region: Region,
 }
 
-// `forward_widget!` (src/forward.rs, outside the layout modules) passes the
-// tree's first child unchecked (`tree.children[0]`) in each hook it forwards
-// in this impl. Brief E5b leaves code outside the layout modules alone, and
-// Rust ignores a lint attribute on a macro invocation, so the allow is on the
-// impl; its own methods take the child with `first`/`first_mut`. The macro
-// doing the same, with nothing done or the neutral value answered when the
-// child is missing, would let this allow go.
-#[allow(clippy::indexing_slicing)]
 impl<Message> Widget<Message, Theme, Renderer> for RegionMarker<'_, Message> {
     forward_widget!(Message, Theme, Renderer; children, diff, size, size_hint, layout, draw, update, mouse_interaction, overlay, drag_destinations);
 
