@@ -2863,6 +2863,10 @@ mod offer_tests;
 mod tolerance_tests;
 
 #[cfg(test)]
+#[path = "layout_decision_tests.rs"]
+mod decision_tests;
+
+#[cfg(test)]
 mod renderer_minimum_tests {
     use super::*;
     use cosmic::iced::advanced::renderer::Headless;
