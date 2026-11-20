@@ -261,7 +261,7 @@ fn every_node_of_a_finished_plan_is_bound_by_the_children_that_made_it() {
     let seen = Seen::default();
     let parts = parts(&seen);
     let plan = planned(&parts);
-    let by = |child: &Child<'static, ()>| (child.preparation.clone(), Level::Mild);
+    let by = |child: &Child<'static, ()>| (child.preparation().clone(), Level::Mild);
     assert_eq!(
         bindings(&plan),
         vec![
@@ -314,7 +314,7 @@ fn reports_list_every_reporting_node_in_order_with_its_owner_and_size() {
         })
         .collect();
     let mild = Level::Mild;
-    let id = |child: &Child<'static, ()>| child.preparation.clone();
+    let id = |child: &Child<'static, ()>| child.preparation().clone();
     assert_eq!(
         reports,
         vec![
@@ -367,7 +367,7 @@ fn each_report_callback_last_saw_its_node_as_it_stood_when_bound() {
             .unwrap();
         assert_eq!(*level, Level::Mild);
         let node = reported_by(&plan, source).unwrap();
-        let expected = as_bound_by(node, source, &owner.preparation);
+        let expected = as_bound_by(node, source, owner.preparation());
         assert_eq!(*last, expected, "{source:?}");
         assert!(last.same_preparation(&expected), "{source:?}");
     }
@@ -396,7 +396,7 @@ fn a_hidden_child_or_family_at_the_root_is_bound_by_itself_alone_and_reports_not
         assert!(plan.children.is_empty());
         assert_eq!(
             plan.bindings,
-            vec![(hidden.preparation.clone(), Level::Preferred)]
+            vec![(hidden.preparation().clone(), Level::Preferred)]
         );
         assert!(plan.reports().is_empty());
         assert!(agrees(hidden, Level::Preferred, &plan, ROOM));
@@ -455,8 +455,8 @@ fn a_forms_familys_own_adjustments_leave_the_node_its_form_reported_on() {
         assert_eq!(
             node.bindings,
             vec![
-                (selected.preparation.clone(), Level::Preferred),
-                (family.preparation.clone(), Level::Preferred),
+                (selected.preparation().clone(), Level::Preferred),
+                (family.preparation().clone(), Level::Preferred),
             ]
         );
         let seen = seen.borrow();
@@ -467,10 +467,10 @@ fn a_forms_familys_own_adjustments_leave_the_node_its_form_reported_on() {
                 .map(|(_, _, plan)| plan.clone())
                 .unwrap()
         };
-        let form = as_bound_by(node, SourceId(1), &selected.preparation);
+        let form = as_bound_by(node, SourceId(1), selected.preparation());
         assert_eq!(last(SourceId(1)), form);
         assert!(last(SourceId(1)).same_preparation(&form));
-        let whole = as_bound_by(node, SourceId(2), &family.preparation);
+        let whole = as_bound_by(node, SourceId(2), family.preparation());
         assert_eq!(last(SourceId(2)), whole);
         assert!(agrees(
             &column,

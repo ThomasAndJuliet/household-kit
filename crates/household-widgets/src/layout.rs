@@ -521,7 +521,6 @@ impl Fixed {
 pub struct Child<'a, Message> {
     kind: Kind<'a, Message>,
     adjustments: Vec<Adjustment<'a>>,
-    decorator: Option<ViewMap<'a, Message>>,
     hidden: Rc<dyn Fn(Level) -> bool + 'a>,
     weight: f32,
     grow: f32,
@@ -530,10 +529,50 @@ pub struct Child<'a, Message> {
     fixed: Fixed,
     /// A builder was given a number it cannot use (`invalid_unless`).
     invalid: bool,
+    note: Note<'a, Message>,
+}
+
+/// What the widgets keep on every child for themselves, apart from its
+/// geometry: the preparation identity that certifies a plan was made from
+/// this child (`bind_geometry`), the decorator that styles its rendered
+/// content (`map_view`), the presentation it was prepared with
+/// (`PresentationFamily::prepare`), the information it reports
+/// (`report_information`) and the regions it names (`report_region`).
+/// Planning never reads any of it.
+struct Note<'a, Message> {
     preparation: PreparedId,
+    decorator: Option<ViewMap<'a, Message>>,
     presentation: Option<Presentation>,
     information: Option<SourceInformation<'a>>,
     regions: Vec<Region>,
+}
+
+/// A child's note before anything is declared: a fresh preparation
+/// identity, and nothing else.
+impl<Message> Default for Note<'_, Message> {
+    fn default() -> Self {
+        Self {
+            preparation: PreparedId::new(),
+            decorator: None,
+            presentation: None,
+            information: None,
+            regions: Vec::new(),
+        }
+    }
+}
+
+// Written by hand, as for `Child`: the decorator is an `Rc`, and a derived
+// `Clone` would ask for `Message: Clone`.
+impl<Message> Clone for Note<'_, Message> {
+    fn clone(&self) -> Self {
+        Self {
+            preparation: self.preparation.clone(),
+            decorator: self.decorator.clone(),
+            presentation: self.presentation,
+            information: self.information.clone(),
+            regions: self.regions.clone(),
+        }
+    }
 }
 
 /// Whether a number a caller gives as a length, a weight or a growth factor
@@ -547,7 +586,6 @@ impl<Message> Clone for Child<'_, Message> {
         Self {
             kind: self.kind.clone(),
             adjustments: self.adjustments.clone(),
-            decorator: self.decorator.clone(),
             hidden: self.hidden.clone(),
             weight: self.weight,
             grow: self.grow,
@@ -555,10 +593,7 @@ impl<Message> Clone for Child<'_, Message> {
             reserve_width: self.reserve_width,
             fixed: self.fixed,
             invalid: self.invalid,
-            preparation: self.preparation.clone(),
-            presentation: self.presentation,
-            information: self.information.clone(),
-            regions: self.regions.clone(),
+            note: self.note.clone(),
         }
     }
 }
@@ -575,7 +610,6 @@ impl<'a, Message: 'a> Child<'a, Message> {
         Self {
             kind,
             adjustments: Vec::new(),
-            decorator: None,
             hidden: Rc::new(|_| false),
             weight: 1.0,
             grow: 0.0,
@@ -583,10 +617,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
             reserve_width: false,
             fixed: Fixed::default(),
             invalid: false,
-            preparation: PreparedId::new(),
-            presentation: None,
-            information: None,
-            regions: Vec::new(),
+            note: Note::default(),
         }
     }
 
@@ -625,12 +656,19 @@ impl<'a, Message: 'a> Child<'a, Message> {
         self
     }
 
+    /// The preparation identity in this child's note, which the binding
+    /// tests compare with a plan's bindings.
+    #[cfg(test)]
+    fn preparation(&self) -> &PreparedId {
+        &self.note.preparation
+    }
+
     fn refresh_preparation(&mut self) {
-        self.preparation = PreparedId::new();
+        self.note.preparation = PreparedId::new();
     }
 
     pub fn presentation(&self) -> Option<Presentation> {
-        self.presentation
+        self.note.presentation
     }
 
     /// Report family-local information loss from prepared immutable data and
@@ -645,7 +683,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         revision: u64,
         report: impl Fn(Level, &GeometryPlan) -> Vec<InformationLoss> + 'a,
     ) -> Self {
-        self.information = Some(SourceInformation {
+        self.note.information = Some(SourceInformation {
             source,
             revision,
             report: Rc::new(report),
@@ -657,7 +695,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
     /// Name an accepted native box for section navigation. Multiple roles may
     /// describe the same box. Rebuilding refreshes the preparation identity.
     pub fn report_region(mut self, region: Region) -> Self {
-        self.regions.push(region);
+        self.note.regions.push(region);
         self.refresh_preparation();
         self
     }
@@ -744,19 +782,19 @@ impl<'a, Message: 'a> Child<'a, Message> {
                 Kind::Forms(forms) => forms.select(level).bind(level, plan),
             }
         }
-        plan.bindings.push((self.preparation.clone(), level));
+        plan.bindings.push((self.note.preparation.clone(), level));
         if !plan.hidden
-            && let Some(information) = &self.information
+            && let Some(information) = &self.note.information
         {
             let losses = (information.report)(level, plan);
             plan.source_reports.push(SourceReport {
                 source: information.source,
                 revision: information.revision,
-                presentation: self.presentation,
+                presentation: self.note.presentation,
                 level,
                 size: plan.size,
                 losses,
-                owner: self.preparation.clone(),
+                owner: self.note.preparation.clone(),
             });
         }
     }
@@ -793,9 +831,9 @@ impl<'a, Message: 'a> Child<'a, Message> {
         // allocation adapter here.
         match &self.kind {
             Kind::Leaf(leaf)
-                if self.decorator.is_none()
-                    && self.presentation.is_none()
-                    && self.information.is_none() =>
+                if self.note.decorator.is_none()
+                    && self.note.presentation.is_none()
+                    && self.note.information.is_none() =>
             {
                 (leaf.view)(level)
             }
@@ -1262,13 +1300,13 @@ impl<'a, Message: 'a> Child<'a, Message> {
         let binding_matches = plan
             .bindings
             .iter()
-            .any(|(id, planned_level)| id == &self.preparation && *planned_level == level);
+            .any(|(id, planned_level)| id == &self.note.preparation && *planned_level == level);
         let content = if !binding_matches || plan.hidden {
             widget::space().width(0).height(0).into()
         } else {
             self.render_content(level, plan, agreement.clone(), inherited_growth)
         };
-        let content = match &self.decorator {
+        let content = match &self.note.decorator {
             Some(_) if !binding_matches || plan.hidden => content,
             Some(decorate) => {
                 let content = Element::new(VerifiedDecoration {
@@ -1291,14 +1329,14 @@ impl<'a, Message: 'a> Child<'a, Message> {
             reports: if binding_matches && !plan.hidden {
                 plan.source_reports
                     .iter()
-                    .filter(|report| report.owner == self.preparation)
+                    .filter(|report| report.owner == self.note.preparation)
                     .cloned()
                     .collect()
             } else {
                 Vec::new()
             },
             regions: if binding_matches && !plan.hidden {
-                self.regions.clone()
+                self.note.regions.clone()
             } else {
                 Vec::new()
             },
@@ -1487,7 +1525,7 @@ impl<'a, Message: 'a> Child<'a, Message> {
         mut self,
         decorate: impl Fn(Element<'a, Message>) -> Element<'a, Message> + 'a,
     ) -> Self {
-        self.decorator = Some(match self.decorator.take() {
+        self.note.decorator = Some(match self.note.decorator.take() {
             Some(previous) => Rc::new(move |content| decorate(previous(content))),
             None => Rc::new(decorate),
         });

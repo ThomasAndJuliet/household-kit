@@ -113,7 +113,7 @@ impl PresentationFamily {
     ) -> Result<Child<'a, Message>, UnsupportedPresentation> {
         let presentation = self.resolve(instance, immediate_defaults)?;
         let mut child = build(presentation);
-        child.presentation = Some(presentation);
+        child.note.presentation = Some(presentation);
         child.refresh_preparation();
         Ok(child)
     }
