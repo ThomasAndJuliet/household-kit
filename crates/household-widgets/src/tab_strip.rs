@@ -39,6 +39,7 @@
 
 use crate::layout::{self as engine, AnchorCandidate, Child, Level};
 use crate::menu::{Menu, MenuItem};
+use crate::spacing::Kind;
 use crate::window::{Toggle, hover_box, trigger};
 use cosmic::iced::advanced::renderer::Renderer as _;
 use cosmic::iced::advanced::widget::{Id, Operation, Tree, tree};
@@ -50,11 +51,7 @@ use std::rc::Rc;
 
 /// The least a title is given, in characters' worth of the UI font
 pub const MINIMUM_TITLE_CHARS: f32 = 7.0;
-/// A tab's close control's distance from the tab's end (libcosmic's tab bar)
-const CLOSE_INSET: f32 = 8.0;
 const ICON_SIZE: f32 = 16.0;
-/// A tab's height in COSMIC's tab bar, unless the app says otherwise
-const TAB_HEIGHT: f32 = 32.0;
 /// Pointer travel before a press on a tab is a drag: the 25 pixels Terminal
 /// gave libcosmic's tab bar
 const DRAG_THRESHOLD: f32 = 25.0;
@@ -340,7 +337,8 @@ pub struct TabStrip<'a, M, R> {
     on_reorder: Option<Rc<dyn Fn(TabId, usize) -> M + 'a>>,
     decorate: Option<Decorate<'a, M>>,
     title_size: f32,
-    height: f32,
+    /// Set by the app; otherwise a control's height, `space_l`
+    height: Option<f32>,
     editor: Option<Id>,
 }
 
@@ -369,7 +367,7 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
             on_reorder: None,
             decorate: None,
             title_size: 14.0,
-            height: TAB_HEIGHT,
+            height: None,
             editor: None,
         }
     }
@@ -416,24 +414,31 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
         self
     }
 
-    /// The tabs' height (32, as COSMIC's tab bar has it, by default)
+    /// The tabs' height (`space_l`, as COSMIC's tab bar has it, by default)
     pub fn tab_height(mut self, height: f32) -> Self {
         assert!(height.is_finite() && height > 0.0);
-        self.height = height;
+        self.height = Some(height);
         self
     }
 
     pub fn view(self) -> Element<'a, M> {
+        self.view_in(&cosmic::theme::spacing())
+    }
+
+    /// [`view`](Self::view) with the given spacing steps: the tab's
+    /// [`Tab`](Kind::Tab) and [`TabClosable`](Kind::TabClosable) insets and
+    /// gap, and the control height
+    fn view_in(self, spacing: &cosmic::cosmic_theme::Spacing) -> Element<'a, M> {
+        let height = self
+            .height
+            .unwrap_or_else(|| crate::spacing::control_height(spacing));
         let ns = self.namespace.clone();
         let ch = crate::menu::measured_width("0", self.title_size, cosmic::font::default());
         let minimum = ch * MINIMUM_TITLE_CHARS;
         // The space before a tab's content, and after it where it has no close
-        // control, and between its parts: COSMIC's tab bar's `space_s` and
-        // `space_xxs`
-        let (inset, gap) = {
-            let spacing = cosmic::theme::spacing();
-            (f32::from(spacing.space_s), f32::from(spacing.space_xxs))
-        };
+        // control, and between its parts
+        let (inset, gap) = (Kind::Tab.inset(spacing).left, Kind::Tab.gap(spacing));
+        let close_end = Kind::TabClosable.inset(spacing).right;
         let mut minimums = Vec::new();
         let selected_id = self.model.selected;
         let line_colour = self
@@ -489,7 +494,7 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
                 }
                 parts.push(button.into());
                 least += ICON_SIZE + gap;
-                end = CLOSE_INSET;
+                end = close_end;
             }
             least += end;
             minimums.push(least);
@@ -497,11 +502,11 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
                 widget::row::with_children(parts)
                     .spacing(gap)
                     .width(Length::Fill)
-                    .height(self.height)
+                    .height(height)
                     .align_y(cosmic::iced::Alignment::Center),
             )
             .width(Length::Fill)
-            .height(self.height)
+            .height(height)
             .align_y(cosmic::iced::alignment::Vertical::Center)
             .padding(Padding {
                 top: 0.0,
@@ -526,7 +531,7 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
             let informed = hover_box(
                 id.clone(),
                 focusable,
-                engine::column_child(card, 4.0),
+                engine::column_child(card, Kind::InformationCard.gap(spacing)),
                 vec![AnchorCandidate::new(
                     engine::Side::Below,
                     engine::Alignment::CenterBounded,
@@ -540,16 +545,21 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
             selects.push(tab.on_select);
             elements.push(element);
         }
+        let small = Kind::SmallControl.inset(spacing).left;
         let on_button = |side: Overflow, root: R| -> (Element<'a, M>, Element<'a, M>) {
             let name = if side == Overflow::Left {
                 "go-previous-symbolic"
             } else {
                 "go-next-symbolic"
             };
-            fn button<'b, N: Clone + 'static>(name: &str, press: Option<N>) -> Element<'b, N> {
+            fn button<'b, N: Clone + 'static>(
+                name: &str,
+                press: Option<N>,
+                padding: f32,
+            ) -> Element<'b, N> {
                 widget::button::icon(widget::icon::from_name(name).handle())
                     .icon_size(16)
-                    .padding(4)
+                    .padding(padding)
                     .on_press_maybe(press)
                     .into()
             }
@@ -557,10 +567,10 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
             let on = trigger(
                 id.clone(),
                 root,
-                crate::popup::focus_target(id.clone(), button(name, Some(Toggle)))
+                crate::popup::focus_target(id.clone(), button(name, Some(Toggle), small))
                     .on_activate(Toggle),
             );
-            let off: Element<'a, M> = button(name, None);
+            let off: Element<'a, M> = button(name, None, small);
             (on, off)
         };
         let (left_on, left_off) = on_button(Overflow::Left, self.roots.0);
