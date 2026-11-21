@@ -16,6 +16,9 @@
 //!   Secondary, Tertiary, Destructive and Icon differ only in paint and
 //!   side inset; height, width in its largest state, the compact square,
 //!   washes, fade, focus ring and tooltip are shared.
+//! - [`spacing`]: the padding system: each container has a kind, and the
+//!   kind decides its inset and the gap between its children, in COSMIC's
+//!   density-following steps. The widgets here use no pixel values for layout.
 //! - [`dropdown`]: a dropdown whose list is the window's one menu chain.
 //! - [`scroll_list`]: a scrollable list of boxes, optionally virtualised,
 //!   keeping the reader's place.
@@ -57,6 +60,7 @@ mod scroll;
 pub mod scroll_intent;
 pub mod scroll_list;
 pub mod short_text_box;
+pub mod spacing;
 mod switch;
 pub mod tab_strip;
 pub mod tabs;
