@@ -10,8 +10,13 @@ use cosmic::{Element, Renderer, Theme, widget};
 
 use crate::layout::{Child, Level, child, measure_element};
 use crate::scroll::{SCROLLBAR_GAP, SCROLLBAR_WIDTH};
+use crate::spacing::Kind;
 
-const ICON_TEXT_GAP: u16 = 8;
+/// The space between a tab's icon and its text: the [`Tab`](Kind::Tab)
+/// kind's gap, in the whole pixels libcosmic's tab bar takes
+fn icon_text_gap(spacing: &cosmic::cosmic_theme::Spacing) -> u16 {
+    Kind::Tab.gap(spacing).round() as u16
+}
 
 #[derive(Clone)]
 pub struct Tab {
@@ -171,7 +176,7 @@ fn native_bar<'a, Message: Clone + 'static>(
         .maximum_button_width(u16::MAX)
         .button_height(button_height)
         .font_size(font_size)
-        .button_spacing(ICON_TEXT_GAP)
+        .button_spacing(icon_text_gap(&cosmic::theme::spacing()))
         .spacing(0)
         .width(Length::Shrink)
         .style(style())

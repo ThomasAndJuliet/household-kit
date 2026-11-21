@@ -362,3 +362,12 @@ fn native_tab_keyboard_activation_reaches_the_same_index_callback() {
     );
     assert_eq!(messages, vec![0]);
 }
+
+/// The gap between a tab's icon and text is `space_xxs`: 8 at Standard and
+/// 4 at Compact
+#[test]
+fn the_icon_text_gap_follows_the_density() {
+    use cosmic::cosmic_theme::{Density, Spacing};
+    assert_eq!(icon_text_gap(&Spacing::default()), 8);
+    assert_eq!(icon_text_gap(&Spacing::from(Density::Compact)), 4);
+}

@@ -4,6 +4,7 @@
 
 use crate::hover_card::{self, TEXT_MIN_WIDTH};
 use crate::layout::{self, Alignment, AnchorCandidate, Side};
+use crate::spacing::Kind;
 use cosmic::iced::Padding;
 use cosmic::widget::{self, tooltip::Position};
 use cosmic::{Element, theme};
@@ -14,8 +15,7 @@ use std::rc::Rc;
 pub const TIP_WIDTH: f32 = 320.0;
 
 pub fn tip_padding() -> Padding {
-    let space = theme::active().cosmic().spacing;
-    Padding::from([space.space_xs, space.space_s])
+    Kind::InformationCard.inset(&theme::spacing())
 }
 
 pub fn tip_bubble<'a, M: 'a>(

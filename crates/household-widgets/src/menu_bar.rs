@@ -24,14 +24,18 @@
 
 use crate::layout::{self as engine, Child, Level, Stage};
 use crate::menu_parts::RowContour;
+use crate::spacing::Kind;
 use crate::window::{Entry, Toggle, UiEvent};
 use cosmic::iced::advanced::widget::{Id, Operation, Tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector};
 use cosmic::{Element, Renderer, Theme};
 
-/// A title's padding, as a header's menu titles have it
-const TITLE_PADDING: [f32; 2] = [4.0, 12.0];
+/// A title's padding, as a header's menu titles have it: the
+/// [`MenuTitle`](Kind::MenuTitle) kind's
+fn title_padding(spacing: &cosmic::cosmic_theme::Spacing) -> cosmic::iced::Padding {
+    Kind::MenuTitle.inset(spacing)
+}
 
 /// A window's menu bar: its menus' titles and the roots they open, in order.
 pub struct MenuBar<R> {
@@ -166,7 +170,7 @@ fn title<'a, M: 'a, R: Clone + PartialEq + 'static>(
     // header's controls (the accent, faded when the window is behind
     // others), as the libcosmic bar drew it
     let button = cosmic::widget::button::custom(body(label))
-        .padding(TITLE_PADDING)
+        .padding(title_padding(&cosmic::theme::spacing()))
         .class(cosmic::theme::Button::MenuRoot)
         .on_press(Toggle);
     let target = crate::popup::focus_target(id.clone(), button)
