@@ -12,6 +12,10 @@
 //!   Shift+click, and its selection drawn dimmed while unfocused.
 //! - [`short_text_box`]: the one-line text box, [`ShortTextBox`] and its
 //!   widget, sharing the text box's history, steps and keys.
+//! - [`button`]: the one button every look is, [`Button`]: Primary,
+//!   Secondary, Tertiary, Destructive and Icon differ only in paint and
+//!   side inset; height, width in its largest state, the compact square,
+//!   washes, fade, focus ring and tooltip are shared.
 //! - [`dropdown`]: a dropdown whose list is the window's one menu chain.
 //! - [`scroll_list`]: a scrollable list of boxes, optionally virtualised,
 //!   keeping the reader's place.
@@ -27,6 +31,7 @@
 mod forward;
 #[cfg(feature = "content")]
 pub mod content;
+pub mod button;
 pub mod dropdown;
 pub mod focus_regions;
 #[doc(hidden)]
@@ -57,7 +62,6 @@ pub mod tab_strip;
 pub mod tabs;
 
 pub mod text_box;
-mod text_button;
 pub mod text_menu;
 mod tooltip;
 pub mod window;
@@ -69,7 +73,7 @@ pub use scroll::horizontal_scroll;
 pub use short_text_box::{PasswordBox, ShortTextBox};
 pub use switch::{SwitchItem, Toggler, muted_colours, switch, switch_maybe, toggler};
 pub use text_box::TextBox;
-pub use text_button::{BUTTON_HEIGHT, Tertiary, TextButton, button_padding};
+pub use button::{Button, ButtonLook, button_height};
 pub use text_menu::{TextMenu, TextMenuHistory, TextMenuWords, text_menu};
 pub(crate) use tooltip::native_tooltip;
 pub use tooltip::{
