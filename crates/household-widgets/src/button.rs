@@ -43,9 +43,9 @@
 //! |---|---|---|
 //! | Primary | accent fill, on-accent semibold label | `space_s` |
 //! | Secondary | 2 px accent border drawn inside, accent semibold label | `space_s` |
-//! | Tertiary | accent bold underlined label, a wash on hover and press | `space_xxs` |
+//! | Tertiary | accent bold underlined label, a wash on hover and press | `space_s` |
 //! | Destructive | Primary's, in the theme's destructive colours | `space_s` |
-//! | TertiaryDestructive | Tertiary's, in the destructive text colour | `space_xxs` |
+//! | TertiaryDestructive | Tertiary's, in the destructive text colour | `space_s` |
 //! | Icon | libcosmic's icon button; the muted accent while selected (on) | none: always the square |
 //! | Segment | the Icon look's washes, the muted accent while chosen; a part of a [`crate::segmented::Segmented`] bar | `space_s` |
 //!
@@ -81,11 +81,11 @@
 //! use household_widgets::button::{Button, ButtonLook};
 //! use cosmic::cosmic_theme::Spacing;
 //!
-//! // Every size is a spacing step: at standard density the Primary look's
-//! // side inset is space_s (16 px) and Tertiary's space_xxs (8 px)
+//! // Every size is a spacing step, and every labelled look has the same
+//! // box: at standard density the side inset is space_s (16 px) for each
 //! let standard = Spacing::default();
 //! assert_eq!(ButtonLook::Primary.inset(&standard), 16.0);
-//! assert_eq!(ButtonLook::Tertiary.inset(&standard), 8.0);
+//! assert_eq!(ButtonLook::Tertiary.inset(&standard), 16.0);
 //! assert_eq!(ButtonLook::Icon.inset(&standard), 0.0);
 //!
 //! // A Copy button that says Copied for a moment is as wide as "Copied"
@@ -155,13 +155,15 @@ pub enum ButtonLook {
 
 impl ButtonLook {
     /// The space at each side of a labelled button's content: `space_s`
-    /// for the boxed looks, `space_xxs` for Tertiary, none for Icon (always
-    /// the square)
+    /// for every labelled look, so the same content makes the same box
+    /// whatever the look, and only the paint differs (Juliet, 21 Nov 2026:
+    /// "all button types have exactly the same box size and the only
+    /// difference is the styling"; "Make all the buttons the same").
+    /// None for Icon, which is always the square
     pub fn inset(self, spacing: &cosmic::cosmic_theme::Spacing) -> f32 {
         f32::from(match self {
-            Self::Primary | Self::Secondary | Self::Destructive | Self::Segment => spacing.space_s,
-            Self::Tertiary | Self::TertiaryDestructive => spacing.space_xxs,
             Self::Icon => 0,
+            Self::Primary | Self::Secondary | Self::Destructive | Self::Segment | Self::Tertiary | Self::TertiaryDestructive => spacing.space_s,
         })
     }
 

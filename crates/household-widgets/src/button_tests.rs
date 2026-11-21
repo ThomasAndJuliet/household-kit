@@ -60,8 +60,8 @@ fn each_look_at_standard_density_is_as_tall_and_inset_as_before() {
         (ButtonLook::Primary, 16.0),
         (ButtonLook::Secondary, 16.0),
         (ButtonLook::Destructive, 16.0),
-        (ButtonLook::Tertiary, 8.0),
-        (ButtonLook::TertiaryDestructive, 8.0),
+        (ButtonLook::Tertiary, 16.0),
+        (ButtonLook::TertiaryDestructive, 16.0),
     ] {
         let node = layout_of(Button::new(look, "Open").on_press(()).into(), &renderer);
         assert_eq!(node.size().height, 32.0, "{look:?}");
