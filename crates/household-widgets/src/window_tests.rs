@@ -765,6 +765,28 @@ fn an_earlier_sessions_actions_are_ignored() {
 }
 
 #[test]
+fn a_menus_disclosure_state_flows_through_the_chain() {
+    let mut window: WindowUi<Root> = WindowUi::new();
+    window.open(Root::A, Entry::Pointer);
+    let key =
+        crate::menu_surface::expansion_key(&[], crate::menu_surface::more_key(None, "Rest", 0));
+    assert!(window.chain().unwrap().expanded().is_empty());
+    let expand = window.chain().unwrap().on_expand::<()>()(key, true);
+    let UiEvent::Internal(expand) = expand else {
+        unreachable!()
+    };
+    window.apply(expand);
+    assert!(window.chain().unwrap().expanded().contains(&key));
+    assert!(window.chain().unwrap().is_expanded(key));
+    window.close();
+    window.open(Root::A, Entry::Pointer);
+    assert!(
+        window.chain().unwrap().expanded().is_empty(),
+        "the menu opens collapsed every time"
+    );
+}
+
+#[test]
 #[cfg(debug_assertions)]
 #[should_panic(expected = "outside any window root")]
 fn a_declaration_outside_any_window_root_is_a_construction_error() {

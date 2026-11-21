@@ -73,6 +73,7 @@ fn item(label: String, row: &str) -> MenuItem<Ev> {
         mark: None,
         disabled_reason: None,
         destructive: false,
+        detail: None,
     }
 }
 

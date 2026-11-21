@@ -103,6 +103,27 @@ pub fn row_style(
     }))
 }
 
+/// A Tertiary action in a menu's list (rule 7): accent text, no box and no
+/// wash of its own in any state; the row's keyboard outline (rule 6a) is the
+/// target's, as for every row. The label is drawn underlined and bold by the
+/// caller.
+pub fn tertiary_row_style(contour: RowContour) -> cosmic::theme::style::iced::Button {
+    cosmic::theme::style::iced::Button::Custom(Box::new(move |theme, status| {
+        use widget::button::{Catalog, Status};
+        let mut style = Catalog::style(theme, &cosmic::theme::style::iced::Button::Text, status);
+        let cosmic = theme.cosmic();
+        style.border.radius = contour.radius(theme);
+        style.border_radius = contour.radius(theme);
+        style.background = None;
+        style.text_color = cosmic.accent_text_color().into();
+        if status == Status::Disabled {
+            style.text_color.a *= 0.5;
+        }
+        style.icon_color = Some(style.text_color);
+        style
+    }))
+}
+
 /// Give a row its native target and its family's dark-grey contour. Disabled
 /// rows use the same target wrapper and omit `on_activate`.
 pub fn row_target<'a, M>(

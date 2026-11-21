@@ -177,6 +177,7 @@ pub fn resolved_menu<M>(
             mark: None,
             disabled_reason: reason(action),
             destructive: false,
+            detail: None,
         };
     let mut text = Menu::new();
     let cut = field.then(|| item(TextAction::Cut, &words.cut, Some("edit-cut-symbolic"), "x"));
@@ -238,6 +239,7 @@ pub fn resolved_menu<M>(
             mark: None,
             disabled_reason: reason,
             destructive: false,
+            detail: None,
         };
         let undo = row(
             &words.undo,

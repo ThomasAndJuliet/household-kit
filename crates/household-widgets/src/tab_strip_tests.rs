@@ -170,6 +170,7 @@ fn item(tab: TabId) -> MenuItem<Ev> {
         mark: None,
         disabled_reason: None,
         destructive: false,
+        detail: None,
     }
 }
 

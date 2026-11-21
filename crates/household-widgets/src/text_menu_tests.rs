@@ -132,6 +132,7 @@ fn custom_snapshot_is_local_and_selection_sets_group_order() {
         mark: None,
         disabled_reason: None,
         destructive: false,
+        detail: None,
     });
     let (menu, snapshot) = resolved_menu(context(), &words(), custom.clone(), None, icon);
     // With text selected, Copy first (household rule 28)
@@ -608,6 +609,7 @@ fn custom_rc_choice_is_delivered_only_to_its_source_once() {
             mark: None,
             disabled_reason: None,
             destructive: false,
+            detail: None,
         })
     };
     let a = text_menu(

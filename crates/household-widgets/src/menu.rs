@@ -13,6 +13,8 @@ use cosmic::{Element, theme};
 /// The minimum canvas for menu icons, marks and submenu indicators.
 pub const ICON_SIZE: f32 = 16.0;
 const PADDING: f32 = 16.0;
+/// The caption size of a row's detail line
+const CAPTION: f32 = 12.0;
 pub const MENU_MIN_WIDTH: u16 = 240;
 
 /// A check box or one choice among radio options.
@@ -32,13 +34,63 @@ pub struct MenuItem<M> {
     pub mark: Option<MenuMark>,
     pub disabled_reason: Option<String>,
     pub destructive: bool,
+    /// A second line under the label, in the caption style: what the row
+    /// acts on, such as the folder an "Open in …" row opens. It is measured
+    /// into the menu's width and height, wraps rather than clips, and the row's
+    /// selected, hovered and disabled states cover it with the label.
+    pub detail: Option<String>,
 }
 
+impl<M> MenuItem<M> {
+    /// A plain row: no icon, shortcut, mark, detail or disabled reason.
+    pub fn new(label: impl Into<String>, message: M) -> Self {
+        Self {
+            label: label.into(),
+            message,
+            icon: None,
+            shortcut: None,
+            mark: None,
+            disabled_reason: None,
+            destructive: false,
+            detail: None,
+        }
+    }
+    /// The same row with a caption line under its label.
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+}
+
+/// One row of a [`Menu`].
 #[derive(Clone)]
 pub enum Row<M> {
     Item(MenuItem<M>),
     Divider,
+    /// A submenu: a row that opens another card beside this one, or inline.
     Folder(String, Menu<M>),
+    /// "Show the rest": a disclosure of more rows of this same menu.
+    ///
+    /// The label is a Tertiary action (rule 7: accent text, underlined, bold,
+    /// no wash) in the menu's own list. Activating it (click, Enter or Space)
+    /// keeps the menu open, removes this row and shows the rows of the inner
+    /// menu in its place, in the same group of the same card: no frame, no
+    /// submenu. Keyboard focus lands on the first revealed row. Nothing is
+    /// shown again once expanded in the same session; the state is the window
+    /// chain's disclosure state ([`ChainRequest::expand`](crate::window::ChainRequest::expand)),
+    /// gone when the menu closes, so the menu opens collapsed every time.
+    ///
+    /// The rows a More reveals belong to this menu, as if they had been
+    /// written at its position: they take part in its marks, icon column,
+    /// dividers and destructive-last order, and the menu is as wide as its
+    /// widest revealed row from the start, so expanding changes the card's
+    /// height and never its width (rule 8b). A More inside the revealed rows
+    /// is a second disclosure.
+    ///
+    /// Built by [`Menu::more`]. For the expansion state to reach the menu, the
+    /// surface needs [`MenuSurface::disclosures`](crate::menu_surface::MenuSurface::disclosures);
+    /// without it the rows are simply shown.
+    More(String, Menu<M>),
 }
 
 #[derive(Clone)]
@@ -78,6 +130,26 @@ impl<M> Menu<M> {
         self.rows.push(Row::Folder(label.into(), menu));
         self
     }
+    /// A "show the rest" row with `label`, revealing `rest` in place of itself
+    /// when activated; see [`Row::More`].
+    ///
+    /// ```ignore
+    /// // the newest model of each family, and a tertiary row for the others
+    /// Menu::new()
+    ///     .item(MenuItem::new("Opus 5.5", Pick(Opus55)))
+    ///     .item(MenuItem::new("Sonnet 5.5", Pick(Sonnet55)))
+    ///     .more("Show older models", Menu::new()
+    ///         .item(MenuItem::new("Opus 5.1", Pick(Opus51))))
+    /// ```
+    pub fn more(mut self, label: impl Into<String>, rest: Self) -> Self {
+        self.rows.push(Row::More(label.into(), rest));
+        self
+    }
+    /// The row as written, for the surface to rebuild a level.
+    pub(crate) fn push(mut self, row: Row<M>) -> Self {
+        self.rows.push(row);
+        self
+    }
     pub fn append(mut self, other: Self) -> Self {
         if !other.is_empty() {
             self.rows.push(Row::Divider);
@@ -106,9 +178,11 @@ impl<M> Menu<M> {
                             mark: i.mark,
                             disabled_reason: i.disabled_reason,
                             destructive: i.destructive,
+                            detail: i.detail,
                         }),
                         Row::Divider => Row::Divider,
                         Row::Folder(label, menu) => Row::Folder(label, go(menu, f)),
+                        Row::More(label, menu) => Row::More(label, go(menu, f)),
                     })
                     .collect(),
             }
@@ -147,9 +221,16 @@ impl<M> Menu<M> {
                             line.push_str("\tdestructive");
                         }
                         lines.push(line);
+                        if let Some(detail) = &item.detail {
+                            lines.push(format!("{indent}    {detail}"));
+                        }
                     }
                     Some(Row::Folder(label, menu)) => {
                         lines.push(format!("{indent}{label} ▸"));
+                        add(&menu.rows, &format!("{indent}  "), lines);
+                    }
+                    Some(Row::More(label, menu)) => {
+                        lines.push(format!("{indent}{label} …"));
                         add(&menu.rows, &format!("{indent}  "), lines);
                     }
                     Some(Row::Divider) | None => lines.push(format!("{indent}—")),
@@ -195,6 +276,34 @@ fn has_marks<M>(rows: &[Row<M>]) -> bool {
         .any(|r| matches!(r, Row::Item(i) if i.mark.is_some()))
 }
 
+/// The rows of a menu with every [`Row::More`] replaced, recursively, by the
+/// rows it reveals, and the labels of those disclosure rows.
+fn revealed<M>(rows: &[Row<M>]) -> (Vec<&Row<M>>, Vec<&str>) {
+    let (mut shown, mut labels) = (Vec::new(), Vec::new());
+    for row in rows {
+        if let Row::More(label, rest) = row {
+            let (inner, inner_labels) = revealed(&rest.rows);
+            shown.extend(inner);
+            labels.push(label.as_str());
+            labels.extend(inner_labels);
+        } else {
+            shown.push(row);
+        }
+    }
+    (shown, labels)
+}
+
+/// `rows` with every disclosure expanded: what a menu without disclosure
+/// state shows.
+fn flattened<M>(rows: Vec<Row<M>>) -> Vec<Row<M>> {
+    rows.into_iter()
+        .flat_map(|row| match row {
+            Row::More(_, rest) => flattened(rest.rows),
+            other => vec![other],
+        })
+        .collect()
+}
+
 /// Resolved visual data for one household menu row.
 #[derive(Clone)]
 pub struct MenuRow {
@@ -206,6 +315,8 @@ pub struct MenuRow {
     pub destructive: bool,
     pub selected: bool,
     pub folder: bool,
+    /// The caption line under the label
+    pub detail: Option<String>,
 }
 
 impl MenuRow {
@@ -221,6 +332,9 @@ impl MenuRow {
             cosmic::font::default()
         };
         let label = measured_width(&self.label, 14.0, font);
+        let label = label.max(self.detail.as_deref().map_or(0.0, |detail| {
+            measured_width(detail, CAPTION, cosmic::font::default())
+        }));
         let trailing = if self.folder {
             ICON_SIZE
         } else {
@@ -237,40 +351,52 @@ impl MenuRow {
     }
 }
 
+/// The width a level of rows needs, with every disclosure counted as
+/// expanded: the revealed rows are measured as members of this level (its mark
+/// and icon columns reserve space for them), and the disclosure rows' own
+/// labels too, so expanding one never widens the card.
 fn width<M>(rows: &[Row<M>]) -> f32 {
-    let marks = has_marks(rows);
-    rows.iter()
-        .map(|r| match r {
-            Row::Item(i) => MenuRow {
-                reserve_mark: marks,
-                mark: None,
-                icon: None,
-                label: i.label.clone(),
-                shortcut: i
-                    .shortcut
-                    .as_ref()
-                    .map_or_else(String::new, ToString::to_string),
-                destructive: false,
-                selected: matches!(i.mark, Some(MenuMark::Radio(true)))
-                    && i.disabled_reason.is_none(),
-                folder: false,
-            }
-            .width(),
-            Row::Folder(label, menu) => MenuRow {
-                reserve_mark: marks,
-                mark: None,
-                icon: None,
-                label: label.clone(),
-                shortcut: String::new(),
-                destructive: false,
-                selected: false,
-                folder: true,
-            }
-            .width()
-            .max(width(&menu.rows)),
-            Row::Divider => 0.0,
-        })
-        .fold(f32::from(MENU_MIN_WIDTH), f32::max)
+    let (shown, labels) = revealed(rows);
+    let marks = shown
+        .iter()
+        .any(|r| matches!(r, Row::Item(i) if i.mark.is_some()));
+    let more = labels.into_iter().map(|label| {
+        2.0 * PADDING
+            + MenuRow::label_indent(marks)
+            + measured_width(label, 14.0, cosmic::font::bold())
+    });
+    let rows = shown.into_iter().map(|r| match r {
+        Row::Item(i) => MenuRow {
+            reserve_mark: marks,
+            mark: None,
+            icon: None,
+            label: i.label.clone(),
+            shortcut: i
+                .shortcut
+                .as_ref()
+                .map_or_else(String::new, ToString::to_string),
+            destructive: false,
+            selected: matches!(i.mark, Some(MenuMark::Radio(true))) && i.disabled_reason.is_none(),
+            folder: false,
+            detail: i.detail.clone(),
+        }
+        .width(),
+        Row::Folder(label, menu) => MenuRow {
+            reserve_mark: marks,
+            mark: None,
+            icon: None,
+            label: label.clone(),
+            shortcut: String::new(),
+            destructive: false,
+            selected: false,
+            folder: true,
+            detail: None,
+        }
+        .width()
+        .max(width(&menu.rows)),
+        Row::Divider | Row::More(_, _) => 0.0,
+    });
+    rows.chain(more).fold(f32::from(MENU_MIN_WIDTH), f32::max)
 }
 
 type Widths = HashMap<(u32, Font, String), f32>;
@@ -314,9 +440,12 @@ impl<M: Clone + 'static> Menu<M> {
     /// editors move (package 2); every other menu is a window's chain
     /// ([`crate::window::menu_surface`]).
     pub(crate) fn trees(self, style: MenuStyle<M>) -> Vec<widget::menu::Tree<M>> {
-        let marks = has_marks(&self.rows);
-        let order = ordered(&self.rows);
-        let mut rows: Vec<_> = self.rows.into_iter().map(Some).collect();
+        // libcosmic's tree has no disclosure state: a text box's menu shows
+        // every row
+        let all = flattened(self.rows);
+        let marks = has_marks(&all);
+        let order = ordered(&all);
+        let mut rows: Vec<_> = all.into_iter().map(Some).collect();
         order
             .into_iter()
             .map(|at| match at.and_then(|i| rows[i].take()) {
@@ -335,6 +464,7 @@ impl<M: Clone + 'static> Menu<M> {
                         destructive: false,
                         selected: false,
                         folder: true,
+                        detail: None,
                     }
                     .contents(style.icon);
                     let button = widget::menu::menu_button(row).class(if children.is_empty() {
@@ -347,7 +477,7 @@ impl<M: Clone + 'static> Menu<M> {
                         children,
                     )
                 }
-                Some(Row::Divider) | None => {
+                Some(Row::Divider | Row::More(_, _)) | None => {
                     widget::menu::Tree::from(Element::from(widget::divider::horizontal::light()))
                 }
             })
@@ -389,6 +519,7 @@ fn item_element<M: Clone + 'static>(
         destructive,
         selected: chosen,
         folder: false,
+        detail: item.detail,
     }
     .contents(style.icon);
     let mut button = widget::menu::menu_button(row);
@@ -423,6 +554,7 @@ impl MenuRow {
             destructive,
             selected: chosen,
             folder,
+            detail,
         } = self;
         let space = theme::spacing().space_xxs;
         let mut row = Vec::with_capacity(7);
@@ -468,7 +600,16 @@ impl MenuRow {
                 }
             }));
         }
-        row.push(text.into());
+        row.push(match detail {
+            Some(detail) => widget::column::with_children(vec![
+                text.into(),
+                widget::text::caption(detail)
+                    .shaping(cosmic::iced::advanced::text::Shaping::Advanced)
+                    .into(),
+            ])
+            .into(),
+            None => text.into(),
+        });
         row.push(widget::space::horizontal().into());
         if folder {
             row.push(
@@ -560,6 +701,7 @@ mod tests {
             mark: None,
             disabled_reason: None,
             destructive: false,
+            detail: None,
         }
     }
 
@@ -595,6 +737,7 @@ mod tests {
             destructive: false,
             selected: false,
             folder: true,
+            detail: None,
         };
         let mut widget = widget::row::with_children(row.contents::<()>(icon));
         let mut tree = Tree::new(&widget as &dyn Widget<(), cosmic::Theme, cosmic::Renderer>);
@@ -642,6 +785,7 @@ mod tests {
                 destructive: false,
                 selected,
                 folder: false,
+                detail: None,
             };
             let width = row.width().ceil();
             let element: Element<'static, ()> =

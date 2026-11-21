@@ -110,6 +110,7 @@ fn panels<'a>(window: &'a WindowUi<Root>) -> Vec<Panel<'a, Ev>> {
                 mark: None,
                 disabled_reason: None,
                 destructive: false,
+                detail: None,
             }),
             MenuStyle { icon, body },
             "other".into(),

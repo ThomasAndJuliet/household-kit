@@ -35,6 +35,7 @@ fn item(label: &str) -> MenuItem<Message> {
         mark: None,
         disabled_reason: None,
         destructive: false,
+        detail: None,
     }
 }
 fn icon(name: &'static str) -> widget::icon::Handle {

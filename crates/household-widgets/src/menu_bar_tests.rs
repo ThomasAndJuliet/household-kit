@@ -61,6 +61,7 @@ fn item(label: &'static str) -> MenuItem<Ev> {
         mark: None,
         disabled_reason: None,
         destructive: false,
+        detail: None,
     }
 }
 

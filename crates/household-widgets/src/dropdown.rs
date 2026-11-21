@@ -84,6 +84,7 @@ pub fn dropdown_menu<M>(
             mark: Some(MenuMark::Radio(selected == Some(i))),
             disabled_reason: option.disabled_reason.clone(),
             destructive: false,
+            detail: None,
         });
     }
     DropdownMenu {
