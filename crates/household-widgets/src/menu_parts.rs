@@ -3,6 +3,7 @@
 //! Composable building blocks for menu contents. State, including expansion and
 //! whether an activation closes a popup, belongs to the application.
 
+use crate::spacing::Kind;
 use cosmic::Element;
 use cosmic::iced::widget::{self, tooltip::Position};
 use cosmic::iced::{Alignment, Length};
@@ -183,7 +184,7 @@ impl Default for RowSlots {
         Self {
             mark_width: None,
             icon_width: None,
-            gap: 8.0,
+            gap: Kind::MenuRow.gap(&cosmic::theme::spacing()),
         }
     }
 }

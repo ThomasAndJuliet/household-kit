@@ -18,6 +18,9 @@
 //!   washes, fade, focus ring and tooltip are shared.
 //! - [`segmented`]: the segmented control, [`Segmented`]: the Button repeated in
 //!   its Segment look, the parent joining the corners and drawing the bar.
+//! - [`spacing`]: the padding system: each container has a kind, and the
+//!   kind decides its inset and the gap between its children, in COSMIC's
+//!   density-following steps. The widgets here use no pixel values for layout.
 //! - [`dropdown`]: a dropdown whose list is the window's one menu chain.
 //! - [`scroll_list`]: a scrollable list of boxes, optionally virtualised,
 //!   keeping the reader's place.
@@ -60,6 +63,7 @@ mod scroll;
 pub mod scroll_intent;
 pub mod scroll_list;
 pub mod short_text_box;
+pub mod spacing;
 mod switch;
 pub mod tab_strip;
 pub mod tabs;

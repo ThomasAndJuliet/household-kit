@@ -596,3 +596,30 @@ fn f10_opens_the_first_menu_from_the_keyboard_and_closes_it() {
     narrow.named(keyboard::key::Named::F10);
     assert_eq!(narrow.open(), Some(Root::All));
 }
+
+/// Pin (Standard density): a title is its text in 12 px at the sides and
+/// 4 px above and below
+#[test]
+fn pin_standard_density_title_geometry() {
+    let app = App::new(900.0);
+    let title = app.title(0);
+    let text = crate::menu::measured_width("File", 14.0, cosmic::font::default());
+    assert!((title.width - (text + 24.0)).abs() < 0.01, "{title:?}");
+    assert!(
+        (title.height - (4.0 + 19.6 + 4.0)).abs() < 0.01,
+        "{title:?}"
+    );
+}
+
+/// At Compact density a title is padded by the Compact steps: 4 above and
+/// below, 8 at the sides
+#[test]
+fn a_title_follows_the_density() {
+    let compact = cosmic::cosmic_theme::Spacing::from(cosmic::cosmic_theme::Density::Compact);
+    let padding = title_padding(&compact);
+    assert_eq!((padding.top, padding.left), (4.0, 8.0));
+    assert_eq!(
+        title_padding(&cosmic::cosmic_theme::Spacing::default()).left,
+        12.0
+    );
+}

@@ -4,6 +4,7 @@
 
 use crate::hover_card::{self, TEXT_MIN_WIDTH};
 use crate::layout::{self, Alignment, AnchorCandidate, Side};
+use crate::spacing::Kind;
 use cosmic::iced::Padding;
 use cosmic::widget::{self, tooltip::Position};
 use cosmic::{Element, theme};
@@ -14,8 +15,7 @@ use std::rc::Rc;
 pub const TIP_WIDTH: f32 = 320.0;
 
 pub fn tip_padding() -> Padding {
-    let space = theme::active().cosmic().spacing;
-    Padding::from([space.space_xs, space.space_s])
+    Kind::InformationCard.inset(&theme::spacing())
 }
 
 pub fn tip_bubble<'a, M: 'a>(
@@ -161,6 +161,19 @@ pub fn link_tooltip<'a, M: 'a>(
 
 #[cfg(test)]
 mod tests {
+    /// Pin (Standard density): an information card is 12 px above and
+    /// below its text and 16 at the sides
+    #[test]
+    fn pin_standard_density_tip_padding() {
+        let standard = cosmic::cosmic_theme::Spacing::default();
+        assert_eq!(standard.space_xs, 12);
+        assert_eq!(standard.space_s, 16);
+        let padding = super::tip_padding();
+        if cosmic::theme::spacing() == standard {
+            assert_eq!((padding.top, padding.left), (12.0, 16.0));
+        }
+    }
+
     /// libcosmic's tooltip is called in this file alone: every other
     /// tooltip is the window's information or goes through
     /// [`super::native_tooltip`]

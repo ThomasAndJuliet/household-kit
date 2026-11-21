@@ -392,3 +392,10 @@ fn embedded_native_input_receives_space_before_the_target_activation_adapter() {
         "editing space does not activate the surrounding row"
     );
 }
+
+#[test]
+fn a_rows_default_gap_is_the_menu_row_kinds() {
+    use cosmic::cosmic_theme::Spacing;
+    assert_eq!(RowSlots::default().gap, 8.0);
+    assert_eq!(crate::spacing::Kind::MenuRow.gap(&Spacing::default()), 8.0);
+}

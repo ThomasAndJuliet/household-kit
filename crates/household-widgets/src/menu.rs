@@ -12,7 +12,12 @@ use cosmic::{Element, theme};
 
 /// The minimum canvas for menu icons, marks and submenu indicators.
 pub const ICON_SIZE: f32 = 16.0;
-const PADDING: f32 = 16.0;
+/// The room a menu row's width estimate leaves at each side of its content,
+/// beyond the icon and mark columns: `space_s` (the row's `space_xxs` inset
+/// and a gap)
+fn side_room() -> f32 {
+    f32::from(theme::spacing().space_s)
+}
 /// The caption size of a row's detail line
 const CAPTION: f32 = 12.0;
 pub const MENU_MIN_WIDTH: u16 = 240;
@@ -340,7 +345,7 @@ impl MenuRow {
         } else {
             measured_width(&self.shortcut, 14.0, cosmic::font::default())
         };
-        2.0 * PADDING
+        2.0 * side_room()
             + Self::label_indent(self.reserve_mark)
             + label
             + if self.folder || !self.shortcut.is_empty() {
@@ -361,7 +366,7 @@ fn width<M>(rows: &[Row<M>]) -> f32 {
         .iter()
         .any(|r| matches!(r, Row::Item(i) if i.mark.is_some()));
     let more = labels.into_iter().map(|label| {
-        2.0 * PADDING
+        2.0 * side_room()
             + MenuRow::label_indent(marks)
             + measured_width(label, 14.0, cosmic::font::bold())
     });
@@ -703,6 +708,26 @@ mod tests {
             destructive: false,
             detail: None,
         }
+    }
+
+    /// Pin (Standard density): a row's width is its label, its icon column
+    /// and mark column (16 + 8 each) and 16 of padding at each side
+    #[test]
+    fn pin_standard_density_row_width() {
+        let row = |reserve_mark| MenuRow {
+            reserve_mark,
+            mark: None,
+            icon: None,
+            label: "Copy".into(),
+            shortcut: String::new(),
+            destructive: false,
+            selected: false,
+            folder: false,
+            detail: None,
+        };
+        let label = measured_width("Copy", 14.0, cosmic::font::default());
+        assert_eq!(row(false).width(), 32.0 + 24.0 + label);
+        assert_eq!(row(true).width(), 32.0 + 48.0 + label);
     }
 
     #[test]

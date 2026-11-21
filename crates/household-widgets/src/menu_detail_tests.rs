@@ -20,12 +20,20 @@ fn body(text: String) -> Element<'static, ()> {
     widget::text(text).size(14).into()
 }
 fn measure(menu: Menu<()>, renderer: &cosmic::Renderer) -> Size {
+    measure_in(menu, renderer, cosmic::cosmic_theme::Spacing::default())
+}
+fn measure_in(
+    menu: Menu<()>,
+    renderer: &cosmic::Renderer,
+    spacing: cosmic::cosmic_theme::Spacing,
+) -> Size {
     MenuSurface::new(
         menu,
         MenuStyle { icon, body },
         Anchors::default(),
         "detail".into(),
     )
+    .in_spacing(spacing)
     .panels(Id::new("source"), vec![], |_| (), |_| ())
     .remove(0)
     .stages
@@ -128,4 +136,55 @@ fn a_detail_line_is_shown_whole_and_the_state_covers_the_row() {
             "the detail is laid out whole or wraps onto more lines, never clipped: {detail:?}"
         );
     }
+}
+
+/// The padding system's pins (Standard density): a menu row is its 19.6 px
+/// line in 6 px above and below, in 4 px of card padding above and below
+/// the rows and the popup's 16 px of shadow room; a detail line adds its own
+#[test]
+fn pin_standard_density_menu_geometry() {
+    let renderer = renderer();
+    let one = measure(Menu::new().item(MenuItem::new("Open", ())), &renderer);
+    let two = measure(
+        Menu::new()
+            .item(MenuItem::new("Open", ()))
+            .item(MenuItem::new("Save", ())),
+        &renderer,
+    );
+    let near = |a: f32, b: f32, what: &str| assert!((a - b).abs() < 0.01, "{what}: {a} vs {b}");
+    near(one.height, 16.0 + 8.0 + 6.0 + 19.6 + 6.0, "one row");
+    near(
+        two.height - one.height,
+        6.0 + 19.6 + 6.0,
+        "no gap between rows",
+    );
+    let with = measure(
+        Menu::new().item(MenuItem::new("Open", ()).detail("path")),
+        &renderer,
+    );
+    near(with.height - one.height, 17.0, "a detail line");
+}
+
+/// At Compact density a menu row has 2 px of centring above and below its
+/// line (`space_l` 24), inside the card's 4 px
+#[test]
+fn a_menu_follows_the_density() {
+    use cosmic::cosmic_theme::{Density, Spacing};
+    let renderer = renderer();
+    let compact = Spacing::from(Density::Compact);
+    let one = measure_in(
+        Menu::new().item(MenuItem::new("Open", ())),
+        &renderer,
+        compact,
+    );
+    let two = measure_in(
+        Menu::new()
+            .item(MenuItem::new("Open", ()))
+            .item(MenuItem::new("Save", ())),
+        &renderer,
+        compact,
+    );
+    let near = |a: f32, b: f32, what: &str| assert!((a - b).abs() < 0.01, "{what}: {a} vs {b}");
+    near(one.height, 16.0 + 8.0 + 2.0 + 19.6 + 2.0, "one row");
+    near(two.height - one.height, 2.0 + 19.6 + 2.0, "a row");
 }
