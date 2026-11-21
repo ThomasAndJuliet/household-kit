@@ -478,11 +478,13 @@ impl<M: Clone + 'static> Menu<M> {
                         detail: None,
                     }
                     .contents(style.icon);
-                    let button = widget::menu::menu_button(row).class(if children.is_empty() {
-                        theme::Button::MenuItem
-                    } else {
-                        theme::Button::MenuFolder
-                    });
+                    let button = widget::menu::menu_button(row).class(crate::button::unringed(
+                        if children.is_empty() {
+                            theme::Button::MenuItem
+                        } else {
+                            theme::Button::MenuFolder
+                        },
+                    ));
                     widget::menu::Tree::with_children(
                         widget::RcElementWrapper::new(Element::from(button)),
                         children,
@@ -673,24 +675,24 @@ fn selected_menu_item() -> theme::Button {
         style
     }
     theme::Button::Custom {
-        active: Box::new(|focused, theme| {
+        active: Box::new(|_, theme| {
             chosen(
-                theme.active(focused, true, &theme::Button::MenuItem),
+                theme.active(false, true, &theme::Button::MenuItem),
                 theme,
                 false,
             )
         }),
         disabled: Box::new(|theme| theme.disabled(&theme::Button::MenuItem)),
-        hovered: Box::new(|focused, theme| {
+        hovered: Box::new(|_, theme| {
             chosen(
-                theme.hovered(focused, true, &theme::Button::MenuItem),
+                theme.hovered(false, true, &theme::Button::MenuItem),
                 theme,
                 false,
             )
         }),
-        pressed: Box::new(|focused, theme| {
+        pressed: Box::new(|_, theme| {
             chosen(
-                theme.pressed(focused, true, &theme::Button::MenuItem),
+                theme.pressed(false, true, &theme::Button::MenuItem),
                 theme,
                 true,
             )

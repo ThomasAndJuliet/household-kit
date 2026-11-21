@@ -328,3 +328,111 @@ fn the_bar_in_a_form_cuts_a_long_label_short_to_its_part() {
     assert_eq!(parts[0].width, 60.0);
     assert_eq!(size.width, 60.0);
 }
+
+/// `element` drawn as [`drawn`] is, the keyboard's focus first given to its
+/// `nth` focusable part
+fn drawn_focused(element: Element<'static, u8>, nth: usize) -> Vec<[u8; 4]> {
+    use cosmic::iced::advanced::renderer::Style;
+    use cosmic::iced::mouse;
+    use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
+    struct Nth(usize, usize);
+    impl cosmic::iced::advanced::widget::Operation for Nth {
+        fn traverse(
+            &mut self,
+            visit: &mut dyn FnMut(&mut dyn cosmic::iced::advanced::widget::Operation),
+        ) {
+            visit(self);
+        }
+        fn focusable(
+            &mut self,
+            _: Option<&cosmic::widget::Id>,
+            _: Rectangle,
+            focus: &mut dyn cosmic::iced::advanced::widget::operation::Focusable,
+        ) {
+            if self.1 == self.0 {
+                focus.focus();
+            }
+            self.1 += 1;
+        }
+    }
+    let mut renderer = renderer();
+    let mut ui = UserInterface::build(element, Size::new(240.0, 48.0), Cache::default(), &mut renderer);
+    ui.operate(&renderer, &mut Nth(nth, 0));
+    let cursor = mouse::Cursor::Available(Point::new(239.0, 47.0));
+    ui.draw(&mut renderer, &cosmic::Theme::default(), &Style::default(), cursor);
+    renderer
+        .screenshot(Size::new(240, 48), 1.0, Color::from_rgb(0.5, 0.5, 0.5))
+        .as_chunks::<4>()
+        .0
+        .to_vec()
+}
+
+fn is_colour(pixel: [u8; 4], colour: Color) -> bool {
+    let near = |a: u8, b: f32| (f32::from(a) - b * 255.0).abs() <= 3.0;
+    near(pixel[0], colour.r) && near(pixel[1], colour.g) && near(pixel[2], colour.b)
+}
+
+/// The bar's outline is painted over the parts, which would cover a ring
+/// on the bar's edge: an end part's focus is still whole at the bar's end,
+/// top and bottom, and nothing is drawn outside the bar
+#[test]
+fn a_focused_end_part_shows_its_ring_over_the_bars_outline() {
+    let renderer = renderer();
+    let node = layout_of(bar(&LABELS, Some(1), true).into(), &renderer);
+    let (size, parts) = parts_of(&node);
+    let ring: Color = cosmic::Theme::default().cosmic().accent.base.into();
+    let (first, last) = (parts[0], parts[2]);
+    for (nth, part, end_x) in [
+        (0, first, first.x.floor()),
+        (2, last, (last.x + last.width).floor() - 1.0),
+    ] {
+        let pixels = drawn_focused(bar(&LABELS, Some(1), true).into(), nth);
+        let mid_y = (part.y + part.height / 2.0).floor();
+        assert!(is_colour(pixel(&pixels, end_x, mid_y), ring), "part {nth}: the ring at the bar's end");
+        let mid_x = (part.x + part.width / 2.0).floor();
+        assert!(is_colour(pixel(&pixels, mid_x, 0.0), ring), "part {nth}: the ring at the top");
+        assert!(is_colour(pixel(&pixels, mid_x, size.height.floor() - 1.0), ring), "part {nth}: the ring at the bottom");
+        // Nothing outside the bar's box
+        let ground = pixel(&pixels, 239.0, 47.0);
+        for y in 0..48 {
+            for x in 0..240 {
+                let inside = (x as f32) < size.width && (y as f32) < size.height;
+                if !inside {
+                    assert_eq!(pixels[y * 240 + x], ground, "({x}, {y}) is outside the bar");
+                }
+            }
+        }
+    }
+    // The unfocused bar has no ring there
+    let pixels = drawn(bar(&LABELS, Some(1), true).into());
+    assert!(!is_colour(pixel(&pixels, first.x.floor(), (first.height / 2.0).floor()), ring));
+}
+
+/// The parts' size is the same whichever has the focus
+#[test]
+fn the_bars_size_is_the_same_with_any_part_focused() {
+    let renderer = renderer();
+    let before = layout_of(bar(&LABELS, Some(1), true).into(), &renderer);
+    let mut element: Element<'_, u8> = bar(&LABELS, Some(1), true).into();
+    let mut tree = Tree::new(element.as_widget());
+    let limits = layout::Limits::new(Size::ZERO, Size::new(900.0, 200.0));
+    let node = element.as_widget_mut().layout(&mut tree, &renderer, &limits);
+    struct Focus;
+    impl cosmic::iced::advanced::widget::Operation for Focus {
+        fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn cosmic::iced::advanced::widget::Operation)) {
+            visit(self);
+        }
+        fn focusable(
+            &mut self,
+            _: Option<&cosmic::widget::Id>,
+            _: Rectangle,
+            focus: &mut dyn cosmic::iced::advanced::widget::operation::Focusable,
+        ) {
+            focus.focus();
+        }
+    }
+    element.as_widget_mut().operate(&mut tree, cosmic::iced::advanced::Layout::new(&node), &renderer, &mut Focus);
+    let after = element.as_widget_mut().layout(&mut tree, &renderer, &limits);
+    assert_eq!(before.size(), after.size());
+    assert_eq!(parts_of(&before).1, parts_of(&after).1);
+}

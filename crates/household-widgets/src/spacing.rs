@@ -37,7 +37,7 @@
 //! | [`Card`](Kind::Card) | `space_s` | `space_m` |
 //! | [`InputCard`](Kind::InputCard) | `space_xs` | `space_xs` |
 //! | [`InformationCard`](Kind::InformationCard) | `space_xs` above and below, `space_s` at the sides | `space_xxxs` |
-//! | [`Popup`](Kind::Popup) | `space_xxxs` above and below | none between rows |
+//! | [`Popup`](Kind::Popup) | `space_xxxs` above and below, the surface's 1 px border at the sides | none between rows |
 //! | [`DenseRow`](Kind::DenseRow) | `space_xxxs` / `space_xxs` | `space_xxs` |
 //! | [`ListRow`](Kind::ListRow) | `space_xxs` / `space_xs` | `space_xxs` |
 //! | [`MenuRow`](Kind::MenuRow) | at least `space_l` tall, content centred; `space_xxs` at the sides | `space_xxs` |
@@ -62,6 +62,36 @@
 //! between. What a container does inside itself (the frame an open folder
 //! draws inside a menu, a close control inside a tab) is the container's own
 //! detail, derived from its steps.
+//!
+//! # Borders take no room
+//!
+//! "I think the iced approach of considering the border as drawn inside the
+//! box is the approach we want to take as it makes the measurements much more
+//! predictable" (Juliet, 21 Nov 2026).
+//!
+//! - **A border is part of its box.** It is drawn inside the box's edge and
+//!   never takes layout room: a box is the same size with or without a
+//!   border, and whatever the border's width. Nothing is drawn outside a
+//!   box, so no parent keeps room for a focus ring or a thicker line.
+//! - **An inset is measured from the box's outer edge** and is at least the
+//!   thickest border that box ever draws, so a border that thickens with
+//!   state (a selected content block's 2 px, a focused text box's 2 px, a
+//!   menu's frame's 2 px) never moves its content. The space between border
+//!   and content is the inset minus the border. Code never adds a border's
+//!   width to a padding or a size; where a widget needs the border's width it
+//!   asks for the *thickest* ([`Look::thickest_border`](crate::look::Look::thickest_border),
+//!   [`ButtonLook::thickest_border`](crate::button::ButtonLook::thickest_border))
+//!   and takes the larger of that and the kind's inset.
+//! - **Boxes joined with no gap** (a segmented bar's parts, table cells) do
+//!   not each draw an outer border: their parent draws one outline round the
+//!   group inside its own edge, and any lines between them
+//!   ([`crate::segmented`]).
+//! - **Focus is drawn on the box's own border**, inside its edge: focus
+//!   changes an outline the component already has (rule 6a). A button's ring
+//!   is on the button's edge ([`crate::button`]); a menu row's keyboard
+//!   outline is 1 px inside the row's bounds; a navigation entry's double
+//!   outline on a dark fill is both strokes inside the edge
+//!   ([`crate::navigation_style`]).
 //!
 //! # Example
 //!
@@ -130,7 +160,7 @@ impl Kind {
             Self::Card => Padding::new(s),
             Self::InputCard | Self::Header => Padding::new(xs),
             Self::InformationCard => Padding::from([xs, s]),
-            Self::Popup => Padding::from([xxxs, 0.0]),
+            Self::Popup => Padding::from([xxxs, crate::popup_surface::BORDER]),
             Self::Toolbar => Padding::new(xxs),
             Self::DenseRow => Padding::from([xxxs, xxs]),
             Self::ListRow => Padding::from([xxs, xs]),
@@ -214,12 +244,34 @@ mod tests {
         assert_eq!(Kind::Page.inset(&s), pad(0.0, 24.0, 0.0, 24.0));
         assert_eq!(Kind::Card.inset(&s), pad(16.0, 16.0, 16.0, 16.0));
         assert_eq!(Kind::InformationCard.inset(&s), pad(12.0, 16.0, 12.0, 16.0));
-        assert_eq!(Kind::Popup.inset(&s), pad(4.0, 0.0, 4.0, 0.0));
+        assert_eq!(Kind::Popup.inset(&s), pad(4.0, 1.0, 4.0, 1.0));
         assert_eq!(Kind::MenuRow.inset(&s), pad(6.0, 8.0, 6.0, 8.0));
         assert_eq!(Kind::Tab.inset(&s), pad(0.0, 16.0, 0.0, 16.0));
         assert_eq!(Kind::GroupRelated.gap(&s), 12.0);
         assert_eq!(Kind::GroupSeparate.gap(&s), 24.0);
         assert_eq!(control_height(&s), 32.0);
+    }
+
+    /// A box's border is drawn inside its edge and takes no layout room, so
+    /// a container's inset must cover the thickest border its box draws
+    #[test]
+    fn insets_cover_the_thickest_border_of_their_box() {
+        use crate::look::Look;
+        let theme = cosmic::Theme::default();
+        let s = Spacing::default();
+        let least = |inset: Padding| inset.top.min(inset.right).min(inset.bottom).min(inset.left);
+        // The popup surface: its 1 px border, in every side
+        assert!(least(Kind::Popup.inset(&s)) >= crate::popup_surface::BORDER);
+        // The composer's box is the prominent look: 4 px when focused
+        assert!(least(Kind::InputCard.inset(&s)) >= Look::prominent().thickest_border(&theme));
+        // Text boxes: 2 px focused, with no kind padding of their own
+        assert_eq!(Look::normal().thickest_border(&theme), 2.0);
+        assert_eq!(Look::prominent().thickest_border(&theme), 4.0);
+        // The menu's inline frame draws that border inside an inset of its size
+        assert_eq!(crate::menu_parts::frame_inset(), 2.0);
+        for kind in [Kind::Card, Kind::InformationCard, Kind::Toolbar, Kind::Header] {
+            assert!(least(kind.inset(&s)) >= Look::normal().thickest_border(&theme), "{kind:?}");
+        }
     }
 
     #[test]

@@ -772,11 +772,11 @@ impl<M: Clone + 'static> Content<M> {
         };
         let all = all.level();
         let slot_rows = all.menu.rows();
-        let frame_inset = crate::look::Look::normal()
-            .border(&cosmic::theme::active(), crate::look::State::Focused)
-            .width;
-        // A menu row's padding, and for a row of an inline frame also the
-        // frame's border at each side
+        let frame_inset = menu_parts::frame_inset();
+        // A menu row's padding. The title of an inline frame stands on the
+        // frame's own edge, so it takes the frame's inset (its thickest
+        // border, drawn inside the edge) in its padding; the rows under it
+        // get that inset from the frame, and their labels line up
         let row_padding = |inline: bool| {
             let mut padding = Kind::MenuRow.inset(&self.spacing);
             if inline {

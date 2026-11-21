@@ -12,7 +12,7 @@
 //! - **The parts** are buttons: `space_l` tall, the label in the button's
 //!   type (14 px on a 20 px line), `space_s` at each side, hover and
 //!   pressed washes inside each part's own box, the keyboard's focus ring
-//!   as every button's. Each part is Tab-focusable and Enter or Space
+//!   as every button's (on the part's own edge, inside it). Each part is Tab-focusable and Enter or Space
 //!   chooses it, as a button does; the arrow keys do nothing, as in
 //!   Terminal's control today. The chosen part is filled with the muted
 //!   accent (rule 6: toggles and chosen parts) with its on colours, its
@@ -25,8 +25,9 @@
 //!   inside the bar's box as Secondary's border is, the parts filling the
 //!   bar with no gap. The bar is `space_l` tall, as every button is, so it
 //!   lines up with buttons in its row, and a chosen end part's fill meets
-//!   the outline. The first part is rounded on its left and the last on
-//!   its right (the theme's `radius_xl`, as buttons are rounded, rule
+//!   the outline; the bar draws the focused part's ring again over its
+//!   outline, so the outline never covers focus at the ends. The first
+//!   part is rounded on its left and the last on its right (the theme's `radius_xl`, as buttons are rounded, rule
 //!   25d); every inner corner is square, so the parts touch. A bar of one
 //!   part is rounded on both sides.
 //! - **A part with no message is disabled** (rule 6a: faded, no wash),
@@ -90,7 +91,7 @@ use cosmic::iced::{Alignment, Background, Border, Color, Event, Length, Rectangl
 use cosmic::widget::{self, tooltip::Position};
 use cosmic::{Element, Renderer, Theme, theme};
 
-use crate::button::{ACTION_ICON, Button, ButtonLook, LABEL_SIZE};
+use crate::button::{ACTION_ICON, Button, ButtonLook, LABEL_SIZE, focus_border};
 use crate::menu::measured_width;
 use crate::tooltip::Tip;
 
@@ -274,6 +275,8 @@ impl<'a, M: Clone + 'a> From<Segmented<'a, M>> for Element<'a, M> {
             content: widget::row::with_children(parts)
                 .align_y(Alignment::Center)
                 .into(),
+            count,
+            chosen,
         })
     }
 }
@@ -283,13 +286,103 @@ impl<'a, M: Clone + 'a> From<Segmented<'a, M>> for Element<'a, M> {
 /// Secondary's border is drawn inside its box. The bar is the row's size,
 /// `space_l` tall like every button, so it lines up with buttons beside it;
 /// the chosen part's fill meets the outline. Every event, size and
-/// operation is the row's
+/// operation is the row's.
+///
+/// The outline is painted over the parts, so it would cover the outer pixel
+/// of a focused part's ring along the bar's edge (a part's ring is drawn on
+/// the part's own edge, which at the top, the bottom and the bar's ends is
+/// the bar's). The bar therefore finds which part has the keyboard's focus
+/// and draws that part's ring again over the outline, so focus stays whole
 struct Outlined<'a, M> {
     content: Element<'a, M>,
+    /// How many parts the row has, and which is chosen: what the ring of a
+    /// focused part is drawn from ([`part_corners`], [`focus_border`])
+    count: usize,
+    chosen: Option<usize>,
+}
+
+/// Which part has the keyboard's focus, as the bar last found it
+#[derive(Default)]
+struct Focused(Option<Rectangle>);
+
+/// Finds the focused widget's box
+#[derive(Default)]
+struct Probe(Option<Rectangle>);
+
+impl Operation for Probe {
+    fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn Operation)) {
+        visit(self);
+    }
+
+    fn focusable(
+        &mut self,
+        _: Option<&cosmic::widget::Id>,
+        bounds: Rectangle,
+        focus: &mut dyn cosmic::iced::advanced::widget::operation::Focusable,
+    ) {
+        if focus.is_focused() {
+            self.0 = Some(bounds);
+        }
+    }
+}
+
+impl<M> Outlined<'_, M> {
+    fn probe(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer) {
+        let mut probe = Probe::default();
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, &mut probe);
+        tree.state.downcast_mut::<Focused>().0 = probe.0;
+    }
 }
 
 impl<M> Widget<M, Theme, Renderer> for Outlined<'_, M> {
-    forward_widget!(M, Theme, Renderer; children, diff, size, layout, update, operate, mouse_interaction, overlay, drag_destinations, a11y_nodes);
+    forward_widget!(M, Theme, Renderer; children, diff, size, layout, mouse_interaction, overlay, drag_destinations, a11y_nodes);
+
+    fn tag(&self) -> cosmic::iced::advanced::widget::tree::Tag {
+        cosmic::iced::advanced::widget::tree::Tag::of::<Focused>()
+    }
+
+    fn state(&self) -> cosmic::iced::advanced::widget::tree::State {
+        cosmic::iced::advanced::widget::tree::State::new(Focused::default())
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+        self.probe(tree, layout, renderer);
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, M>,
+        viewport: &Rectangle,
+    ) {
+        self.content.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+        self.probe(tree, layout, renderer);
+    }
 
     fn draw(
         &self,
@@ -326,6 +419,36 @@ impl<M> Widget<M, Theme, Renderer> for Outlined<'_, M> {
                     radius: radius.into(),
                     width: OUTLINE,
                     color: cosmic.bg_divider().into(),
+                },
+                ..renderer::Quad::default()
+            },
+            Background::Color(Color::TRANSPARENT),
+        );
+        // The focused part's ring, again, over the outline
+        let Some(focused) = tree.state.downcast_ref::<Focused>().0 else {
+            return;
+        };
+        let Some((n, part)) = layout
+            .children()
+            .enumerate()
+            .find(|(_, part)| part.bounds().contains(focused.center()))
+        else {
+            return;
+        };
+        let (width, colour) = focus_border(
+            ButtonLook::Segment,
+            self.chosen == Some(n),
+            None,
+            crate::button::State::Rest,
+            theme,
+        );
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: part.bounds(),
+                border: Border {
+                    radius: part_corners(n, self.count, radius).into(),
+                    width,
+                    color: colour,
                 },
                 ..renderer::Quad::default()
             },

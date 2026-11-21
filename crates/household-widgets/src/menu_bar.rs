@@ -179,7 +179,7 @@ fn title<'a, M: 'a, R: Clone + PartialEq + 'static>(
     let button = cosmic::widget::button::custom(centred)
         .padding(title_padding(&spacing))
         .height(Length::Fixed(control_height(&spacing)))
-        .class(cosmic::theme::Button::MenuRoot)
+        .class(crate::button::unringed(cosmic::theme::Button::MenuRoot))
         .on_press(Toggle);
     let target = crate::popup::focus_target(id.clone(), button)
         .target_border(|theme| RowContour::Rounded.target_border(theme))

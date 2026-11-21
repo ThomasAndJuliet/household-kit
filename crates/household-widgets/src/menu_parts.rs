@@ -145,12 +145,22 @@ pub fn row_target<'a, M>(
     crate::popup::focus_target(id, content).target_border(move |theme| contour.target_border(theme))
 }
 
+/// The inset of an inline disclosure frame: its thickest border
+pub fn frame_inset() -> f32 {
+    crate::look::Look::normal().thickest_border(&cosmic::theme::active())
+}
+
 /// The accepted inline disclosure frame: one outer contour shared by its
 /// title, with the normal focused text-box border around its contents.
+///
+/// The border is drawn inside the frame's edge and takes no layout room.
+/// The frame's inset is measured from its outer edge and is its thickest
+/// border ([`Look::thickest_border`](crate::look::Look::thickest_border),
+/// 2 px), so the contents stand that far in and never meet the border; the
+/// title, which shares the frame's contour, is given the same inset in its
+/// own padding ([`frame_inset`]) so its label lines up with the rows' under it.
 pub fn inline_group<'a, M: 'a>(title: Element<'a, M>, contents: Element<'a, M>) -> Element<'a, M> {
-    let edge = crate::look::Look::normal()
-        .border(&cosmic::theme::active(), crate::look::State::Focused)
-        .width;
+    let edge = frame_inset();
     let contents = widget::container(contents)
         .width(Length::Fill)
         .padding(cosmic::iced::Padding {

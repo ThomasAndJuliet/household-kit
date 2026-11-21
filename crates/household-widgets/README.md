@@ -297,8 +297,9 @@ panel navigation or `NonProminent` for Settings-style navigation. Text labels
 use semibold; this component is distinct from content tabs and quick-access
 toggles. Neutral hover replaces the neutral current wash. The target contour
 resolves contrast against the displayed solid fill and its state overlay, and
-uses adjacent white/dark strokes where required. `TARGET_FOOTPRINT` reserves
-the same outer space in every state and is available to consumer measurements.
+uses adjacent white/dark strokes where required. Both strokes are drawn inside
+the entry's own edge: a border is part of its box and takes no layout room, so
+the entry is the same size focused or not and no footprint is reserved.
 This presentation adapter does not supply general interaction ancestry or the
 complete keyboard navigation/window-return policy.
 

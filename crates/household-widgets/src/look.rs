@@ -72,6 +72,19 @@ impl Look {
         }
     }
 
+    /// The thickest border this box ever draws, in any state: what a
+    /// container's inset round the box must be at least (household padding
+    /// system, section 4a). A border is part of its box, drawn inside its
+    /// edge and taking no layout room, so a border that thickens with state
+    /// (a focused box's 2 px, a prominent box's 4 px) never moves what is
+    /// inside, provided the inset is this much or more
+    pub fn thickest_border(self, theme: &Theme) -> f32 {
+        [State::Rest, State::Hovered, State::Focused]
+            .into_iter()
+            .map(|state| self.border(theme, state).width)
+            .fold(0.0, f32::max)
+    }
+
     /// The box's border in `state`, for an app's tests to say what it
     /// expects
     pub fn border(self, theme: &Theme, state: State) -> Border {

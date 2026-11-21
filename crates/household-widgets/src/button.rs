@@ -32,8 +32,9 @@
 //!   `radius_xl`).
 //! - **The disabled fade** (rule 6): with no message the button is disabled
 //!   and its colours are mixed towards the page.
-//! - **The keyboard focus ring** on its box (libcosmic's: a 1 px accent
-//!   line round it; rule 6a).
+//! - **The keyboard focus ring**, drawn on the button's own edge (rule
+//!   6a: "focus changes an outline the component already has"; see
+//!   [Borders](#borders)).
 //! - **Its tooltip** ([`Button::tooltip`]; the Icon look cannot be built
 //!   without one, rule 4) and its accessible name (the label).
 //!
@@ -54,6 +55,26 @@
 //! sizes left are not layout: the 16 px action icon is an icon's role
 //! (rule 10), as is a caller's 20 px identity mark, and the label's 14 px
 //! type on a 20 px line is the button's typography.
+//!
+//! # Borders
+//!
+//! A border is part of its box (Juliet, 21 Nov 2026: "the iced approach of
+//! considering the border as drawn inside the box ... makes the measurements
+//! much more predictable"). A button draws every border it has, Secondary's
+//! and the focus ring, *inside its own edge*, over its fill, and none of
+//! them takes layout room: a button is the same size at rest, hovered,
+//! pressed, focused and disabled, and whatever the width of its border.
+//! Nothing is drawn outside the box. The side inset is measured from the
+//! box's outer edge and is at least [`ButtonLook::thickest_border`], so a
+//! border that thickens with state never meets the content.
+//!
+//! The focus ring is the accent, [`FOCUS_BORDER`] thick. Two looks need more
+//! than that to be seen. Secondary already has a border in nearly the
+//! accent, so focus thickens it by one pixel. A solid fill (Primary,
+//! Destructive, a chosen Icon or Segment) is the accent or its muted form,
+//! on which an accent line would vanish now that it no longer stands outside,
+//! so its ring is the colour of the label on the fill, which reads on it by
+//! construction ([`focus_border`]).
 //!
 //! # Example
 //!
@@ -100,6 +121,9 @@ const LABEL_LINE: f32 = 20.0;
 pub const ACTION_ICON: u16 = 16;
 /// Secondary's border, drawn inside its box (Juliet, 15 Oct: 2 px)
 const SECONDARY_BORDER: f32 = 2.0;
+/// The focus ring's width, drawn inside the button's own edge. Secondary's
+/// is one pixel thicker than its border ([`ButtonLook::thickest_border`])
+pub const FOCUS_BORDER: f32 = 2.0;
 
 /// The height of every button: the theme's `space_l`. A row that lines
 /// buttons up with something else asks this rather than counting pixels
@@ -143,6 +167,17 @@ impl ButtonLook {
             Self::Tertiary | Self::TertiaryDestructive => spacing.space_xxs,
             Self::Icon => 0,
         })
+    }
+
+    /// The thickest border this look ever draws, in any state: its focus
+    /// ring, which for Secondary is its own border thickened by a pixel.
+    /// The look's inset is at least this, so no state's border meets the
+    /// content, and none of them is added to the button's size
+    pub fn thickest_border(self) -> f32 {
+        match self {
+            Self::Secondary => SECONDARY_BORDER + 1.0,
+            _ => FOCUS_BORDER,
+        }
     }
 
     fn tertiary(self) -> bool {
@@ -208,7 +243,7 @@ pub fn paint(
         if selected {
             return muted_paint(state, theme);
         }
-        let style = icon_style(state, false, theme);
+        let style = icon_style(state, theme);
         let colour = |background: Option<Background>| match background {
             Some(Background::Color(colour)) => Some(colour),
             _ => None,
@@ -308,13 +343,13 @@ fn muted_paint(state: State, theme: &Theme) -> Paint {
 
 /// libcosmic's icon button in `state`; disabled, its icon faded, as the
 /// Icon class draws a disabled icon as strongly as an enabled one
-fn icon_style(state: State, focused: bool, theme: &Theme) -> button::Style {
+fn icon_style(state: State, theme: &Theme) -> button::Style {
     use cosmic::widget::button::Catalog;
     let class = theme::Button::Icon;
     match state {
-        State::Rest => theme.active(focused, false, &class),
-        State::Hovered => theme.hovered(focused, false, &class),
-        State::Pressed => theme.pressed(focused, false, &class),
+        State::Rest => theme.active(false, false, &class),
+        State::Hovered => theme.hovered(false, false, &class),
+        State::Pressed => theme.pressed(false, false, &class),
         State::Disabled => {
             let colour = fade(
                 theme.cosmic().on_bg_color().into(),
@@ -340,47 +375,85 @@ fn style(
     theme: &Theme,
 ) -> button::Style {
     let radius: [f32; 4] = corners.unwrap_or_else(|| theme.cosmic().corner_radii.radius_xl);
-    if look == ButtonLook::Icon && !selected {
-        return icon_style(state, focused, theme);
-    }
-    if look == ButtonLook::Segment && !selected {
-        let mut style = icon_style(state, focused, theme);
+    let mut style = if look == ButtonLook::Icon && !selected {
+        icon_style(state, theme)
+    } else if look == ButtonLook::Segment && !selected {
+        let mut style = icon_style(state, theme);
         style.border_radius = radius.into();
-        return style;
-    }
-    let paint = paint(look, selected, fill, state, theme);
-    let style = button::Style {
-        shadow_offset: Vector::default(),
-        background: paint.background.map(Background::Color),
-        overlay: paint.overlay.map(Background::Color),
-        // Pills, every look, washes too (rule 25d); a segment's part is a
-        // pill only at the bar's ends
-        border_radius: radius.into(),
-        border_width: if paint.border.is_some() {
-            SECONDARY_BORDER
-        } else {
-            0.0
-        },
-        border_color: paint.border.unwrap_or(Color::TRANSPARENT),
-        outline_width: 0.0,
-        outline_color: Color::TRANSPARENT,
-        icon_color: paint.text,
-        text_color: paint.text,
+        style
+    } else {
+        let paint = paint(look, selected, fill, state, theme);
+        button::Style {
+            shadow_offset: Vector::default(),
+            background: paint.background.map(Background::Color),
+            overlay: paint.overlay.map(Background::Color),
+            // Pills, every look, washes too (rule 25d); a segment's part is a
+            // pill only at the bar's ends
+            border_radius: radius.into(),
+            border_width: if paint.border.is_some() {
+                SECONDARY_BORDER
+            } else {
+                0.0
+            },
+            border_color: paint.border.unwrap_or(Color::TRANSPARENT),
+            outline_width: 0.0,
+            outline_color: Color::TRANSPARENT,
+            icon_color: paint.text,
+            text_color: paint.text,
+        }
     };
-    focus_ring(style, focused, theme)
-}
-
-/// The keyboard's focus on a button: libcosmic's ring, a 1 px line of the
-/// accent round its box, as its own buttons have. It is drawn round the
-/// box, so it moves nothing
-fn focus_ring(mut style: button::Style, focused: bool, theme: &Theme) -> button::Style {
     if focused {
-        style.outline_width = 1.0;
-        style.outline_color = theme.cosmic().accent.base.into();
-        style.border_width = 2.0;
-        style.border_color = Color::TRANSPARENT;
+        let (width, colour) = focus_border(look, selected, fill, state, theme);
+        style.border_width = width;
+        style.border_color = colour;
     }
     style
+}
+
+/// The keyboard's focus on a button: the width and colour of the border it
+/// draws on its own edge, inside it (rule 6a: focus changes an outline the
+/// component already has). The accent, [`FOCUS_BORDER`] thick; Secondary
+/// one pixel thicker than its own border, so the change shows; on a solid
+/// fill the colour of the label on it, since an accent line on the accent
+/// would not be seen. It is drawn inside the box, so it moves nothing
+pub fn focus_border(
+    look: ButtonLook,
+    selected: bool,
+    fill: Option<FillColours>,
+    state: State,
+    theme: &Theme,
+) -> (f32, Color) {
+    let solid = look.filled() || (selected && matches!(look, ButtonLook::Icon | ButtonLook::Segment));
+    let colour = match paint(look, selected, fill, state, theme).text {
+        Some(on) if solid => on,
+        _ => theme.cosmic().accent.base.into(),
+    };
+    (look.thickest_border(), colour)
+}
+
+/// libcosmic's own button `class` with its focus ring left off. libcosmic
+/// draws focus as a 1 px accent line round the button, *outside* it, which
+/// breaks the border rule (module documentation); a widget that draws its
+/// own target (a menu row's contour) or has none (a menu bar's title) uses
+/// this so that nothing is drawn outside its box
+pub(crate) fn unringed(class: theme::Button) -> theme::Button {
+    use cosmic::widget::button::Catalog;
+    let class = std::rc::Rc::new(class);
+    theme::Button::Custom {
+        active: Box::new({
+            let class = class.clone();
+            move |_, theme| theme.active(false, false, &class)
+        }),
+        disabled: Box::new({
+            let class = class.clone();
+            move |theme| theme.disabled(&class)
+        }),
+        hovered: Box::new({
+            let class = class.clone();
+            move |_, theme| theme.hovered(false, false, &class)
+        }),
+        pressed: Box::new(move |_, theme| theme.pressed(false, false, &class)),
+    }
 }
 
 /// The libcosmic class drawing `look`

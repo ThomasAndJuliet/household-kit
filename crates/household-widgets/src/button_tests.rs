@@ -188,6 +188,40 @@ fn size_never_depends_on_selection_enablement_or_which_label_is_shown() {
 /// `element` drawn in a 96 × 48 canvas, centred, the pointer at `cursor`
 /// and pressed there if `press`: the pixels
 fn drawn(element: Element<'static, ()>, cursor: Point, press: bool) -> Vec<[u8; 4]> {
+    drawn_with(element, cursor, press, false)
+}
+
+/// Gives the first focusable widget the keyboard's focus
+struct FocusFirst(bool);
+
+impl cosmic::iced::advanced::widget::Operation for FocusFirst {
+    fn traverse(
+        &mut self,
+        visit: &mut dyn FnMut(&mut dyn cosmic::iced::advanced::widget::Operation),
+    ) {
+        visit(self);
+    }
+
+    fn focusable(
+        &mut self,
+        _: Option<&cosmic::widget::Id>,
+        _: Rectangle,
+        focus: &mut dyn cosmic::iced::advanced::widget::operation::Focusable,
+    ) {
+        if !self.0 {
+            focus.focus();
+            self.0 = true;
+        }
+    }
+}
+
+/// [`drawn`], the keyboard's focus first given to `focus` the first button
+fn drawn_with(
+    element: Element<'static, ()>,
+    cursor: Point,
+    press: bool,
+    focus: bool,
+) -> Vec<[u8; 4]> {
     use cosmic::iced::advanced::{clipboard, renderer::Style};
     use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
     use cosmic::iced::{Event, mouse};
@@ -196,6 +230,9 @@ fn drawn(element: Element<'static, ()>, cursor: Point, press: bool) -> Vec<[u8; 
     let centred: Element<'static, ()> = widget::container(element).center(Length::Fill).into();
     let mut ui = UserInterface::build(centred, canvas, Cache::default(), &mut renderer);
     let cursor = mouse::Cursor::Available(cursor);
+    if focus {
+        ui.operate(&renderer, &mut FocusFirst(false));
+    }
     if press {
         let mut messages = Vec::new();
         let _ = ui.update(
@@ -388,4 +425,133 @@ fn a_labelled_tertiary_responds_to_a_click_on_its_label() {
         &mut messages,
     );
     assert_eq!(messages.len(), 1, "the label does not swallow the click");
+}
+
+/// Every look in every state: nothing is drawn outside the box (no outline
+/// field is used), and no border is thicker than the look's thickest, which
+/// its side inset covers, so a border never meets the content
+#[test]
+fn every_looks_borders_are_inside_and_within_its_inset() {
+    let theme = cosmic::Theme::default();
+    let spacing = theme.cosmic().spacing;
+    for look in [
+        ButtonLook::Primary,
+        ButtonLook::Secondary,
+        ButtonLook::Tertiary,
+        ButtonLook::Destructive,
+        ButtonLook::TertiaryDestructive,
+        ButtonLook::Icon,
+        ButtonLook::Segment,
+    ] {
+        let room = if look == ButtonLook::Icon {
+            f32::from(spacing.space_l) / 2.0
+        } else {
+            look.inset(&spacing)
+        };
+        assert!(
+            look.thickest_border() <= room,
+            "{look:?}: the inset covers the thickest border"
+        );
+        for selected in [false, true] {
+            for state in [State::Rest, State::Hovered, State::Pressed, State::Disabled] {
+                for focused in [false, true] {
+                    let style = style(look, selected, None, state, focused, None, &theme);
+                    assert_eq!(style.outline_width, 0.0, "{look:?} {state:?}: no outline outside");
+                    assert!(
+                        style.border_width <= look.thickest_border(),
+                        "{look:?} {state:?} focused {focused}: {}",
+                        style.border_width
+                    );
+                    if focused && state != State::Disabled {
+                        assert_eq!(style.border_width, look.thickest_border(), "{look:?} ring");
+                        let (width, colour) = focus_border(look, selected, None, state, &theme);
+                        assert_eq!((style.border_width, style.border_color), (width, colour));
+                    }
+                }
+            }
+        }
+    }
+    // Secondary's focus is thicker than its rest border, so it shows
+    let rest = style(ButtonLook::Secondary, false, None, State::Rest, false, None, &theme);
+    let focus = style(ButtonLook::Secondary, false, None, State::Rest, true, None, &theme);
+    assert!(focus.border_width > rest.border_width);
+}
+
+/// A solid fill's ring is the label's colour, which the fill shows; the
+/// accent line it would otherwise be is the fill's own colour
+#[test]
+fn a_ring_on_a_solid_fill_is_not_the_fills_own_colour() {
+    for theme in [cosmic::Theme::light(), cosmic::Theme::dark()] {
+        for look in [ButtonLook::Primary, ButtonLook::Destructive] {
+            let (_, ring) = focus_border(look, false, None, State::Rest, &theme);
+            let fill = paint(look, false, None, State::Rest, &theme).background;
+            assert_ne!(Some(ring), fill, "{look:?}");
+        }
+        let (_, ring) = focus_border(ButtonLook::Icon, true, None, State::Rest, &theme);
+        assert_ne!(Some(ring), muted_paint(State::Rest, &theme).background);
+    }
+}
+
+/// The focus ring is drawn on the button's own edge: focused, a button
+/// paints nothing outside its box, and changes pixels inside its edge
+#[test]
+fn a_focused_button_paints_only_inside_its_box() {
+    let renderer = renderer();
+    for look in [
+        ButtonLook::Primary,
+        ButtonLook::Secondary,
+        ButtonLook::Tertiary,
+        ButtonLook::Destructive,
+        ButtonLook::TertiaryDestructive,
+    ] {
+        let build = || -> Element<'static, ()> {
+            Button::new(look, "Go")
+                .width(Length::Fixed(64.0))
+                .on_press(())
+                .into()
+        };
+        let size = layout_of(build(), &renderer).size();
+        let bounds = Rectangle::new(
+            Point::new((96.0 - size.width) / 2.0, (48.0 - size.height) / 2.0),
+            size,
+        );
+        let away = Point::new(1.0, 1.0);
+        let rest = drawn(build(), away, false);
+        let focused = drawn_with(build(), away, false, true);
+        assert_eq!(outside(&focused, bounds), 0, "{look:?}: nothing outside the box");
+        assert_ne!(rest, focused, "{look:?}: focus shows");
+        // On the edge itself, in the middle of the left side: the ring's
+        // innermost pixel, which the rest paint (Secondary's thinner
+        // border included) does not reach
+        let (x, y) = (bounds.x as usize, bounds.center_y() as usize);
+        let inner = x + look.thickest_border() as usize - 1;
+        assert_ne!(rest[y * 96 + inner], focused[y * 96 + inner], "{look:?}: the ring is on the edge");
+        // And the layout does not move: the same box focused or not
+        assert_eq!(layout_of(build(), &renderer).size(), size);
+    }
+}
+
+/// An icon button and a chosen icon button, focused, stay in their square
+#[test]
+fn a_focused_icon_button_paints_only_inside_its_square() {
+    let renderer = renderer();
+    for selected in [false, true] {
+        let build = || -> Element<'static, ()> {
+            let (button, _) = Button::icon_with(sized_mark(16.0), "Pin", tip())
+                .selected(selected)
+                .on_press(())
+                .into_native();
+            button.into()
+        };
+        let size = layout_of(build(), &renderer).size();
+        let bounds = Rectangle::new(
+            Point::new((96.0 - size.width) / 2.0, (48.0 - size.height) / 2.0),
+            size,
+        );
+        let away = Point::new(1.0, 1.0);
+        let rest = drawn(build(), away, false);
+        let focused = drawn_with(build(), away, false, true);
+        assert_eq!(outside(&focused, bounds), 0, "selected {selected}");
+        assert_ne!(rest, focused, "selected {selected}: focus shows");
+    }
 }
