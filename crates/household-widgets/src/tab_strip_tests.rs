@@ -802,3 +802,20 @@ fn an_apps_own_changes_are_taken_and_only_a_selection_that_moved_is_shown() {
     assert_eq!(model.order(), &[TabId(0), TabId(1)]);
     assert_eq!(model.selected(), None);
 }
+
+/// Pin (Standard density): a tab is 32 high; at its narrowest it is its
+/// 16 inset, seven characters, an 8 gap, the 16 close control and 8 at the
+/// end; an overflow button is a 16 icon in 4 of padding (24 square)
+#[test]
+fn pin_standard_density_tab_geometry() {
+    let app = App::new(20, NARROW);
+    let tab = app.tab(0).or_else(|| app.tab(19)).expect("some tab shown");
+    assert_eq!(tab.height, 32.0);
+    let ch = crate::menu::measured_width("0", 14.0, cosmic::font::default());
+    assert!(
+        (tab.width - (ch * 7.0 + 16.0 + 8.0 + 16.0 + 8.0)).abs() < 0.01,
+        "narrowest tab: {tab:?}"
+    );
+    let (start, _) = app.lane();
+    assert_eq!(start, 24.0, "the overflow button");
+}

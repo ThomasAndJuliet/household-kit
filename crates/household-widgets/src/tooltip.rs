@@ -161,6 +161,19 @@ pub fn link_tooltip<'a, M: 'a>(
 
 #[cfg(test)]
 mod tests {
+    /// Pin (Standard density): an information card is 12 px above and
+    /// below its text and 16 at the sides
+    #[test]
+    fn pin_standard_density_tip_padding() {
+        let standard = cosmic::cosmic_theme::Spacing::default();
+        assert_eq!(standard.space_xs, 12);
+        assert_eq!(standard.space_s, 16);
+        let padding = super::tip_padding();
+        if cosmic::theme::spacing() == standard {
+            assert_eq!((padding.top, padding.left), (12.0, 16.0));
+        }
+    }
+
     /// libcosmic's tooltip is called in this file alone: every other
     /// tooltip is the window's information or goes through
     /// [`super::native_tooltip`]

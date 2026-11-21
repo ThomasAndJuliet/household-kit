@@ -129,3 +129,26 @@ fn a_detail_line_is_shown_whole_and_the_state_covers_the_row() {
         );
     }
 }
+
+/// The padding system's pins (Standard density): a menu row is its 19.6 px
+/// line in 6 px above and below, in 4 px of card padding above and below
+/// the rows and the popup's 16 px of shadow room; a detail line adds its own
+#[test]
+fn pin_standard_density_menu_geometry() {
+    let renderer = renderer();
+    let one = measure(Menu::new().item(MenuItem::new("Open", ())), &renderer);
+    let two = measure(
+        Menu::new()
+            .item(MenuItem::new("Open", ()))
+            .item(MenuItem::new("Save", ())),
+        &renderer,
+    );
+    let near = |a: f32, b: f32, what: &str| assert!((a - b).abs() < 0.01, "{what}: {a} vs {b}");
+    near(one.height, 16.0 + 8.0 + 6.0 + 19.6 + 6.0, "one row");
+    near(two.height - one.height, 6.0 + 19.6 + 6.0, "no gap between rows");
+    let with = measure(
+        Menu::new().item(MenuItem::new("Open", ()).detail("path")),
+        &renderer,
+    );
+    near(with.height - one.height, 17.0, "a detail line");
+}

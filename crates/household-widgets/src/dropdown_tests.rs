@@ -423,3 +423,32 @@ fn a_disabled_option_explains_itself_and_cannot_be_chosen() {
     app.named(Named::Enter);
     assert!(app.app.is_empty(), "it does nothing: {:?}", app.app);
 }
+
+/// Pin (Standard density): the trigger is its text, a 4 px gap and a 16 px
+/// caret, inside 8 px of padding all round
+#[test]
+fn pin_standard_density_trigger_geometry() {
+    use cosmic::iced::advanced::layout::Limits;
+    use cosmic::iced::advanced::widget::Tree;
+    let option = DropdownOption {
+        label: "Medium".into(),
+        disabled_reason: None,
+    };
+    let text = measured_width("Medium", TEXT_SIZE, cosmic::font::default());
+    assert_eq!(trigger_width(&[option]), (text + 4.0 + 16.0 + 16.0).ceil());
+    let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
+        Font::default(),
+        Pixels(14.0),
+        Some("tiny-skia"),
+    ))
+    .expect("headless renderer");
+    let mut face = Face::new("Medium".into(), Length::Shrink);
+    let node = Widget::layout(
+        &mut face,
+        &mut Tree::empty(),
+        &renderer,
+        &Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
+    );
+    assert_eq!(node.size().width, text.round() + 4.0 + 16.0 + 16.0);
+    assert!((node.size().height - (16.8 + 16.0)).abs() < 0.01);
+}

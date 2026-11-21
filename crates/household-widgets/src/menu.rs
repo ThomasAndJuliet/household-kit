@@ -705,6 +705,26 @@ mod tests {
         }
     }
 
+    /// Pin (Standard density): a row's width is its label, its icon column
+    /// and mark column (16 + 8 each) and 16 of padding at each side
+    #[test]
+    fn pin_standard_density_row_width() {
+        let row = |reserve_mark| MenuRow {
+            reserve_mark,
+            mark: None,
+            icon: None,
+            label: "Copy".into(),
+            shortcut: String::new(),
+            destructive: false,
+            selected: false,
+            folder: false,
+            detail: None,
+        };
+        let label = measured_width("Copy", 14.0, cosmic::font::default());
+        assert_eq!(row(false).width(), 32.0 + 24.0 + label);
+        assert_eq!(row(true).width(), 32.0 + 48.0 + label);
+    }
+
     #[test]
     fn measurement_tracks_size_and_weight() {
         let text = "A menu label with a width";
