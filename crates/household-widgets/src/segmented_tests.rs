@@ -35,13 +35,13 @@ fn bar<'a>(labels: &[&str], chosen: Option<usize>, enabled: bool) -> Segmented<'
 
 /// The parts' boxes within the bar, and the bar's size
 fn parts_of(node: &layout::Node) -> (Size, Vec<Rectangle>) {
-    let row = &node.children()[0];
-    let parts = row
+    // The bar's layout is its row's: the parts are its children
+    let parts = node
         .children()
         .iter()
         .map(|part| {
             Rectangle::new(
-                Point::new(row.bounds().x + part.bounds().x, row.bounds().y + part.bounds().y),
+                part.bounds().position(),
                 part.size(),
             )
         })
@@ -52,7 +52,7 @@ fn parts_of(node: &layout::Node) -> (Size, Vec<Rectangle>) {
 const LABELS: [&str; 3] = ["Paper", "Text", "Terminal"];
 
 #[test]
-fn every_part_is_space_l_tall_inside_the_outline_with_no_gap() {
+fn the_bar_is_space_l_tall_and_its_parts_fill_it_with_no_gap() {
     let renderer = renderer();
     let node = layout_of(bar(&LABELS, Some(1), true).into(), &renderer);
     let (size, parts) = parts_of(&node);
@@ -61,15 +61,15 @@ fn every_part_is_space_l_tall_inside_the_outline_with_no_gap() {
     assert_eq!(space_l, crate::button::button_height());
     for part in &parts {
         assert_eq!(part.height, space_l);
-        assert_eq!(part.y, OUTLINE, "inside the outline");
+        assert_eq!(part.y, 0.0, "the parts fill the bar");
     }
-    assert_eq!(size.height, space_l + 2.0 * OUTLINE);
-    assert_eq!(parts[0].x, OUTLINE);
+    assert_eq!(size.height, space_l, "as tall as a button");
+    assert_eq!(parts[0].x, 0.0);
     for pair in parts.windows(2) {
         assert!((pair[1].x - (pair[0].x + pair[0].width)).abs() < 0.01, "no gap");
     }
     let end = parts[2].x + parts[2].width;
-    assert!((size.width - (end + OUTLINE)).abs() < 0.01, "only as wide as its parts");
+    assert!((size.width - end).abs() < 0.01, "only as wide as its parts");
 }
 
 #[test]
@@ -139,11 +139,20 @@ fn the_chosen_part_is_the_muted_fill_with_square_inner_corners() {
     let pixels = drawn(bar(&LABELS, Some(1), true).into());
     // The middle part's own corners are square: the fill reaches them
     let (left, right) = (middle.x.ceil(), (middle.x + middle.width).floor() - 1.0);
-    let (top, bottom) = (middle.y.ceil(), (middle.y + middle.height).floor() - 1.0);
+    // One pixel in from the bar's edge, which the outline is painted over
+    let (top, bottom) = (middle.y.ceil() + OUTLINE, (middle.y + middle.height).floor() - 1.0 - OUTLINE);
     for (x, y) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
         assert!(is_muted(pixel(&pixels, x, y)), "square corner at ({x}, {y})");
     }
     assert!(is_muted(pixel(&pixels, middle.x + 3.0, middle.y + 16.0)), "its fill");
+    // The outline is on the bar's own edge, over the chosen fill, and
+    // nothing is drawn beyond it
+    let mid = (middle.x + middle.width / 2.0).floor();
+    let edge = pixel(&pixels, mid, 0.0);
+    assert!(!is_muted(edge), "the outline lies over the part's top edge");
+    assert_ne!(edge, pixel(&pixels, mid, top), "and differs from the fill under it");
+    assert_eq!(pixel(&pixels, mid, middle.height), pixel(&pixels, 120.0, 40.0), "nothing below the bar");
+    assert_eq!(pixel(&pixels, mid, 31.0), edge, "the same line at the bottom edge");
     assert!(!is_muted(pixel(&pixels, parts[0].x + 3.0, parts[0].y + 16.0)), "an unchosen part has none");
     // The first part, chosen, is rounded at the bar's end and square inside
     let pixels = drawn(bar(&LABELS, Some(0), true).into());
@@ -317,5 +326,5 @@ fn the_bar_in_a_form_cuts_a_long_label_short_to_its_part() {
     let node = layout_of(bar(&["A very long label indeed"], Some(0), true).form(part).into(), &renderer);
     let (size, parts) = parts_of(&node);
     assert_eq!(parts[0].width, 60.0);
-    assert_eq!(size.width, 60.0 + 2.0 * OUTLINE);
+    assert_eq!(size.width, 60.0);
 }

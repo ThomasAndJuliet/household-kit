@@ -21,8 +21,11 @@
 //!   moves nothing ("the hovered size should be the same as the
 //!   non-hovered size from a layout perspective", Juliet, 21 Nov).
 //! - **The bar** is drawn by the parent, not by the parts: one background
-//!   and one [`OUTLINE`] stroke round the whole row, and the parts inside
-//!   it with no gap. The first part is rounded on its left and the last on
+//!   under the row and one [`OUTLINE`] stroke over its outer edge, drawn
+//!   inside the bar's box as Secondary's border is, the parts filling the
+//!   bar with no gap. The bar is `space_l` tall, as every button is, so it
+//!   lines up with buttons in its row, and a chosen end part's fill meets
+//!   the outline. The first part is rounded on its left and the last on
 //!   its right (the theme's `radius_xl`, as buttons are rounded, rule
 //!   25d); every inner corner is square, so the parts touch. A bar of one
 //!   part is rounded on both sides.
@@ -81,16 +84,18 @@
 //! # let _ = first;
 //! ```
 
-use cosmic::iced::{Alignment, Background, Border, Length, Padding};
+use cosmic::iced::advanced::widget::{Operation, Tree};
+use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
+use cosmic::iced::{Alignment, Background, Border, Color, Event, Length, Rectangle, Size, Vector};
 use cosmic::widget::{self, tooltip::Position};
-use cosmic::{Element, theme};
+use cosmic::{Element, Renderer, Theme, theme};
 
 use crate::button::{ACTION_ICON, Button, ButtonLook, LABEL_SIZE};
 use crate::menu::measured_width;
 use crate::tooltip::Tip;
 
-/// The stroke round the bar: a line, not a layout size. The parts sit
-/// inside it
+/// The stroke round the bar: a line, not a layout size. It is painted over
+/// the parts' outer edges, inside the bar's box
 pub const OUTLINE: f32 = 1.0;
 
 /// One part of a segmented control: a label, what choosing it does, and
@@ -263,25 +268,69 @@ impl<'a, M: Clone + 'a> From<Segmented<'a, M>> for Element<'a, M> {
                 button.into()
             })
             .collect();
-        // The bar: one outline and background round parts that touch
-        widget::container(widget::row::with_children(parts).align_y(Alignment::Center))
-            .padding(Padding::from(OUTLINE))
-            .width(Length::Shrink)
-            .class(theme::Container::custom(move |theme| {
-                let cosmic = theme.cosmic();
-                cosmic::iced::widget::container::Style {
-                    background: Some(Background::Color(
-                        cosmic.background(theme.transparent).component.base.into(),
-                    )),
-                    border: Border {
-                        radius: cosmic.corner_radii.radius_xl.into(),
-                        width: OUTLINE,
-                        color: cosmic.bg_divider().into(),
-                    },
-                    ..Default::default()
-                }
-            }))
-            .into()
+        // The bar: one background under parts that touch, one outline over
+        // their outer edges, inside the bar's own box
+        Element::new(Outlined {
+            content: widget::row::with_children(parts)
+                .align_y(Alignment::Center)
+                .into(),
+        })
+    }
+}
+
+/// The bar's paint round its row of parts: the background beneath them and
+/// the [`OUTLINE`] stroke over them, drawn inside the bar's edge as
+/// Secondary's border is drawn inside its box. The bar is the row's size,
+/// `space_l` tall like every button, so it lines up with buttons beside it;
+/// the chosen part's fill meets the outline. Every event, size and
+/// operation is the row's
+struct Outlined<'a, M> {
+    content: Element<'a, M>,
+}
+
+impl<M> Widget<M, Theme, Renderer> for Outlined<'_, M> {
+    forward_widget!(M, Theme, Renderer; children, diff, size, layout, update, operate, mouse_interaction, overlay, drag_destinations, a11y_nodes);
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        use cosmic::iced::advanced::Renderer as _;
+        let cosmic = theme.cosmic();
+        let radius = cosmic.corner_radii.radius_xl;
+        let bounds = layout.bounds();
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                border: Border {
+                    radius: radius.into(),
+                    ..Border::default()
+                },
+                ..renderer::Quad::default()
+            },
+            Background::Color(cosmic.background(theme.transparent).component.base.into()),
+        );
+        self.content
+            .as_widget()
+            .draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                border: Border {
+                    radius: radius.into(),
+                    width: OUTLINE,
+                    color: cosmic.bg_divider().into(),
+                },
+                ..renderer::Quad::default()
+            },
+            Background::Color(Color::TRANSPARENT),
+        );
     }
 }
 
