@@ -110,3 +110,50 @@ fn tertiary_compact_draws_custom_colour_and_responds_to_click() {
         "the custom red mark survives rendering and takes precedence over the icon"
     );
 }
+
+/// How many pixels of a `requested`-wide icon-only mark the button's square
+/// cannot show: layout limits the mark to the square, so a larger one comes out
+/// narrower than asked and is clipped. This makes that design error visible
+/// in a test instead of silent. `None` when the mark is drawn whole.
+fn clipped(element: Element<'_, ()>, requested: f32, renderer: &cosmic::Renderer) -> Option<f32> {
+    let node = layout_of(element, renderer);
+    let shown = node.children()[0].children()[0].size().width;
+    (shown + 0.01 < requested).then_some(requested - shown)
+}
+
+fn sized_mark(size: f32) -> Element<'static, ()> {
+    widget::Space::new().width(size).height(size).into()
+}
+
+#[test]
+fn tertiary_icon_only_draws_a_twenty_pixel_mark_whole() {
+    let renderer = renderer();
+    let build = |size: f32| -> Element<'static, ()> {
+        Tertiary::new("Effort", theme::Button::default(), ())
+            .leading_element(sized_mark(size))
+            .icon_only(true)
+            .on_press(())
+            .into()
+    };
+    let node = layout_of(build(20.0), &renderer);
+    assert_eq!(node.size(), Size::new(32.0, 32.0), "default height square");
+    let mark = &node.children()[0].children()[0];
+    assert_eq!(mark.size().width, 20.0, "the 20 px mark is not narrowed");
+    assert_eq!(mark.size().height, 20.0);
+    let content = &node.children()[0];
+    let left = content.bounds().x + mark.bounds().x;
+    let right = node.size().width - (left + mark.size().width);
+    assert!((left - right).abs() < 0.5, "centred: {left} vs {right}");
+    assert_eq!(clipped(build(20.0), 20.0, &renderer), None);
+    assert_eq!(clipped(build(32.0), 32.0, &renderer), None);
+}
+
+#[test]
+fn tertiary_icon_only_larger_mark_than_the_square_is_detectable() {
+    let renderer = renderer();
+    let element: Element<'static, ()> = Tertiary::new("Big", theme::Button::default(), ())
+        .leading_element(sized_mark(40.0))
+        .icon_only(true)
+        .into();
+    assert_eq!(clipped(element, 40.0, &renderer), Some(8.0));
+}

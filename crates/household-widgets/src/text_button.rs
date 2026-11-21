@@ -195,6 +195,15 @@ impl<'a, M: Clone> Tertiary<'a, M> {
     }
 
     /// Show only the leading element or icon, retaining the label for accessibility.
+    ///
+    /// The button becomes a square of its height with the content centred in
+    /// it and no side padding, so a mark up to the square's size (the 20 px
+    /// identity marks of rule 10 in a 32 px square) is drawn whole. The
+    /// labelled form's side padding would leave only `height - 2 * space_xxs`
+    /// (16 px) and clip a larger mark on its right. A leading element larger
+    /// than the square is a design error: layout limits it to the square
+    /// and clips it, and `text_button_tests::clipped` finds that in a layout
+    /// test (the helper compares the requested and the laid-out size).
     pub fn icon_only(mut self, icon_only: bool) -> Self {
         self.icon_only = icon_only;
         self
@@ -243,9 +252,15 @@ impl<'a, M: Clone + 'a> From<Tertiary<'a, M>> for Element<'a, M> {
             .spacing(space.space_xxs)
             .align_y(Alignment::Center)
             .height(Length::Fill);
+        // Icon-only: the content is centred in the square, with no side padding
+        let padding = if tertiary.icon_only {
+            Padding::ZERO
+        } else {
+            Padding::from([space.space_xxxs, space.space_xxs])
+        };
         let button = button::custom(content)
             .class(tertiary.class)
-            .padding([space.space_xxxs, space.space_xxs])
+            .padding(padding)
             .height(Length::Fixed(height))
             .width(if tertiary.icon_only {
                 Length::Fixed(height)
