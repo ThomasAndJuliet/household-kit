@@ -452,3 +452,37 @@ fn pin_standard_density_trigger_geometry() {
     assert_eq!(node.size().width, text.round() + 4.0 + 16.0 + 16.0);
     assert!((node.size().height - (16.8 + 16.0)).abs() < 0.01);
 }
+
+/// At Compact density the trigger follows the steps: `space_xxs` is 4 and
+/// `space_xxxs` 4 there
+#[test]
+fn the_trigger_follows_the_density() {
+    use cosmic::cosmic_theme::{Density, Spacing};
+    use cosmic::iced::advanced::layout::Limits;
+    use cosmic::iced::advanced::widget::Tree;
+    let compact = Spacing::from(Density::Compact);
+    let option = DropdownOption {
+        label: "Medium".into(),
+        disabled_reason: None,
+    };
+    let text = measured_width("Medium", TEXT_SIZE, cosmic::font::default());
+    assert_eq!(
+        trigger_width_in(&[option], &compact),
+        (text + 4.0 + 16.0 + 8.0).ceil()
+    );
+    let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
+        Font::default(),
+        Pixels(14.0),
+        Some("tiny-skia"),
+    ))
+    .expect("headless renderer");
+    let mut face = Face::in_spacing("Medium".into(), Length::Shrink, compact);
+    let node = Widget::layout(
+        &mut face,
+        &mut Tree::empty(),
+        &renderer,
+        &Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
+    );
+    assert_eq!(node.size().width, text.round() + 4.0 + 16.0 + 8.0);
+    assert!((node.size().height - (16.8 + 8.0)).abs() < 0.01);
+}
