@@ -38,22 +38,30 @@
 //! | [`InputCard`](Kind::InputCard) | `space_xs` | `space_xs` |
 //! | [`InformationCard`](Kind::InformationCard) | `space_xs` above and below, `space_s` at the sides | `space_xxxs` |
 //! | [`Popup`](Kind::Popup) | `space_xxxs` above and below | none between rows |
-//! | [`NestedFrame`](Kind::NestedFrame) | `space_xxs` | none |
 //! | [`DenseRow`](Kind::DenseRow) | `space_xxxs` / `space_xxs` | `space_xxs` |
 //! | [`ListRow`](Kind::ListRow) | `space_xxs` / `space_xs` | `space_xxs` |
 //! | [`MenuRow`](Kind::MenuRow) | at least `space_l` tall, content centred; `space_xxs` at the sides | `space_xxs` |
 //! | [`GroupRelated`](Kind::GroupRelated) | none | `space_xs` |
 //! | [`GroupSeparate`](Kind::GroupSeparate) | none | `space_m` |
 //! | [`Toolbar`](Kind::Toolbar) | `space_xxs` | `space_xs` |
-//! | [`Tab`](Kind::Tab), [`TabClosable`](Kind::TabClosable) | `space_s` at the sides (`space_xxs` after a close control) | `space_xxs` |
+//! | [`Tab`](Kind::Tab) | `space_s` at the sides (a close control is nested: it sits one gap from the end) | `space_xxs` |
 //! | [`Header`](Kind::Header) | `space_xs` | `space_xxs` |
-//! | [`Field`](Kind::Field) | `space_xxs` | `space_xxxs` |
-//! | [`MenuTitle`](Kind::MenuTitle) | `space_xxxs` above and below, `space_xs` at the sides | none |
-//! | [`SmallControl`](Kind::SmallControl) | `space_xxxs` | none |
 //!
 //! A row that centres its content in `space_l` has no pixel for the space
 //! above and below: it is what is left when the line of text is centred
 //! ([`centred_in_control`]).
+//!
+//! # What is not a kind
+//!
+//! Every **control** (a button, a dropdown's trigger, a menu bar's title, an
+//! overflow button) is [`control_height`] tall with its content centred, and
+//! sets no vertical padding at all; a control's side room belongs to its look
+//! ([`ButtonLook::inset`](crate::button::ButtonLook::inset)). Those are not
+//! containers, so a developer is never asked to choose a kind for them. The
+//! kinds above are the *containers*, the only thing a developer chooses
+//! between. What a container does inside itself (the frame an open folder
+//! draws inside a menu, a close control inside a tab) is the container's own
+//! detail, derived from its steps.
 //!
 //! # Example
 //!
@@ -95,9 +103,6 @@ pub enum Kind {
     InformationCard,
     /// A menu or popup's frame: rows run to its sides
     Popup,
-    /// A frame inside a menu (an expanded folder): the space between it and
-    /// the menu's rows
-    NestedFrame,
     /// A row in a sidebar
     DenseRow,
     /// A row in a content list
@@ -112,17 +117,8 @@ pub enum Kind {
     Toolbar,
     /// A tab's content
     Tab,
-    /// A tab with a close control, which carries its own edge
-    TabClosable,
     /// A panel's header row
     Header,
-    /// A pick-list's face: the chosen value and its caret
-    Field,
-    /// A menu bar's title
-    MenuTitle,
-    /// An icon alone in a bar: the icon button libcosmic draws, until the
-    /// shared button's `space_l` square replaces it
-    SmallControl,
 }
 
 impl Kind {
@@ -135,15 +131,12 @@ impl Kind {
             Self::InputCard | Self::Header => Padding::new(xs),
             Self::InformationCard => Padding::from([xs, s]),
             Self::Popup => Padding::from([xxxs, 0.0]),
-            Self::NestedFrame | Self::Toolbar | Self::Field => Padding::new(xxs),
+            Self::Toolbar => Padding::new(xxs),
             Self::DenseRow => Padding::from([xxxs, xxs]),
             Self::ListRow => Padding::from([xxs, xs]),
             Self::MenuRow => Padding::from([centred_in_control(spacing, LABEL_LINE), xxs]),
             Self::GroupRelated | Self::GroupSeparate => Padding::ZERO,
             Self::Tab => Padding::from([0.0, s]),
-            Self::TabClosable => Padding::ZERO.left(s).right(xxs),
-            Self::MenuTitle => Padding::from([xxxs, xs]),
-            Self::SmallControl => Padding::new(xxxs),
         }
     }
 
@@ -154,14 +147,9 @@ impl Kind {
         match self {
             Self::Page | Self::Card | Self::GroupSeparate => m,
             Self::InputCard | Self::GroupRelated | Self::Toolbar => xs,
-            Self::InformationCard | Self::Field => xxxs,
-            Self::DenseRow
-            | Self::ListRow
-            | Self::MenuRow
-            | Self::Tab
-            | Self::TabClosable
-            | Self::Header => xxs,
-            Self::Popup | Self::NestedFrame | Self::MenuTitle | Self::SmallControl => 0.0,
+            Self::InformationCard => xxxs,
+            Self::DenseRow | Self::ListRow | Self::MenuRow | Self::Tab | Self::Header => xxs,
+            Self::Popup => 0.0,
         }
     }
 }
@@ -195,13 +183,12 @@ mod tests {
     use super::*;
     use cosmic::cosmic_theme::Density;
 
-    const ALL: [Kind; 18] = [
+    const ALL: [Kind; 13] = [
         Kind::Page,
         Kind::Card,
         Kind::InputCard,
         Kind::InformationCard,
         Kind::Popup,
-        Kind::NestedFrame,
         Kind::DenseRow,
         Kind::ListRow,
         Kind::MenuRow,
@@ -209,11 +196,7 @@ mod tests {
         Kind::GroupSeparate,
         Kind::Toolbar,
         Kind::Tab,
-        Kind::TabClosable,
         Kind::Header,
-        Kind::Field,
-        Kind::MenuTitle,
-        Kind::SmallControl,
     ];
 
     fn pad(top: f32, right: f32, bottom: f32, left: f32) -> Padding {
@@ -233,8 +216,7 @@ mod tests {
         assert_eq!(Kind::InformationCard.inset(&s), pad(12.0, 16.0, 12.0, 16.0));
         assert_eq!(Kind::Popup.inset(&s), pad(4.0, 0.0, 4.0, 0.0));
         assert_eq!(Kind::MenuRow.inset(&s), pad(6.0, 8.0, 6.0, 8.0));
-        assert_eq!(Kind::TabClosable.inset(&s), pad(0.0, 8.0, 0.0, 16.0));
-        assert_eq!(Kind::MenuTitle.inset(&s), pad(4.0, 12.0, 4.0, 12.0));
+        assert_eq!(Kind::Tab.inset(&s), pad(0.0, 16.0, 0.0, 16.0));
         assert_eq!(Kind::GroupRelated.gap(&s), 12.0);
         assert_eq!(Kind::GroupSeparate.gap(&s), 24.0);
         assert_eq!(control_height(&s), 32.0);

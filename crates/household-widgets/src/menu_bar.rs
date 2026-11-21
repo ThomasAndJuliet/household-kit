@@ -24,17 +24,20 @@
 
 use crate::layout::{self as engine, Child, Level, Stage};
 use crate::menu_parts::RowContour;
-use crate::spacing::Kind;
+use crate::spacing::control_height;
 use crate::window::{Entry, Toggle, UiEvent};
 use cosmic::iced::advanced::widget::{Id, Operation, Tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector};
 use cosmic::{Element, Renderer, Theme};
 
-/// A title's padding, as a header's menu titles have it: the
-/// [`MenuTitle`](Kind::MenuTitle) kind's
+/// A title's padding: a title is a control, so none above and below (it is
+/// [`control_height`] tall, its label centred) and `space_xs` at the sides.
+/// The shared button's looks give `space_s` or `space_xxs` and none of them
+/// draws a menu title (libcosmic's `MenuRoot` paint), so the title keeps the
+/// `space_xs` it has always had
 fn title_padding(spacing: &cosmic::cosmic_theme::Spacing) -> cosmic::iced::Padding {
-    Kind::MenuTitle.inset(spacing)
+    cosmic::iced::Padding::from([0.0, f32::from(spacing.space_xs)])
 }
 
 /// A window's menu bar: its menus' titles and the roots they open, in order.
@@ -169,8 +172,13 @@ fn title<'a, M: 'a, R: Clone + PartialEq + 'static>(
     // libcosmic's menu-title button: its label in the colour of the
     // header's controls (the accent, faded when the window is behind
     // others), as the libcosmic bar drew it
-    let button = cosmic::widget::button::custom(body(label))
-        .padding(title_padding(&cosmic::theme::spacing()))
+    let spacing = cosmic::theme::spacing();
+    let centred = cosmic::widget::container(body(label))
+        .height(Length::Fill)
+        .align_y(cosmic::iced::alignment::Vertical::Center);
+    let button = cosmic::widget::button::custom(centred)
+        .padding(title_padding(&spacing))
+        .height(Length::Fixed(control_height(&spacing)))
         .class(cosmic::theme::Button::MenuRoot)
         .on_press(Toggle);
     let target = crate::popup::focus_target(id.clone(), button)

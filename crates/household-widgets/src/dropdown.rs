@@ -14,14 +14,16 @@
 //! as wide as the trigger ([`DropdownMenu::width`]), the keyboard's target
 //! the selected option ([`DropdownMenu::selected`]).
 //!
-//! The trigger ([`Face`]) is libcosmic's dropdown as it draws today: the
-//! theme's pick-list style at rest and hovered, the [`Field`](Kind::Field)
-//! kind's padding (`space_xxs`), the label at 14 px in 1.2 line height, the
-//! 16 px `pan-down-symbolic` caret one of its gaps (`space_xxxs`) from the
-//! right edge.
+//! The trigger ([`Face`]) is a control, so it is [`control_height`] tall
+//! (`space_l`) with its label and caret centred in that, as every control is.
+//! It is not the shared [`Button`](crate::button::Button): its paint is the
+//! theme's pick-list style at rest and hovered (a field's, not a button
+//! look's), which no look draws, and it keeps that. Its sides are
+//! `space_xxs` and the 16 px `pan-down-symbolic` caret sits `space_xxxs`
+//! from the right edge; the label is 14 px.
 
 use crate::menu::{Menu, MenuItem, MenuMark, measured_width};
-use crate::spacing::Kind;
+use crate::spacing::control_height;
 use crate::window::{Declaration, Declared, Toggle, menu_button};
 use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
@@ -234,16 +236,18 @@ impl Face {
     }
 }
 
-/// The face's padding at every side and the gap its caret sits in
+/// The face's side room and the gap its caret sits in: `space_xxs` and
+/// `space_xxxs`. A control's vertical room is not a padding: the face is
+/// [`control_height`] tall and centres its content
 fn face_space(spacing: &Spacing) -> (f32, f32) {
-    (Kind::Field.inset(spacing).left, Kind::Field.gap(spacing))
+    (f32::from(spacing.space_xxs), f32::from(spacing.space_xxxs))
 }
 
 const LINE: text::LineHeight = text::LineHeight::Relative(1.2);
 
 impl Widget<Toggle, Theme, Renderer> for Face {
     fn size(&self) -> Size<Length> {
-        Size::new(self.width, Length::Shrink)
+        Size::new(self.width, Length::Fixed(control_height(&self.spacing)))
     }
 
     fn layout(
@@ -253,10 +257,11 @@ impl Widget<Toggle, Theme, Renderer> for Face {
         limits: &layout::Limits,
     ) -> layout::Node {
         let (inset, gap) = face_space(&self.spacing);
-        let padding = Padding::new(inset);
+        let height = control_height(&self.spacing);
+        let padding = Padding::from([0.0, inset]);
         let limits = limits
             .width(self.width)
-            .height(Length::Shrink)
+            .height(Length::Fixed(height))
             .shrink(padding);
         let text = match self.width {
             Length::Shrink => {
@@ -264,13 +269,10 @@ impl Widget<Toggle, Theme, Renderer> for Face {
             }
             _ => 0.0,
         };
-        let intrinsic = Size::new(
-            text + gap + CARET,
-            f32::from(LINE.to_absolute(Pixels(TEXT_SIZE))),
-        );
+        let intrinsic = Size::new(text + gap + CARET, height);
         layout::Node::new(
             limits
-                .resolve(self.width, Length::Shrink, intrinsic)
+                .resolve(self.width, Length::Fixed(height), intrinsic)
                 .expand(padding),
         )
     }

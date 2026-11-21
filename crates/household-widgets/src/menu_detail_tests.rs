@@ -138,9 +138,10 @@ fn a_detail_line_is_shown_whole_and_the_state_covers_the_row() {
     }
 }
 
-/// The padding system's pins (Standard density): a menu row is its 19.6 px
-/// line in 6 px above and below, in 4 px of card padding above and below
-/// the rows and the popup's 16 px of shadow room; a detail line adds its own
+/// The padding system's pins (Standard density): a menu row is `space_l`
+/// (32) tall, its 19.6 px line centred (was 31.6: the line in 6 above and
+/// below), in 4 px of card padding above and below the rows and the popup's
+/// 16 px of shadow room; a detail line grows the row by its own height
 #[test]
 fn pin_standard_density_menu_geometry() {
     let renderer = renderer();
@@ -152,21 +153,17 @@ fn pin_standard_density_menu_geometry() {
         &renderer,
     );
     let near = |a: f32, b: f32, what: &str| assert!((a - b).abs() < 0.01, "{what}: {a} vs {b}");
-    near(one.height, 16.0 + 8.0 + 6.0 + 19.6 + 6.0, "one row");
-    near(
-        two.height - one.height,
-        6.0 + 19.6 + 6.0,
-        "no gap between rows",
-    );
+    near(one.height, 16.0 + 8.0 + 32.0, "one row");
+    near(two.height - one.height, 32.0, "no gap between rows");
     let with = measure(
         Menu::new().item(MenuItem::new("Open", ()).detail("path")),
         &renderer,
     );
-    near(with.height - one.height, 17.0, "a detail line");
+    near(with.height - one.height, 16.6, "a detail line");
 }
 
-/// At Compact density a menu row has 2 px of centring above and below its
-/// line (`space_l` 24), inside the card's 4 px
+/// At Compact density a menu row is `space_l` (24) tall, inside the card's
+/// 4 px
 #[test]
 fn a_menu_follows_the_density() {
     use cosmic::cosmic_theme::{Density, Spacing};
@@ -185,6 +182,6 @@ fn a_menu_follows_the_density() {
         compact,
     );
     let near = |a: f32, b: f32, what: &str| assert!((a - b).abs() < 0.01, "{what}: {a} vs {b}");
-    near(one.height, 16.0 + 8.0 + 2.0 + 19.6 + 2.0, "one row");
-    near(two.height - one.height, 2.0 + 19.6 + 2.0, "a row");
+    near(one.height, 16.0 + 8.0 + 24.0, "one row");
+    near(two.height - one.height, 24.0, "a row");
 }

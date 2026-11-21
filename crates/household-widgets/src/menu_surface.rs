@@ -785,7 +785,9 @@ impl<M: Clone + 'static> Content<M> {
             }
             padding
         };
-        let nested_inset = Kind::NestedFrame.inset(&self.spacing).left;
+        // The frame an open folder draws inside the menu stands one `space_xxs`
+        // from the menu's rows: the menu's own detail, not a kind
+        let nested_inset = f32::from(self.spacing.space_xxs);
         let slots = RowSlots {
             mark_width: slot_rows
                 .iter()
@@ -993,9 +995,12 @@ impl<M: Clone + 'static> Content<M> {
                     cell.push(trailing);
                 }
                 pieces.push(widget::row(cell).spacing(slots.gap).into());
-                let row = widget::container(widget::row(pieces).spacing(slots.gap))
-                    .padding(row_padding(inline))
-                    .into();
+                let row = widget::container(menu_parts::at_least_a_line(
+                    widget::row(pieces).spacing(slots.gap).into(),
+                    Length::Shrink,
+                ))
+                .padding(row_padding(inline))
+                .into();
                 if inline && let Row::Folder(_, submenu) = &rows[at] {
                     let mut child = self.clone();
                     child.menu = submenu.clone();
@@ -1013,7 +1018,10 @@ impl<M: Clone + 'static> Content<M> {
                 }
                 continue;
             }
-            let row = menu_parts::row_content(slots, mark, icon, label, trailing);
+            let row = menu_parts::at_least_a_line(
+                menu_parts::row_content(slots, mark, icon, label, trailing),
+                Length::Fill,
+            );
             let activation = message.clone();
             let selected_style = selected;
             let row = menu_parts::action_row_with(

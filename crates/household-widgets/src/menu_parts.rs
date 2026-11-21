@@ -189,6 +189,27 @@ impl Default for RowSlots {
     }
 }
 
+/// A row's content, at least [`LABEL_LINE`](crate::spacing::LABEL_LINE) tall
+/// and centred in that: with the row's inset above and below
+/// ([`Kind::MenuRow`]) the row is exactly [`control_height`](crate::spacing::control_height)
+/// tall, as every control is, and a row whose content is taller (a detail
+/// line) grows. The label's own line is 19.6 px, so without this a row would
+/// be 31.6.
+pub fn at_least_a_line<'a, M: 'a>(content: Element<'a, M>, width: Length) -> Element<'a, M> {
+    widget::row(vec![
+        // Shrink-wide, not zero-wide: iced's row leaves out a child that is
+        // 0 wide
+        widget::Space::new()
+            .width(Length::Shrink)
+            .height(Length::Fixed(crate::spacing::LABEL_LINE))
+            .into(),
+        content,
+    ])
+    .align_y(cosmic::iced::Alignment::Center)
+    .width(width)
+    .into()
+}
+
 /// Construct the inside of a row. The label and trailing content share one
 /// flexible cell, so shortcuts and arrows are aligned at the row's right edge
 /// without imposing separate global label and trailing columns.

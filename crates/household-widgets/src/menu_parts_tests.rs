@@ -399,3 +399,23 @@ fn a_rows_default_gap_is_the_menu_row_kinds() {
     assert_eq!(RowSlots::default().gap, 8.0);
     assert_eq!(crate::spacing::Kind::MenuRow.gap(&Spacing::default()), 8.0);
 }
+
+/// A row's content is at least a label line tall and centred in it; taller
+/// content grows it
+#[test]
+fn a_rows_content_is_at_least_a_label_line_tall_and_centred() {
+    let renderer = renderer();
+    let mut short = at_least_a_line(
+        widget::container(widget::space().width(10).height(10)).into(),
+        cosmic::iced::Length::Shrink,
+    );
+    let node = layout_of(&mut short, &renderer);
+    assert_eq!(node.size().height, crate::spacing::LABEL_LINE);
+    let inner = &node.children()[1];
+    assert_eq!(inner.bounds().y, 5.0, "centred");
+    let mut tall = at_least_a_line(
+        widget::container(widget::space().width(10).height(36)).into(),
+        cosmic::iced::Length::Shrink,
+    );
+    assert_eq!(layout_of(&mut tall, &renderer).size().height, 36.0);
+}

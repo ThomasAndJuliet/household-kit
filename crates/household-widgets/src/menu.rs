@@ -10,13 +10,19 @@ use cosmic::iced::{Font, Length};
 use cosmic::widget::{self, icon, menu::key_bind::KeyBind};
 use cosmic::{Element, theme};
 
+use crate::spacing::Kind;
+
 /// The minimum canvas for menu icons, marks and submenu indicators.
 pub const ICON_SIZE: f32 = 16.0;
 /// The room a menu row's width estimate leaves at each side of its content,
-/// beyond the icon and mark columns: `space_s` (the row's `space_xxs` inset
-/// and a gap)
+/// beyond the icon and mark columns. The row itself takes only its side
+/// inset ([`Kind::MenuRow`]: `space_xxs`); the estimate adds one more of the
+/// row's gaps (also `space_xxs`) as slack, so a row measured to fit is never
+/// laid out against its edge. Together: `space_s` at Standard density, the
+/// 16 px the estimate has always used
 fn side_room() -> f32 {
-    f32::from(theme::spacing().space_s)
+    let spacing = theme::spacing();
+    Kind::MenuRow.inset(&spacing).left + Kind::MenuRow.gap(&spacing)
 }
 /// The caption size of a row's detail line
 const CAPTION: f32 = 12.0;

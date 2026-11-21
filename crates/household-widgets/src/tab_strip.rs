@@ -37,9 +37,11 @@
 //! among the tabs in view, Enter and Space select. Dragging a tab reorders it among the visible tabs; dragging
 //! beyond them is not designed yet and does nothing.
 
+use crate::button::Button;
 use crate::layout::{self as engine, AnchorCandidate, Child, Level};
 use crate::menu::{Menu, MenuItem};
 use crate::spacing::Kind;
+use crate::tooltip::Tip;
 use crate::window::{Toggle, hover_box, trigger};
 use cosmic::iced::advanced::renderer::Renderer as _;
 use cosmic::iced::advanced::widget::{Id, Operation, Tree, tree};
@@ -426,8 +428,7 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
     }
 
     /// [`view`](Self::view) with the given spacing steps: the tab's
-    /// [`Tab`](Kind::Tab) and [`TabClosable`](Kind::TabClosable) insets and
-    /// gap, and the control height
+    /// [`Tab`](Kind::Tab) inset and gap, and the control height
     fn view_in(self, spacing: &cosmic::cosmic_theme::Spacing) -> Element<'a, M> {
         let height = self
             .height
@@ -436,9 +437,10 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
         let ch = crate::menu::measured_width("0", self.title_size, cosmic::font::default());
         let minimum = ch * MINIMUM_TITLE_CHARS;
         // The space before a tab's content, and after it where it has no close
-        // control, and between its parts
+        // control, and between its parts. A close control is a nested control
+        // sized by its tab: it sits one gap from the tab's end
         let (inset, gap) = (Kind::Tab.inset(spacing).left, Kind::Tab.gap(spacing));
-        let close_end = Kind::TabClosable.inset(spacing).right;
+        let close_end = gap;
         let mut minimums = Vec::new();
         let selected_id = self.model.selected;
         let line_colour = self
@@ -545,32 +547,35 @@ impl<'a, M: Clone + 'static, R: Clone + 'static> TabStrip<'a, M, R> {
             selects.push(tab.on_select);
             elements.push(element);
         }
-        let small = Kind::SmallControl.inset(spacing).left;
         let on_button = |side: Overflow, root: R| -> (Element<'a, M>, Element<'a, M>) {
-            let name = if side == Overflow::Left {
-                "go-previous-symbolic"
+            let (name, tip) = if side == Overflow::Left {
+                ("go-previous-symbolic", "Tabs hidden on the left")
             } else {
-                "go-next-symbolic"
+                ("go-next-symbolic", "Tabs hidden on the right")
             };
+            // The shared button's Icon look: a `space_l` square, as every
+            // control is tall, its name in a tooltip
             fn button<'b, N: Clone + 'static>(
                 name: &str,
+                tip: &'static str,
                 press: Option<N>,
-                padding: f32,
             ) -> Element<'b, N> {
-                widget::button::icon(widget::icon::from_name(name).handle())
-                    .icon_size(16)
-                    .padding(padding)
-                    .on_press_maybe(press)
-                    .into()
+                Button::icon(
+                    widget::icon::icon(widget::icon::from_name(name).handle()),
+                    tip,
+                    Tip::new(tip, move || widget::text(tip).into()),
+                )
+                .on_press_maybe(press)
+                .into()
             }
             let id = Self::overflow_id(&ns, side);
             let on = trigger(
                 id.clone(),
                 root,
-                crate::popup::focus_target(id.clone(), button(name, Some(Toggle), small))
+                crate::popup::focus_target(id.clone(), button(name, tip, Some(Toggle)))
                     .on_activate(Toggle),
             );
-            let off: Element<'a, M> = button(name, None, small);
+            let off: Element<'a, M> = button(name, tip, None);
             (on, off)
         };
         let (left_on, left_off) = on_button(Overflow::Left, self.roots.0);

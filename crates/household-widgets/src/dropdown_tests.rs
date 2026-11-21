@@ -320,9 +320,9 @@ fn the_trigger_is_as_wide_as_the_widest_option_and_the_list_as_wide_as_the_trigg
     let wide = trigger_width(&options(&["On", "Off", "Only when the window is in front"]));
     assert!(wide > narrow + 80.0, "{narrow} {wide}");
     let mut app = App::new();
-    // libcosmic's dropdown: 8 px padding round a 14 px label in 1.2 line height
+    // A control: `space_l` tall
     let face = app.visible(&Id::new("sizes")).expect("the trigger");
-    assert!((face.height - (14.0 * 1.2 + 16.0)).abs() < 0.5, "{face:?}");
+    assert!((face.height - 32.0).abs() < 0.5, "{face:?}");
     app.click(app.trigger());
     assert!(app.is_dropdown_open());
     let list = app.window.anchors().surfaces();
@@ -425,7 +425,8 @@ fn a_disabled_option_explains_itself_and_cannot_be_chosen() {
 }
 
 /// Pin (Standard density): the trigger is its text, a 4 px gap and a 16 px
-/// caret, inside 8 px of padding all round
+/// caret, inside 8 px at the sides, and `space_l` (32) tall (was 32.8: a
+/// 16.8 line in 8 above and below)
 #[test]
 fn pin_standard_density_trigger_geometry() {
     use cosmic::iced::advanced::layout::Limits;
@@ -450,11 +451,11 @@ fn pin_standard_density_trigger_geometry() {
         &Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
     );
     assert_eq!(node.size().width, text.round() + 4.0 + 16.0 + 16.0);
-    assert!((node.size().height - (16.8 + 16.0)).abs() < 0.01);
+    assert_eq!(node.size().height, 32.0);
 }
 
 /// At Compact density the trigger follows the steps: `space_xxs` is 4 and
-/// `space_xxxs` 4 there
+/// `space_xxxs` 4 there, and it is `space_l` (24) tall
 #[test]
 fn the_trigger_follows_the_density() {
     use cosmic::cosmic_theme::{Density, Spacing};
@@ -484,5 +485,5 @@ fn the_trigger_follows_the_density() {
         &Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
     );
     assert_eq!(node.size().width, text.round() + 4.0 + 16.0 + 8.0);
-    assert!((node.size().height - (16.8 + 8.0)).abs() < 0.01);
+    assert_eq!(node.size().height, 24.0);
 }

@@ -815,7 +815,8 @@ fn an_apps_own_changes_are_taken_and_only_a_selection_that_moved_is_shown() {
 
 /// Pin (Standard density): a tab is 32 high; at its narrowest it is its
 /// 16 inset, seven characters, an 8 gap, the 16 close control and 8 at the
-/// end; an overflow button is a 16 icon in 4 of padding (24 square)
+/// end; an overflow button is the shared button's Icon square, `space_l`
+/// (32; was 24, a 16 icon in 4 of padding)
 #[test]
 fn pin_standard_density_tab_geometry() {
     let app = App::new(20, NARROW);
@@ -827,12 +828,12 @@ fn pin_standard_density_tab_geometry() {
         "narrowest tab: {tab:?}"
     );
     let (start, _) = app.lane();
-    assert_eq!(start, 24.0, "the overflow button");
+    assert_eq!(start, 32.0, "the overflow button");
 }
 
 /// At Compact density a tab is `space_l` (24) high, and at its narrowest its
 /// insets are the Compact steps: 8 at the start, 4 gaps, 4 after the close
-/// control; the overflow button is its icon in 4 of padding
+/// control (as Standard: a close control sits one gap from the end)
 #[test]
 fn a_tab_follows_the_density() {
     let compact = cosmic::cosmic_theme::Spacing::from(cosmic::cosmic_theme::Density::Compact);
