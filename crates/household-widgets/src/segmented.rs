@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! The segmented control: a choice of one of several (rule 5). "The
+//! segmented control is the same button repeated, with its parent joining
+//! the corners (first and last rounded, inner ones square, no gap)"
+//! (Juliet, 21 Nov 2026). Each part is the household's one [`Button`] in
+//! its [`ButtonLook::Segment`] look; this module is the parent that joins
+//! them.
+//!
+//! # What the parent does, and what the parts do
+//!
+//! - **The parts** are buttons: `space_l` tall, the label in the button's
+//!   type (14 px on a 20 px line), `space_s` at each side, hover and
+//!   pressed washes inside each part's own box, the keyboard's focus ring
+//!   as every button's. Each part is Tab-focusable and Enter or Space
+//!   chooses it, as a button does; the arrow keys do nothing, as in
+//!   Terminal's control today. The chosen part is filled with the muted
+//!   accent (rule 6: toggles and chosen parts) with its on colours, its
+//!   label semibold and the others regular (rule 6a). A part's width is
+//!   measured over *both* weights, so choosing a part, like hovering it,
+//!   moves nothing ("the hovered size should be the same as the
+//!   non-hovered size from a layout perspective", Juliet, 21 Nov).
+//! - **The bar** is drawn by the parent, not by the parts: one background
+//!   and one [`OUTLINE`] stroke round the whole row, and the parts inside
+//!   it with no gap. The first part is rounded on its left and the last on
+//!   its right (the theme's `radius_xl`, as buttons are rounded, rule
+//!   25d); every inner corner is square, so the parts touch. A bar of one
+//!   part is rounded on both sides.
+//! - **A part with no message is disabled** (rule 6a: faded, no wash),
+//!   and may carry its own tooltip saying why ([`Part::tip`], rule 17).
+//!
+//! The bar is only as wide as its parts need: it never stretches across a
+//! row (rule 5). Put in a settings row it goes through libcosmic's
+//! `flex_control` (rule 24a), so a bar too wide for the row drops under the
+//! label instead of being cut off; the bar is an ordinary element for that.
+//!
+//! # Stacked bars in a form
+//!
+//! Where several bars stand under each other, every part of every bar is as
+//! wide as the widest part among them, so that their edges line up (Juliet,
+//! 15 Oct). [`form_part`] works that width out from every part of every bar
+//! (bars laid out elsewhere count too) and [`Segmented::form`] lays a bar's
+//! parts out in it. Where any part of the form has an icon, every part
+//! keeps an icon's room, so the icons stand in one column and the labels
+//! start in another. `room` is how wide the controls may be: a bar of many
+//! parts shares it, its parts narrower, and a label that no longer fits is
+//! cut short with an ellipsis, whole in the part's tooltip.
+//!
+//! # Example
+//!
+//! ```
+//! use household_widgets::segmented::{Part, Segmented, form_part};
+//!
+//! #[derive(Clone)]
+//! enum Message { View(usize) }
+//!
+//! // A bar alone is as wide as its own parts
+//! let views = ["Paper", "Text", "Terminal"];
+//! let bar: cosmic::Element<'_, Message> = Segmented::new(
+//!     views.iter().enumerate().map(|(n, v)| Part::new(*v).on_press(Message::View(n))),
+//!     Some(0),
+//! )
+//! .into();
+//! # let _ = bar;
+//!
+//! // Two bars stacked in a form: one part width for both, the widest
+//! // label's (measured in both weights), here with no room limit
+//! let kinds = ["Conversation", "Session"];
+//! let part = form_part(
+//!     kinds.iter().chain(views.iter()).map(|label| (*label, false)),
+//!     3,
+//!     None,
+//! );
+//! assert!(!part.icons);
+//! let first: cosmic::Element<'_, Message> = Segmented::new(
+//!     kinds.iter().map(|k| Part::new(*k).on_press(Message::View(0))),
+//!     Some(0),
+//! )
+//! .form(part)
+//! .into();
+//! # let _ = first;
+//! ```
+
+use cosmic::iced::{Alignment, Background, Border, Length, Padding};
+use cosmic::widget::{self, tooltip::Position};
+use cosmic::{Element, theme};
+
+use crate::button::{ACTION_ICON, Button, ButtonLook, LABEL_SIZE};
+use crate::menu::measured_width;
+use crate::tooltip::Tip;
+
+/// The stroke round the bar: a line, not a layout size. The parts sit
+/// inside it
+pub const OUTLINE: f32 = 1.0;
+
+/// One part of a segmented control: a label, what choosing it does, and
+/// optionally an icon and a tooltip
+pub struct Part<'a, M> {
+    label: String,
+    on_press: Option<M>,
+    icon: Option<widget::icon::Handle>,
+    tip: Option<Tip<'a, M>>,
+}
+
+impl<'a, M: Clone + 'a> Part<'a, M> {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            on_press: None,
+            icon: None,
+            tip: None,
+        }
+    }
+
+    /// What choosing this part does. Without it the part is disabled
+    pub fn on_press(mut self, message: M) -> Self {
+        self.on_press = Some(message);
+        self
+    }
+
+    pub fn on_press_maybe(mut self, message: Option<M>) -> Self {
+        self.on_press = message;
+        self
+    }
+
+    /// A 16 px icon before the label
+    pub fn icon(mut self, icon: impl Into<widget::icon::Handle>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    /// The part's tooltip, below it (why it is disabled, or more about it)
+    pub fn tip(mut self, tip: Tip<'a, M>) -> Self {
+        self.tip = Some(tip);
+        self
+    }
+
+    /// What [`form_part`] measures of this part: its label, and whether
+    /// it has an icon
+    pub fn measure(&self) -> (&str, bool) {
+        (&self.label, self.icon.is_some())
+    }
+}
+
+/// The parts of a form's bars: their one width, and whether each keeps an
+/// icon's room before its label ([`form_part`])
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FormPart {
+    pub width: f32,
+    pub icons: bool,
+}
+
+/// How wide a part is for `label` with its icon's room if `icon`: the
+/// label measured in both weights, the wider kept, and the part's side
+/// inset at each side. It is what [`Button`] lays a part out as, whole
+/// pixels
+pub fn part_width(label: &str, icon: bool) -> f32 {
+    let space = theme::active().cosmic().spacing;
+    let icon = if icon {
+        f32::from(ACTION_ICON) + f32::from(space.space_xxs)
+    } else {
+        0.0
+    };
+    let text = measured_width(label, LABEL_SIZE, cosmic::font::semibold())
+        .max(measured_width(label, LABEL_SIZE, cosmic::font::default()));
+    (icon + text + 2.0 * ButtonLook::Segment.inset(&space)).ceil()
+}
+
+/// The one width of every part of every bar stacked in a form: the widest
+/// part among `parts` (each its label and whether it has an icon; include
+/// the parts of bars laid out elsewhere). `most` is the most parts any one
+/// bar has, and `room` how wide a bar may be: where given, a part is no
+/// wider than its share of it
+pub fn form_part<'s>(
+    parts: impl IntoIterator<Item = (&'s str, bool)>,
+    most: usize,
+    room: Option<f32>,
+) -> FormPart {
+    let parts: Vec<(&str, bool)> = parts.into_iter().collect();
+    let icons = parts.iter().any(|(_, icon)| *icon);
+    let width = parts
+        .iter()
+        .map(|(label, _)| part_width(label, icons))
+        .fold(0.0, f32::max);
+    let width = match room {
+        Some(room) => width.min((room / most.max(1) as f32).floor()),
+        None => width,
+    };
+    FormPart { width, icons }
+}
+
+/// A choice of one of several (see the module's documentation)
+pub struct Segmented<'a, M> {
+    parts: Vec<Part<'a, M>>,
+    chosen: Option<usize>,
+    form: Option<FormPart>,
+}
+
+impl<'a, M: Clone + 'a> Segmented<'a, M> {
+    /// A bar of `parts`, the one at index `chosen` (if any) filled
+    pub fn new(parts: impl IntoIterator<Item = Part<'a, M>>, chosen: Option<usize>) -> Self {
+        Self {
+            parts: parts.into_iter().collect(),
+            chosen,
+            form: None,
+        }
+    }
+
+    /// Lay the parts out as a form's bars have them ([`form_part`])
+    pub fn form(mut self, part: FormPart) -> Self {
+        self.form = Some(part);
+        self
+    }
+}
+
+/// The corner radii of part `n` of `count` (top left, top right, bottom
+/// right, bottom left): the theme's `radius_xl` where it is an end of the
+/// bar, square where it touches a neighbour
+pub fn part_corners(n: usize, count: usize, radius: [f32; 4]) -> [f32; 4] {
+    let [top_left, top_right, bottom_right, bottom_left] = radius;
+    let first = n == 0;
+    let last = n + 1 >= count;
+    [
+        if first { top_left } else { 0.0 },
+        if last { top_right } else { 0.0 },
+        if last { bottom_right } else { 0.0 },
+        if first { bottom_left } else { 0.0 },
+    ]
+}
+
+impl<'a, M: Clone + 'a> From<Segmented<'a, M>> for Element<'a, M> {
+    fn from(bar: Segmented<'a, M>) -> Self {
+        let radius = theme::active().cosmic().corner_radii.radius_xl;
+        let count = bar.parts.len();
+        let chosen = bar.chosen;
+        let form = bar.form;
+        let parts: Vec<Element<'a, M>> = bar
+            .parts
+            .into_iter()
+            .enumerate()
+            .map(|(n, part)| {
+                let mut button = Button::new(ButtonLook::Segment, part.label)
+                    .selected(chosen == Some(n))
+                    .corners(part_corners(n, count, radius))
+                    .on_press_maybe(part.on_press);
+                button = match (part.icon, form) {
+                    (Some(icon), _) => button.leading_icon(icon),
+                    // An icon's room, where the form's other parts have icons
+                    (None, Some(form)) if form.icons => button.leading(
+                        widget::Space::new()
+                            .width(Length::Fixed(f32::from(ACTION_ICON)))
+                            .height(Length::Fixed(f32::from(ACTION_ICON)))
+                            .into(),
+                    ),
+                    (None, _) => button,
+                };
+                if let Some(form) = form {
+                    button = button.width(Length::Fixed(form.width));
+                }
+                if let Some(tip) = part.tip {
+                    button = button.tooltip(tip, Position::Bottom);
+                }
+                button.into()
+            })
+            .collect();
+        // The bar: one outline and background round parts that touch
+        widget::container(widget::row::with_children(parts).align_y(Alignment::Center))
+            .padding(Padding::from(OUTLINE))
+            .width(Length::Shrink)
+            .class(theme::Container::custom(move |theme| {
+                let cosmic = theme.cosmic();
+                cosmic::iced::widget::container::Style {
+                    background: Some(Background::Color(
+                        cosmic.background(theme.transparent).component.base.into(),
+                    )),
+                    border: Border {
+                        radius: cosmic.corner_radii.radius_xl.into(),
+                        width: OUTLINE,
+                        color: cosmic.bg_divider().into(),
+                    },
+                    ..Default::default()
+                }
+            }))
+            .into()
+    }
+}
+
+#[cfg(test)]
+#[path = "segmented_tests.rs"]
+mod tests;

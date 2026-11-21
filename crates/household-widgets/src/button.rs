@@ -47,6 +47,7 @@
 //! | Destructive | Primary's, in the theme's destructive colours | `space_s` |
 //! | TertiaryDestructive | Tertiary's, in the destructive text colour | `space_xxs` |
 //! | Icon | libcosmic's icon button; the muted accent while selected (on) | none: always the square |
+//! | Segment | the Icon look's washes, the muted accent while chosen; a part of a [`crate::segmented::Segmented`] bar | `space_s` |
 //!
 //! Every size above is a theme spacing step (`theme.cosmic().spacing`,
 //! which follows COSMIC's Density setting), never a pixel count. The fixed
@@ -93,7 +94,7 @@ use household_tones::Srgb;
 use crate::tooltip::{Tip, tooltip_with};
 
 /// The label's type: 14 px on a 20 px line, as libcosmic's buttons set it
-const LABEL_SIZE: f32 = 14.0;
+pub(crate) const LABEL_SIZE: f32 = 14.0;
 const LABEL_LINE: f32 = 20.0;
 /// An action icon's size (rule 10): the 16 px canvas
 pub const ACTION_ICON: u16 = 16;
@@ -124,6 +125,12 @@ pub enum ButtonLook {
     TertiaryDestructive,
     /// An icon alone (rule 4), its name in its tooltip
     Icon,
+    /// One part of a segmented control ([`crate::segmented`]): no fill and
+    /// the icon button's washes at rest, the muted accent while chosen
+    /// ([`Button::selected`]), its label semibold when chosen and regular
+    /// otherwise, measured in both ([`Button::corners`] joins it to its
+    /// neighbours)
+    Segment,
 }
 
 impl ButtonLook {
@@ -132,7 +139,7 @@ impl ButtonLook {
     /// the square)
     pub fn inset(self, spacing: &cosmic::cosmic_theme::Spacing) -> f32 {
         f32::from(match self {
-            Self::Primary | Self::Secondary | Self::Destructive => spacing.space_s,
+            Self::Primary | Self::Secondary | Self::Destructive | Self::Segment => spacing.space_s,
             Self::Tertiary | Self::TertiaryDestructive => spacing.space_xxs,
             Self::Icon => 0,
         })
@@ -197,7 +204,7 @@ pub fn paint(
 ) -> Paint {
     let cosmic = theme.cosmic();
     let page = crate::look::page(theme);
-    if look == ButtonLook::Icon {
+    if matches!(look, ButtonLook::Icon | ButtonLook::Segment) {
         if selected {
             return muted_paint(state, theme);
         }
@@ -329,18 +336,26 @@ fn style(
     fill: Option<FillColours>,
     state: State,
     focused: bool,
+    corners: Option<[f32; 4]>,
     theme: &Theme,
 ) -> button::Style {
+    let radius: [f32; 4] = corners.unwrap_or_else(|| theme.cosmic().corner_radii.radius_xl);
     if look == ButtonLook::Icon && !selected {
         return icon_style(state, focused, theme);
+    }
+    if look == ButtonLook::Segment && !selected {
+        let mut style = icon_style(state, focused, theme);
+        style.border_radius = radius.into();
+        return style;
     }
     let paint = paint(look, selected, fill, state, theme);
     let style = button::Style {
         shadow_offset: Vector::default(),
         background: paint.background.map(Background::Color),
         overlay: paint.overlay.map(Background::Color),
-        // Pills, every look, washes too (rule 25d)
-        border_radius: theme.cosmic().corner_radii.radius_xl.into(),
+        // Pills, every look, washes too (rule 25d); a segment's part is a
+        // pill only at the bar's ends
+        border_radius: radius.into(),
         border_width: if paint.border.is_some() {
             SECONDARY_BORDER
         } else {
@@ -369,17 +384,24 @@ fn focus_ring(mut style: button::Style, focused: bool, theme: &Theme) -> button:
 }
 
 /// The libcosmic class drawing `look`
-fn class(look: ButtonLook, selected: bool, fill: Option<FillColours>) -> theme::Button {
+fn class(
+    look: ButtonLook,
+    selected: bool,
+    fill: Option<FillColours>,
+    corners: Option<[f32; 4]>,
+) -> theme::Button {
     theme::Button::Custom {
         active: Box::new(move |focused, theme| {
-            style(look, selected, fill, State::Rest, focused, theme)
+            style(look, selected, fill, State::Rest, focused, corners, theme)
         }),
-        disabled: Box::new(move |theme| style(look, selected, fill, State::Disabled, false, theme)),
+        disabled: Box::new(move |theme| {
+            style(look, selected, fill, State::Disabled, false, corners, theme)
+        }),
         hovered: Box::new(move |focused, theme| {
-            style(look, selected, fill, State::Hovered, focused, theme)
+            style(look, selected, fill, State::Hovered, focused, corners, theme)
         }),
         pressed: Box::new(move |focused, theme| {
-            style(look, selected, fill, State::Pressed, focused, theme)
+            style(look, selected, fill, State::Pressed, focused, corners, theme)
         }),
     }
 }
@@ -445,6 +467,7 @@ pub struct Button<'a, M> {
     width: Length,
     tip: Option<(Tip<'a, M>, Position)>,
     fill: Option<FillColours>,
+    corners: Option<[f32; 4]>,
 }
 
 impl<'a, M: Clone + 'a> Button<'a, M> {
@@ -464,6 +487,7 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             width: Length::Shrink,
             tip: None,
             fill: None,
+            corners: None,
         }
     }
 
@@ -559,8 +583,17 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         self
     }
 
-    /// Whether an Icon button is on (rule 6): a toggle that is on, a button
-    /// whose menu or panel is open. It is drawn in the muted accent. The
+    /// The corner radii (top left, top right, bottom right, bottom left)
+    /// in place of the pill's, so a parent joining buttons can square the
+    /// corners that touch a neighbour ([`crate::segmented::Segmented`])
+    pub fn corners(mut self, radii: [f32; 4]) -> Self {
+        self.corners = Some(radii);
+        self
+    }
+
+    /// Whether an Icon or Segment button is on (rule 6): a toggle that is
+    /// on, a button whose menu or panel is open, the chosen part of a
+    /// segmented control. It is drawn in the muted accent. The other
     /// labelled looks have no selected paint
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
@@ -610,12 +643,22 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         } else {
             let mut parts: Vec<Element<'a, M>> = Vec::with_capacity(3);
             parts.extend(self.leading);
-            let mut labels = vec![label(look, self.label)];
-            labels.extend(
-                self.other_labels
-                    .into_iter()
-                    .map(|other| label(look, other)),
-            );
+            // A fixed width a label may not fill is cut short (a segment's
+            // part in a narrow form), its tooltip giving it whole
+            let cut = look == ButtonLook::Segment && matches!(self.width, Length::Fixed(_));
+            let chosen = self.selected;
+            let mut labels = vec![label(look, chosen, cut, self.label.clone())];
+            // A part of a segmented control changes its weight when chosen:
+            // measured in the other weight too, so choosing moves nothing
+            if look == ButtonLook::Segment {
+                labels.push(label(look, !chosen, cut, self.label.clone()));
+            }
+            for other in self.other_labels {
+                if look == ButtonLook::Segment {
+                    labels.push(label(look, !chosen, cut, other.clone()));
+                }
+                labels.push(label(look, chosen, cut, other));
+            }
             parts.push(Element::new(Widest { labels }));
             parts.extend(
                 self.trailing
@@ -633,7 +676,7 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             (self.width, Padding::from([0.0, inset]))
         };
         let button = button::custom(content)
-            .class(class(look, self.selected, self.fill))
+            .class(class(look, self.selected, self.fill, self.corners))
             .padding(padding)
             .height(Length::Fixed(square))
             .width(width)
@@ -661,8 +704,28 @@ impl<'a, M: Clone + 'a> From<Button<'a, M>> for Element<'a, M> {
 }
 
 /// A label in `look`'s type: semibold for the boxed looks; bold and
-/// underlined for Tertiary (rule 6a's weights)
-fn label<'a, M: 'a>(look: ButtonLook, text: String) -> Element<'a, M> {
+/// underlined for Tertiary; a segment's semibold when `chosen` and regular
+/// otherwise (rule 6a's weights)
+fn label<'a, M: 'a>(look: ButtonLook, chosen: bool, cut: bool, text: String) -> Element<'a, M> {
+    if look == ButtonLook::Segment {
+        let text = widget::text(text)
+            .size(LABEL_SIZE)
+            .line_height(LineHeight::Absolute(LABEL_LINE.into()))
+            .font(if chosen {
+                cosmic::font::semibold()
+            } else {
+                cosmic::font::default()
+            })
+            .wrapping(Wrapping::None);
+        if cut {
+            use cosmic::iced::advanced::text::{Ellipsize, EllipsizeHeightLimit};
+            return text
+                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                .width(Length::Fill)
+                .into();
+        }
+        return text.into();
+    }
     if look.tertiary() {
         let span: cosmic::iced::widget::text::Span<'a, (), cosmic::iced::Font> =
             cosmic::iced::widget::text::Span::new(text)

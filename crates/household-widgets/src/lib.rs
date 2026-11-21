@@ -16,6 +16,8 @@
 //!   Secondary, Tertiary, Destructive and Icon differ only in paint and
 //!   side inset; height, width in its largest state, the compact square,
 //!   washes, fade, focus ring and tooltip are shared.
+//! - [`segmented`]: the segmented control, [`Segmented`]: the Button repeated in
+//!   its Segment look, the parent joining the corners and drawing the bar.
 //! - [`dropdown`]: a dropdown whose list is the window's one menu chain.
 //! - [`scroll_list`]: a scrollable list of boxes, optionally virtualised,
 //!   keeping the reader's place.
@@ -46,6 +48,7 @@ pub mod menu;
 pub mod menu_bar;
 pub mod menu_parts;
 pub mod menu_surface;
+pub mod segmented;
 pub mod navigation_style;
 pub mod panel_divider;
 pub mod panel_header;
@@ -74,6 +77,7 @@ pub use short_text_box::{PasswordBox, ShortTextBox};
 pub use switch::{SwitchItem, Toggler, muted_colours, switch, switch_maybe, toggler};
 pub use text_box::TextBox;
 pub use button::{Button, ButtonLook, button_height};
+pub use segmented::{Part, Segmented};
 pub use text_menu::{TextMenu, TextMenuHistory, TextMenuWords, text_menu};
 pub(crate) use tooltip::native_tooltip;
 pub use tooltip::{
