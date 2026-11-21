@@ -15,7 +15,7 @@
 //! - [`button`]: the one button every look is, [`Button`]: Primary,
 //!   Secondary, Tertiary, Destructive and Icon differ only in paint and
 //!   side inset; height, width in its largest state, the compact square,
-//!   washes, fade, focus ring and tooltip are shared.
+//!   washes, fade, keyboard-target outline and tooltip are shared.
 //! - [`segmented`]: the segmented control, [`Segmented`]: the Button repeated in
 //!   its Segment look, the parent joining the corners and drawing the bar.
 //! - [`spacing`]: the padding system: each container has a kind, and the
@@ -43,6 +43,7 @@ pub mod focus_regions;
 pub mod history;
 pub mod hover_card;
 mod kept;
+mod keyboard_target;
 pub mod layout;
 mod level;
 pub mod list_navigation;

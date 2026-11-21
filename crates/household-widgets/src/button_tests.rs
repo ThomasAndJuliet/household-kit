@@ -454,49 +454,51 @@ fn every_looks_borders_are_inside_and_within_its_inset() {
         );
         for selected in [false, true] {
             for state in [State::Rest, State::Hovered, State::Pressed, State::Disabled] {
-                for focused in [false, true] {
-                    let style = style(look, selected, None, state, focused, None, &theme);
-                    assert_eq!(style.outline_width, 0.0, "{look:?} {state:?}: no outline outside");
-                    assert!(
-                        style.border_width <= look.thickest_border(),
-                        "{look:?} {state:?} focused {focused}: {}",
-                        style.border_width
-                    );
-                    if focused && state != State::Disabled {
-                        assert_eq!(style.border_width, look.thickest_border(), "{look:?} ring");
-                        let (width, colour) = focus_border(look, selected, None, state, &theme);
-                        assert_eq!((style.border_width, style.border_color), (width, colour));
-                    }
-                }
+                let style = style(look, selected, None, state, None, &theme);
+                assert_eq!(style.outline_width, 0.0, "{look:?} {state:?}: no outline outside");
+                assert!(style.border_width <= look.thickest_border(), "{look:?} {state:?}");
             }
         }
     }
-    // Secondary's focus is thicker than its rest border, so it shows
-    let rest = style(ButtonLook::Secondary, false, None, State::Rest, false, None, &theme);
-    let focus = style(ButtonLook::Secondary, false, None, State::Rest, true, None, &theme);
-    assert!(focus.border_width > rest.border_width);
-}
-
-/// A solid fill's ring is the label's colour, which the fill shows; the
-/// accent line it would otherwise be is the fill's own colour
-#[test]
-fn a_ring_on_a_solid_fill_is_not_the_fills_own_colour() {
-    for theme in [cosmic::Theme::light(), cosmic::Theme::dark()] {
-        for look in [ButtonLook::Primary, ButtonLook::Destructive] {
-            let (_, ring) = focus_border(look, false, None, State::Rest, &theme);
-            let fill = paint(look, false, None, State::Rest, &theme).background;
-            assert_ne!(Some(ring), fill, "{look:?}");
-        }
-        let (_, ring) = focus_border(ButtonLook::Icon, true, None, State::Rest, &theme);
-        assert_ne!(Some(ring), muted_paint(State::Rest, &theme).background);
+    // Focus is the shared target outline, not a border of the button's own:
+    // the libcosmic class the button draws with changes nothing when focused
+    use cosmic::widget::button::Catalog;
+    for look in [ButtonLook::Primary, ButtonLook::Secondary, ButtonLook::Icon] {
+        let class = class(look, false, None, None);
+        assert_eq!(
+            format!("{:?}", theme.active(true, false, &class)),
+            format!("{:?}", theme.active(false, false, &class))
+        );
+        assert_eq!(
+            format!("{:?}", theme.hovered(true, false, &class)),
+            format!("{:?}", theme.hovered(false, false, &class))
+        );
     }
 }
 
-/// The focus ring is drawn on the button's own edge: focused, a button
-/// paints nothing outside its box, and changes pixels inside its edge
+/// The household's keyboard-target colours, as 8-bit pixels
+fn target_colours(theme: &cosmic::Theme) -> [u8; 3] {
+    let dark = crate::menu_parts::RowContour::Rounded.target_border(theme).color;
+    [(dark.r * 255.0).round() as u8, (dark.g * 255.0).round() as u8, (dark.b * 255.0).round() as u8]
+}
+
+fn is_rgb(pixel: [u8; 4], rgb: [u8; 3]) -> bool {
+    is_near(pixel, rgb, 8)
+}
+
+/// Within `slack` levels: a stroke on a curved edge is anti-aliased
+fn is_near(pixel: [u8; 4], rgb: [u8; 3], slack: u8) -> bool {
+    (0..3).all(|n| pixel[n].abs_diff(rgb[n]) <= slack)
+}
+
+/// The focus is the shared keyboard-target outline on the button's own edge,
+/// inside it: the dark-grey stroke on the edge, and on a dark solid fill a
+/// white stroke inside that; nothing outside the box, and the same layout
 #[test]
-fn a_focused_button_paints_only_inside_its_box() {
+fn a_focused_button_is_the_shared_outline_inside_its_box() {
     let renderer = renderer();
+    let theme = cosmic::Theme::default();
+    let dark = target_colours(&theme);
     for look in [
         ButtonLook::Primary,
         ButtonLook::Secondary,
@@ -520,28 +522,36 @@ fn a_focused_button_paints_only_inside_its_box() {
         let focused = drawn_with(build(), away, false, true);
         assert_eq!(outside(&focused, bounds), 0, "{look:?}: nothing outside the box");
         assert_ne!(rest, focused, "{look:?}: focus shows");
-        // On the edge itself, in the middle of the left side: the ring's
-        // innermost pixel, which the rest paint (Secondary's thinner
-        // border included) does not reach
         let (x, y) = (bounds.x as usize, bounds.center_y() as usize);
-        let inner = x + look.thickest_border() as usize - 1;
-        assert_ne!(rest[y * 96 + inner], focused[y * 96 + inner], "{look:?}: the ring is on the edge");
-        // And the layout does not move: the same box focused or not
+        assert!(is_rgb(focused[y * 96 + x], dark), "{look:?}: the dark stroke is on the edge: {:?} {:?} {:?} want {dark:?}", focused[y * 96 + x - 1], focused[y * 96 + x], focused[y * 96 + x + 1]);
+        let double = displayed_fill(look, false, State::Rest, None, &theme).is_some_and(|fill| {
+            household_tones::lighter_on(Srgb::new(fill.r, fill.g, fill.b))
+        });
+        if double {
+            assert!(is_rgb(focused[y * 96 + x + 1], [255, 255, 255]), "{look:?}: white inside it");
+        } else {
+            assert!(!is_rgb(focused[y * 96 + x + 1], [255, 255, 255]), "{look:?}: a single stroke");
+        }
+        // The same box focused or not
         assert_eq!(layout_of(build(), &renderer).size(), size);
     }
 }
 
 /// An icon button and a chosen icon button, focused, stay in their square
+/// and wear the shared outline; the chosen one's muted fill decides whether
+/// it is the double
 #[test]
-fn a_focused_icon_button_paints_only_inside_its_square() {
+fn a_focused_icon_button_wears_the_shared_outline_inside_its_square() {
     let renderer = renderer();
+    let theme = cosmic::Theme::default();
+    let dark = target_colours(&theme);
     for selected in [false, true] {
         let build = || -> Element<'static, ()> {
             let (button, _) = Button::icon_with(sized_mark(16.0), "Pin", tip())
                 .selected(selected)
                 .on_press(())
                 .into_native();
-            button.into()
+            button
         };
         let size = layout_of(build(), &renderer).size();
         let bounds = Rectangle::new(
@@ -553,5 +563,10 @@ fn a_focused_icon_button_paints_only_inside_its_square() {
         let focused = drawn_with(build(), away, false, true);
         assert_eq!(outside(&focused, bounds), 0, "selected {selected}");
         assert_ne!(rest, focused, "selected {selected}: focus shows");
+        let (x, y) = (bounds.x as usize, bounds.center_y() as usize);
+        assert!(is_near(focused[y * 96 + x], dark, 20), "selected {selected}: dark on the edge: {:?} {:?} {:?}", focused[y * 96 + x - 1], focused[y * 96 + x], focused[y * 96 + x + 1]);
+        let double = displayed_fill(ButtonLook::Icon, selected, State::Rest, None, &theme)
+            .is_some_and(|fill| household_tones::lighter_on(Srgb::new(fill.r, fill.g, fill.b)));
+        assert_eq!(is_rgb(focused[y * 96 + x + 1], [255, 255, 255]), double, "selected {selected}");
     }
 }

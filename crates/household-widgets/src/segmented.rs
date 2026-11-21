@@ -11,9 +11,9 @@
 //!
 //! - **The parts** are buttons: `space_l` tall, the label in the button's
 //!   type (14 px on a 20 px line), `space_s` at each side, hover and
-//!   pressed washes inside each part's own box, the keyboard's focus ring
-//!   as every button's (on the part's own edge, inside it). Each part is Tab-focusable and Enter or Space
-//!   chooses it, as a button does; the arrow keys do nothing, as in
+//!   pressed washes inside each part's own box, the keyboard-target
+//!   outline as every button's (on the part's own edge, inside it). Each
+//!   part is Tab-focusable and Enter or Space chooses it, as a button does; the arrow keys do nothing, as in
 //!   Terminal's control today. The chosen part is filled with the muted
 //!   accent (rule 6: toggles and chosen parts) with its on colours, its
 //!   label semibold and the others regular (rule 6a). A part's width is
@@ -25,7 +25,7 @@
 //!   inside the bar's box as Secondary's border is, the parts filling the
 //!   bar with no gap. The bar is `space_l` tall, as every button is, so it
 //!   lines up with buttons in its row, and a chosen end part's fill meets
-//!   the outline; the bar draws the focused part's ring again over its
+//!   the outline; the bar draws the focused part's outline again over its
 //!   outline, so the outline never covers focus at the ends. The first
 //!   part is rounded on its left and the last on its right (the theme's `radius_xl`, as buttons are rounded, rule
 //!   25d); every inner corner is square, so the parts touch. A bar of one
@@ -91,7 +91,7 @@ use cosmic::iced::{Alignment, Background, Border, Color, Event, Length, Rectangl
 use cosmic::widget::{self, tooltip::Position};
 use cosmic::{Element, Renderer, Theme, theme};
 
-use crate::button::{ACTION_ICON, Button, ButtonLook, LABEL_SIZE, focus_border};
+use crate::button::{ACTION_ICON, Button, ButtonLook, LABEL_SIZE, displayed_fill};
 use crate::menu::measured_width;
 use crate::tooltip::Tip;
 
@@ -289,14 +289,15 @@ impl<'a, M: Clone + 'a> From<Segmented<'a, M>> for Element<'a, M> {
 /// operation is the row's.
 ///
 /// The outline is painted over the parts, so it would cover the outer pixel
-/// of a focused part's ring along the bar's edge (a part's ring is drawn on
-/// the part's own edge, which at the top, the bottom and the bar's ends is
-/// the bar's). The bar therefore finds which part has the keyboard's focus
-/// and draws that part's ring again over the outline, so focus stays whole
+/// of a focused part's keyboard-target outline along the bar's edge (a
+/// part's outline is drawn on the part's own edge, which at the top, the
+/// bottom and the bar's ends is the bar's). The bar therefore finds which
+/// part has the keyboard's focus and draws that part's outline again over
+/// its own, so focus stays whole
 struct Outlined<'a, M> {
     content: Element<'a, M>,
-    /// How many parts the row has, and which is chosen: what the ring of a
-    /// focused part is drawn from ([`part_corners`], [`focus_border`])
+    /// How many parts the row has, and which is chosen: what the outline of a
+    /// focused part is drawn from ([`part_corners`], [`crate::keyboard_target`])
     count: usize,
     chosen: Option<usize>,
 }
@@ -424,7 +425,7 @@ impl<M> Widget<M, Theme, Renderer> for Outlined<'_, M> {
             },
             Background::Color(Color::TRANSPARENT),
         );
-        // The focused part's ring, again, over the outline
+        // The focused part's outline, again, over the outline
         let Some(focused) = tree.state.downcast_ref::<Focused>().0 else {
             return;
         };
@@ -435,24 +436,18 @@ impl<M> Widget<M, Theme, Renderer> for Outlined<'_, M> {
         else {
             return;
         };
-        let (width, colour) = focus_border(
-            ButtonLook::Segment,
-            self.chosen == Some(n),
-            None,
-            crate::button::State::Rest,
+        let corners = part_corners(n, self.count, radius);
+        let state = if cursor.is_over(part.bounds()) {
+            crate::button::State::Hovered
+        } else {
+            crate::button::State::Rest
+        };
+        crate::keyboard_target::draw_outline(
+            renderer,
+            part.bounds(),
+            corners.into(),
+            displayed_fill(ButtonLook::Segment, self.chosen == Some(n), state, Some(corners), theme),
             theme,
-        );
-        renderer.fill_quad(
-            renderer::Quad {
-                bounds: part.bounds(),
-                border: Border {
-                    radius: part_corners(n, self.count, radius).into(),
-                    width,
-                    color: colour,
-                },
-                ..renderer::Quad::default()
-            },
-            Background::Color(Color::TRANSPARENT),
         );
     }
 }

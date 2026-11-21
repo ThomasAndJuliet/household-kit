@@ -368,19 +368,22 @@ fn drawn_focused(element: Element<'static, u8>, nth: usize) -> Vec<[u8; 4]> {
 }
 
 fn is_colour(pixel: [u8; 4], colour: Color) -> bool {
-    let near = |a: u8, b: f32| (f32::from(a) - b * 255.0).abs() <= 3.0;
+    // A stroke on the curved edge is anti-aliased: a few levels of slack
+    let near = |a: u8, b: f32| (f32::from(a) - b * 255.0).abs() <= 8.0;
     near(pixel[0], colour.r) && near(pixel[1], colour.g) && near(pixel[2], colour.b)
 }
 
-/// The bar's outline is painted over the parts, which would cover a ring
-/// on the bar's edge: an end part's focus is still whole at the bar's end,
-/// top and bottom, and nothing is drawn outside the bar
+/// The bar's outline is painted over the parts, which would cover a part's
+/// keyboard-target outline on the bar's edge: an end part's outline (the
+/// shared dark-grey stroke on a part with no fill) is still whole at the
+/// bar's end, top and bottom, and nothing is drawn outside the bar
 #[test]
-fn a_focused_end_part_shows_its_ring_over_the_bars_outline() {
+fn a_focused_end_part_shows_its_outline_over_the_bars_outline() {
     let renderer = renderer();
     let node = layout_of(bar(&LABELS, Some(1), true).into(), &renderer);
     let (size, parts) = parts_of(&node);
-    let ring: Color = cosmic::Theme::default().cosmic().accent.base.into();
+    let theme = cosmic::Theme::default();
+    let dark: Color = crate::menu_parts::RowContour::Rounded.target_border(&theme).color;
     let (first, last) = (parts[0], parts[2]);
     for (nth, part, end_x) in [
         (0, first, first.x.floor()),
@@ -388,11 +391,10 @@ fn a_focused_end_part_shows_its_ring_over_the_bars_outline() {
     ] {
         let pixels = drawn_focused(bar(&LABELS, Some(1), true).into(), nth);
         let mid_y = (part.y + part.height / 2.0).floor();
-        assert!(is_colour(pixel(&pixels, end_x, mid_y), ring), "part {nth}: the ring at the bar's end");
+        assert!(is_colour(pixel(&pixels, end_x, mid_y), dark), "part {nth}: the outline at the bar's end");
         let mid_x = (part.x + part.width / 2.0).floor();
-        assert!(is_colour(pixel(&pixels, mid_x, 0.0), ring), "part {nth}: the ring at the top");
-        assert!(is_colour(pixel(&pixels, mid_x, size.height.floor() - 1.0), ring), "part {nth}: the ring at the bottom");
-        // Nothing outside the bar's box
+        assert!(is_colour(pixel(&pixels, mid_x, 0.0), dark), "part {nth}: the outline at the top");
+        assert!(is_colour(pixel(&pixels, mid_x, size.height.floor() - 1.0), dark), "part {nth}: the outline at the bottom");
         let ground = pixel(&pixels, 239.0, 47.0);
         for y in 0..48 {
             for x in 0..240 {
@@ -403,9 +405,27 @@ fn a_focused_end_part_shows_its_ring_over_the_bars_outline() {
             }
         }
     }
-    // The unfocused bar has no ring there
+    // The unfocused bar has no such stroke there
     let pixels = drawn(bar(&LABELS, Some(1), true).into());
-    assert!(!is_colour(pixel(&pixels, first.x.floor(), (first.height / 2.0).floor()), ring));
+    assert!(!is_colour(pixel(&pixels, first.x.floor(), (first.height / 2.0).floor()), dark));
+}
+
+/// A chosen end part has a solid muted fill: whether its outline is the
+/// double is the shared rule's, resolved against that fill
+#[test]
+fn a_focused_chosen_part_follows_the_shared_fill_rule() {
+    let renderer = renderer();
+    let node = layout_of(bar(&LABELS, Some(0), true).into(), &renderer);
+    let (_, parts) = parts_of(&node);
+    let theme = cosmic::Theme::default();
+    let first = parts[0];
+    let pixels = drawn_focused(bar(&LABELS, Some(0), true).into(), 0);
+    let mid_y = (first.height / 2.0).floor();
+    let dark: Color = crate::menu_parts::RowContour::Rounded.target_border(&theme).color;
+    assert!(is_colour(pixel(&pixels, first.x.floor(), mid_y), dark));
+    let double = crate::button::displayed_fill(ButtonLook::Segment, true, crate::button::State::Rest, None, &theme)
+        .is_some_and(|f| household_tones::lighter_on(household_tones::Srgb::new(f.r, f.g, f.b)));
+    assert_eq!(is_colour(pixel(&pixels, first.x.floor() + 1.0, mid_y), Color::WHITE), double);
 }
 
 /// The parts' size is the same whichever has the focus

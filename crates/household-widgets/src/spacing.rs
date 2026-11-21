@@ -87,8 +87,8 @@
 //!   group inside its own edge, and any lines between them
 //!   ([`crate::segmented`]).
 //! - **Focus is drawn on the box's own border**, inside its edge: focus
-//!   changes an outline the component already has (rule 6a). A button's ring
-//!   is on the button's edge ([`crate::button`]); a menu row's keyboard
+//!   changes an outline the component already has (rule 6a). A button's
+//!   keyboard-target outline is on the button's edge ([`crate::keyboard_target`]); a menu row's keyboard
 //!   outline is 1 px inside the row's bounds; a navigation entry's double
 //!   outline on a dark fill is both strokes inside the edge
 //!   ([`crate::navigation_style`]).
