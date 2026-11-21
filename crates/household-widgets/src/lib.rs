@@ -86,7 +86,7 @@ pub use segmented::{Part, Segmented};
 pub use text_menu::{TextMenu, TextMenuHistory, TextMenuWords, text_menu};
 pub(crate) use tooltip::native_tooltip;
 pub use tooltip::{
-    TIP_WIDTH, Tip, link_tooltip, tip_bubble, tip_padding, tooltip_at, tooltip_unless, tooltip_with,
+    TIP_WIDTH, Tip, link_tooltip, tip_bubble, tip_padding, tooltip_at, tooltip_unless, tooltip_when_cut, tooltip_with,
 };
 
 #[cfg(test)]

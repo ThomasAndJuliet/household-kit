@@ -570,3 +570,216 @@ fn a_focused_icon_button_wears_the_shared_outline_inside_its_square() {
         assert_eq!(is_rgb(focused[y * 96 + x + 1], [255, 255, 255]), double, "selected {selected}");
     }
 }
+
+const LABELLED: [ButtonLook; 8] = [
+    ButtonLook::Primary,
+    ButtonLook::Secondary,
+    ButtonLook::Tertiary,
+    ButtonLook::Destructive,
+    ButtonLook::TertiaryDestructive,
+    ButtonLook::Segment,
+    ButtonLook::Plain,
+    ButtonLook::Icon,
+];
+
+#[test]
+fn the_measurement_is_the_laid_out_width_in_whole_pixels_for_every_look() {
+    let renderer = renderer();
+    for look in LABELLED {
+        for labels in [
+            vec!["Go"],
+            vec!["Copy", "Copied"],
+            vec!["Set up in Settings", "Wi", "Quite a long label indeed"],
+            vec!["Mmmm WWW iii"],
+        ] {
+            let build = || {
+                Button::<()>::new(look, labels[0]).other_labels(labels[1..].iter().copied())
+            };
+            let laid = layout_of(build().into(), &renderer).size().width;
+            assert_eq!(laid.fract(), 0.0, "{look:?} {labels:?}: whole pixels");
+            assert_eq!(build().natural_width(&renderer), laid, "{look:?} {labels:?}");
+            assert_eq!(
+                width_of(&renderer, look, &labels, None, false),
+                laid,
+                "{look:?} {labels:?}: the free measurement"
+            );
+            // With a leading icon and a trailing one
+            let rich = || build().leading_icon(widget::icon::from_name("go-next-symbolic")).trailing_icon(widget::icon::from_name("go-next-symbolic").handle());
+            let laid = layout_of(rich().into(), &renderer).size().width;
+            assert_eq!(rich().natural_width(&renderer), laid, "{look:?} {labels:?} with icons");
+            assert_eq!(
+                width_of(&renderer, look, &labels, Some(16.0), true),
+                laid,
+                "{look:?} {labels:?} with icons: the free measurement"
+            );
+        }
+    }
+    // The caller's own content, and a leading element with a fractional width
+    let content = || Button::with_content(ButtonLook::Secondary, sized_mark(30.4), "Chip");
+    let laid = layout_of(content().into(), &renderer).size().width;
+    assert_eq!(laid, content().natural_width(&renderer));
+    assert_eq!(laid, 31.0 + 32.0);
+    let odd = || Button::<()>::primary("Go").leading(sized_mark(10.5));
+    let laid = layout_of(odd().into(), &renderer).size().width;
+    assert_eq!(laid.fract(), 0.0);
+    assert_eq!(laid, odd().natural_width(&renderer));
+}
+
+#[test]
+fn a_label_wider_than_its_room_is_cut_and_says_so_only_then() {
+    let renderer = renderer();
+    let long = "Set up in Settings \u{2192} Profiles";
+    for look in [ButtonLook::Tertiary, ButtonLook::Secondary, ButtonLook::Plain] {
+        let natural = Button::<()>::new(look, long).natural_width(&renderer);
+        let laid = |room: f32| {
+            let (element, _, cut) = Button::<()>::new(look, long).assemble();
+            let (flag, full) = cut.expect("a label may be cut");
+            assert_eq!(full, long);
+            let mut element = element;
+            let mut tree = Tree::new(element.as_widget());
+            let node = element.as_widget_mut().layout(
+                &mut tree,
+                &renderer,
+                &layout::Limits::new(Size::ZERO, Size::new(room, 100.0)),
+            );
+            (node.size(), flag.get())
+        };
+        assert_eq!(laid(500.0), (Size::new(natural, 32.0), false), "{look:?}");
+        assert_eq!(laid(natural), (Size::new(natural, 32.0), false), "{look:?}: exactly enough");
+        let (size, cut) = laid(120.0);
+        assert!(cut, "{look:?}: cut in 120 px");
+        assert_eq!(size, Size::new(120.0, 32.0), "{look:?}: takes the room it is given");
+        // And the cut state is not sticky: the same button with room again
+        let (_, cut) = laid(natural + 40.0);
+        assert!(!cut, "{look:?}");
+    }
+    // A button with a tooltip of its own keeps it and is given no other;
+    // an icon button's name is never cut
+    let (_, tip, cut) = Button::<()>::tertiary(long).tooltip(tip(), Position::Top).assemble();
+    assert!(tip.is_some());
+    assert!(cut.is_some());
+    let (_, _, cut) = Button::<()>::with_content(ButtonLook::Secondary, mark(), "Chip").assemble();
+    assert!(cut.is_none(), "the caller's content is never cut");
+}
+
+#[test]
+fn a_cut_label_is_drawn_inside_its_box() {
+    // Cut to 80 px, the label ends in an ellipsis inside the box; uncut it
+    // would run past it
+    let long = "Set up in Settings \u{2192} Profiles";
+    for look in [ButtonLook::Tertiary, ButtonLook::Secondary, ButtonLook::Plain, ButtonLook::Primary] {
+        let build = || -> Element<'static, ()> {
+            Button::new(look, long).width(Length::Fixed(80.0)).on_press(()).into()
+        };
+        let size = layout_of(build(), &renderer()).size();
+        assert_eq!(size.width, 80.0);
+        let pixels = drawn(build(), Point::new(1.0, 1.0), false);
+        let bounds = Rectangle::new(
+            Point::new((96.0 - size.width) / 2.0, (48.0 - size.height) / 2.0),
+            size,
+        );
+        assert_eq!(outside(&pixels, bounds), 0, "{look:?}");
+    }
+}
+
+#[test]
+fn a_selected_labelled_look_is_the_muted_accent_and_the_same_size() {
+    let renderer = renderer();
+    let theme = cosmic::Theme::default();
+    let (muted, on) = crate::muted_colours(&theme);
+    for look in LABELLED {
+        let selected = paint(look, true, None, State::Rest, &theme);
+        assert_eq!(selected.background, Some(muted), "{look:?}");
+        assert_eq!(selected.text, Some(on), "{look:?}");
+        assert_eq!(
+            selected.border.is_some(),
+            look == ButtonLook::Secondary,
+            "{look:?}: only Secondary keeps its border"
+        );
+        let build = |chosen: bool| {
+            Button::<()>::new(look, "Recommended").selected(chosen).on_press(())
+        };
+        let (a, b) = (layout_of(build(false).into(), &renderer), layout_of(build(true).into(), &renderer));
+        assert_eq!(a.size(), b.size(), "{look:?}");
+        if look == ButtonLook::Icon {
+            continue;
+        }
+        // Drawn: the inset beside the label is the muted fill
+        let size = b.size();
+        let bounds = Rectangle::new(
+            Point::new((96.0 - size.width) / 2.0, (48.0 - size.height) / 2.0),
+            size,
+        );
+        let pixels = drawn(build(true).into(), Point::new(1.0, 1.0), false);
+        let at = Point::new(bounds.x + 6.0, bounds.center_y());
+        let pixel = pixels[(at.y as usize) * 96 + at.x as usize];
+        let want = [muted.r, muted.g, muted.b].map(|c| (c * 255.0).round() as u8);
+        if look != ButtonLook::Secondary {
+            assert!(is_near(pixel, want, 3), "{look:?}: {pixel:?} vs {want:?}");
+        }
+        let plain = drawn(build(false).into(), Point::new(1.0, 1.0), false);
+        assert_ne!(pixels, plain, "{look:?}");
+    }
+}
+
+#[test]
+fn the_caller_s_content_makes_the_same_box_in_a_chosen_state() {
+    let renderer = renderer();
+    let chip = |chosen: bool| {
+        Button::<()>::with_content(
+            ButtonLook::Secondary,
+            widget::column::with_children(vec![
+                widget::text("Use the shell").into(),
+                widget::text("Recommended").size(11).into(),
+            ])
+            .into(),
+            "Use the shell",
+        )
+        .selected(chosen)
+        .on_press(())
+    };
+    let (a, b) = (
+        layout_of(chip(false).into(), &renderer).size(),
+        layout_of(chip(true).into(), &renderer).size(),
+    );
+    assert_eq!(a, b);
+    assert_eq!(a.height, 32.0, "a chip is a control tall, too");
+    assert_eq!(a.width, chip(false).natural_width(&renderer));
+    // Another content it may show is room it keeps
+    let wider = Button::<()>::with_content(ButtonLook::Plain, sized_mark(20.0), "Strip")
+        .other_contents([sized_mark(50.0)]);
+    assert_eq!(layout_of(wider.into(), &renderer).size().width, 50.0 + 32.0);
+}
+
+#[test]
+fn plain_is_the_icon_looks_paint_with_a_body_text_label_in_the_same_box() {
+    let renderer = renderer();
+    let theme = cosmic::Theme::default();
+    for state in [State::Rest, State::Hovered, State::Pressed, State::Disabled] {
+        assert_eq!(
+            paint(ButtonLook::Plain, false, None, state, &theme),
+            paint(ButtonLook::Icon, false, None, state, &theme),
+            "{state:?}"
+        );
+    }
+    let rest = paint(ButtonLook::Plain, false, None, State::Rest, &theme);
+    assert!(
+        rest.background.is_none_or(|fill| fill.a == 0.0),
+        "no fill at rest"
+    );
+    assert_ne!(
+        paint(ButtonLook::Plain, false, None, State::Hovered, &theme).background,
+        None,
+        "the icon button's wash"
+    );
+    // Not the accent
+    assert_ne!(rest.text, Some(theme.cosmic().accent_text_color().into()));
+    // The same box: `space_l` tall, `space_s` at each side of the content
+    let node = layout_of(Button::<()>::new(ButtonLook::Plain, "\u{00d7}4").leading_icon(widget::icon::from_name("go-next-symbolic")).into(), &renderer);
+    assert_eq!(node.size().height, 32.0);
+    assert_eq!(sides(&node), (16.0, 16.0));
+    // Its label is regular: narrower than the semibold boxed looks'
+    let plain = width_of(&renderer, ButtonLook::Plain, &["Recommended"], None, false);
+    let primary = width_of(&renderer, ButtonLook::Primary, &["Recommended"], None, false);
+    assert!(plain <= primary, "regular is never wider: {plain} <= {primary}");
+}

@@ -48,6 +48,19 @@
 //! | TertiaryDestructive | Tertiary's, in the destructive text colour | `space_s` |
 //! | Icon | libcosmic's icon button; the muted accent while selected (on) | none: always the square |
 //! | Segment | the Icon look's washes, the muted accent while chosen; a part of a [`crate::segmented::Segmented`] bar | `space_s` |
+//! | Plain | the Icon look's paint, a regular body-text-colour label (not accent, not underlined) | `space_s` |
+//!
+//! Every labelled look can be chosen ([`Button::selected`]): the muted
+//! accent fill and its on colours, the size unchanged.
+//!
+//! # Measuring, and a label that does not fit
+//!
+//! A button's width is whole pixels, and a parent asks it
+//! ([`Button::natural_width`], [`width_of`]) rather than estimating: the
+//! answer is the very measurement layout makes. The natural width is the
+//! full label's; only a parent giving *less* room cuts the label, which then
+//! ends in an ellipsis and, for a button with no tooltip of its own, is given
+//! whole in a tooltip, while it is cut and only then (rules 14-16).
 //!
 //! Every size above is a theme spacing step (`theme.cosmic().spacing`,
 //! which follows COSMIC's Density setting), never a pixel count. The fixed
@@ -103,15 +116,17 @@ use cosmic::iced::advanced::layout;
 use cosmic::iced::advanced::renderer;
 use cosmic::iced::advanced::text::LineHeight;
 use cosmic::iced::advanced::widget::{Operation, Tree};
-use cosmic::iced::advanced::{Layout, Widget};
+use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, mouse, overlay};
 use cosmic::iced::widget::text::Wrapping;
-use cosmic::iced::{Alignment, Background, Color, Length, Padding, Rectangle, Size, Vector, mouse};
+use cosmic::iced::{Alignment, Background, Color, Event, Length, Padding, Rectangle, Size, Vector};
 use cosmic::widget::tooltip::Position;
 use cosmic::widget::{self, button};
 use cosmic::{Element, Renderer, Theme, theme};
 use household_tones::Srgb;
 
-use crate::tooltip::{Tip, tooltip_with};
+use crate::tooltip::{Tip, tooltip_when_cut, tooltip_with};
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// The label's type: 14 px on a 20 px line, as libcosmic's buttons set it
 pub(crate) const LABEL_SIZE: f32 = 14.0;
@@ -151,6 +166,13 @@ pub enum ButtonLook {
     /// otherwise, measured in both ([`Button::corners`] joins it to its
     /// neighbours)
     Segment,
+    /// The Icon look's paint (no fill at rest, the icon button's hover and
+    /// pressed washes, the muted accent while selected) with a label in the
+    /// body text colour: regular weight, not accent, not underlined. For a
+    /// control that is a plain readable part of a line and still a button:
+    /// an activity strip's icon and "×4" count, each opening its list. The
+    /// same box as every labelled look
+    Plain,
 }
 
 impl ButtonLook {
@@ -163,7 +185,7 @@ impl ButtonLook {
     pub fn inset(self, spacing: &cosmic::cosmic_theme::Spacing) -> f32 {
         f32::from(match self {
             Self::Icon => 0,
-            Self::Primary | Self::Secondary | Self::Destructive | Self::Segment | Self::Tertiary | Self::TertiaryDestructive => spacing.space_s,
+            Self::Primary | Self::Secondary | Self::Destructive | Self::Segment | Self::Plain | Self::Tertiary | Self::TertiaryDestructive => spacing.space_s,
         })
     }
 
@@ -178,6 +200,11 @@ impl ButtonLook {
 
     fn tertiary(self) -> bool {
         matches!(self, Self::Tertiary | Self::TertiaryDestructive)
+    }
+
+    /// The looks that are drawn with the icon button's washes
+    fn washed(self) -> bool {
+        matches!(self, Self::Icon | Self::Segment | Self::Plain)
     }
 
     fn filled(self) -> bool {
@@ -235,10 +262,17 @@ pub fn paint(
 ) -> Paint {
     let cosmic = theme.cosmic();
     let page = crate::look::page(theme);
-    if matches!(look, ButtonLook::Icon | ButtonLook::Segment) {
-        if selected {
-            return muted_paint(state, theme);
+    if selected {
+        // Chosen, on any look (rule 6: toggles and chosen parts in the muted
+        // accent). Secondary keeps its border, so a chosen chip is still
+        // the outlined pill it was
+        let mut chosen = muted_paint(state, theme);
+        if look == ButtonLook::Secondary {
+            chosen.border = Some(unselected_border(state, theme));
         }
+        return chosen;
+    }
+    if look.washed() {
         let style = icon_style(state, theme);
         let colour = |background: Option<Background>| match background {
             Some(Background::Color(colour)) => Some(colour),
@@ -308,6 +342,13 @@ pub fn paint(
     }
 }
 
+/// Secondary's border colour in `state`
+fn unselected_border(state: State, theme: &Theme) -> Color {
+    paint(ButtonLook::Secondary, false, None, state, theme)
+        .border
+        .unwrap_or(Color::TRANSPARENT)
+}
+
 /// A toggle that is on (rule 6): the muted accent, COSMIC's washes laid
 /// over it when hovered and pressed, so they come out darker (rule 6a);
 /// disabled, the fill faded with its own on colour dimmed
@@ -370,7 +411,7 @@ fn style(
     theme: &Theme,
 ) -> button::Style {
     let radius: [f32; 4] = corners.unwrap_or_else(|| theme.cosmic().corner_radii.radius_xl);
-    if matches!(look, ButtonLook::Icon | ButtonLook::Segment) && !selected {
+    if look.washed() && !selected {
         let mut style = icon_style(state, theme);
         style.border_radius = radius.into();
         style
@@ -509,6 +550,8 @@ pub struct Button<'a, M> {
     look: ButtonLook,
     label: String,
     other_labels: Vec<String>,
+    content: Option<Element<'a, M>>,
+    other_contents: Vec<Element<'a, M>>,
     leading: Option<Element<'a, M>>,
     trailing: Option<widget::icon::Handle>,
     compact: bool,
@@ -529,6 +572,8 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             look,
             label: label.into(),
             other_labels: Vec::new(),
+            content: None,
+            other_contents: Vec::new(),
             leading: None,
             trailing: None,
             compact: false,
@@ -540,6 +585,33 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             fill: None,
             corners: None,
         }
+    }
+
+    /// A button of `look` whose content is `content`, an element of the
+    /// caller's (a chip's name over its caption, a row's cells), in place of
+    /// a label; `name` is its accessible name. It is the same box as every
+    /// button: `space_l` tall, its look's side inset, the content centred,
+    /// as wide as the content is, whole pixels. It is never cut with an
+    /// ellipsis (the caller's content is the caller's to fit; give a
+    /// [`Button::width`] and a content that fits it). A content that changes
+    /// with the button's own state is given its other forms in
+    /// [`Button::other_contents`]
+    pub fn with_content(
+        look: ButtonLook,
+        content: Element<'a, M>,
+        name: impl Into<String>,
+    ) -> Self {
+        let mut button = Self::new(look, name);
+        button.content = Some(content);
+        button
+    }
+
+    /// The other contents a [`Button::with_content`] button shows in its own
+    /// states: it is laid out as wide as the widest, as
+    /// [`Button::other_labels`] does for labels
+    pub fn other_contents(mut self, contents: impl IntoIterator<Item = Element<'a, M>>) -> Self {
+        self.other_contents = contents.into_iter().collect();
+        self
     }
 
     pub fn primary(label: impl Into<String>) -> Self {
@@ -642,10 +714,13 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         self
     }
 
-    /// Whether an Icon or Segment button is on (rule 6): a toggle that is
-    /// on, a button whose menu or panel is open, the chosen part of a
-    /// segmented control. It is drawn in the muted accent. The other
-    /// labelled looks have no selected paint
+    /// Whether the button is chosen (rule 6): a toggle that is on, a
+    /// button whose menu or panel is open, the chosen part of a segmented
+    /// control, a chosen chip or row. It is drawn in the muted accent with
+    /// its on colours, on every look (Secondary keeps its 2 px border); the
+    /// button's size does not change. For a chosen option of a list or a
+    /// question use Secondary (a chip with a border) or Plain (a row or a
+    /// strip part with no border at rest)
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
@@ -679,47 +754,128 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         self
     }
 
+    /// The width this button is laid out at with room to spare: its content
+    /// (every label in every weight it draws, [`Button::other_labels`], the
+    /// leading element and the trailing icon, with the row's spacing) plus its
+    /// look's side inset on each side, in whole pixels. A parent that wants to
+    /// know how much room the button needs asks this before layout and does
+    /// not estimate (rule 48); it is the very measurement layout makes, so the
+    /// two are equal (`button_tests` checks every look). The leading element
+    /// is measured in place, hence `&mut self`
+    ///
+    /// ```
+    /// use household_widgets::button::{Button, width_of, ButtonLook};
+    /// # fn main() {
+    /// # let renderer = household_widgets::button::headless_renderer();
+    /// let mut button = Button::<()>::tertiary("Set up in Settings");
+    /// let wide = button.natural_width(&renderer);
+    /// assert_eq!(wide.fract(), 0.0);
+    /// assert_eq!(wide, width_of(&renderer, ButtonLook::Tertiary, &["Set up in Settings"], None, false));
+    /// # }
+    /// ```
+    pub fn natural_width(&mut self, renderer: &Renderer) -> f32 {
+        let space = theme::active().cosmic().spacing;
+        let square = f32::from(space.space_l);
+        if self.is_compact() {
+            return square;
+        }
+        let leading = self.leading.as_mut().map(|element| {
+            let mut tree = Tree::new(element.as_widget());
+            element
+                .as_widget_mut()
+                .layout(&mut tree, renderer, &unbounded())
+                .size()
+                .width
+        });
+        let mut forms = self.forms(false);
+        let widest = natural(&mut forms, renderer).width;
+        row_width(leading, widest, self.trailing.is_some(), &space) + 2.0 * self.look.inset(&space)
+    }
+
+    /// Whether the button is the compact square
+    fn is_compact(&self) -> bool {
+        (self.compact || self.look == ButtonLook::Icon) && self.leading.is_some()
+    }
+
+    /// Every form of the content the button must have room for: the label
+    /// (in every weight it draws) and its other labels, or the caller's
+    /// content and its other contents. `cut` makes labels the ellipsizing
+    /// kind a parent's narrow room cuts
+    fn forms(&mut self, cut: bool) -> Vec<Element<'a, M>> {
+        if let Some(content) = self.content.take() {
+            let mut forms = vec![content];
+            forms.append(&mut self.other_contents);
+            return forms;
+        }
+        label_forms(self.look, self.selected, cut, &self.label, &self.other_labels)
+    }
+
     /// The libcosmic button itself, wearing the household's keyboard-target
     /// outline ([`crate::keyboard_target`]), and its tooltip, for a place
     /// that wraps the button in something of its own (a menu opening from
-    /// it) and shows the tooltip there
+    /// it) and shows the tooltip there. The tooltip is the one given; the
+    /// full label's that shows only when a label is cut belongs to the
+    /// finished [`Element`]
     pub fn into_native(self) -> (Element<'a, M>, Option<(Tip<'a, M>, Position)>) {
+        let (button, tip, _) = self.assemble();
+        (button, tip)
+    }
+
+    /// The button, its given tooltip, and, for a label that a narrow room may
+    /// cut, the flag layout sets when it did cut it with the full label
+    #[allow(clippy::type_complexity)]
+    fn assemble(
+        mut self,
+    ) -> (
+        Element<'a, M>,
+        Option<(Tip<'a, M>, Position)>,
+        Option<(Rc<Cell<bool>>, String)>,
+    ) {
         let space = theme::active().cosmic().spacing;
         let square = f32::from(space.space_l);
-        let compact = (self.compact || self.look == ButtonLook::Icon) && self.leading.is_some();
+        let compact = self.is_compact();
         #[cfg(feature = "a11y")]
         let name = self.label.clone();
         let look = self.look;
+        let mut cut_flag = None;
         let content: Element<'a, M> = if compact {
-            self.leading.unwrap_or_else(|| widget::Space::new().into())
+            self.leading.take().unwrap_or_else(|| widget::Space::new().into())
         } else {
             let mut parts: Vec<Element<'a, M>> = Vec::with_capacity(3);
-            parts.extend(self.leading);
-            // A fixed width a label may not fill is cut short (a segment's
-            // part in a narrow form), its tooltip giving it whole
-            let cut = look == ButtonLook::Segment && matches!(self.width, Length::Fixed(_));
-            let chosen = self.selected;
-            let mut labels = vec![label(look, chosen, cut, self.label.clone())];
-            // A part of a segmented control changes its weight when chosen:
-            // measured in the other weight too, so choosing moves nothing
-            if look == ButtonLook::Segment {
-                labels.push(label(look, !chosen, cut, self.label.clone()));
+            parts.extend(self.leading.take());
+            let labelled = self.content.is_none();
+            let shown = if labelled {
+                Some(label(look, self.selected, true, self.label.clone()))
+            } else {
+                None
+            };
+            let flag = Rc::new(Cell::new(false));
+            if labelled {
+                cut_flag = Some((flag.clone(), self.label.clone()));
             }
-            for other in self.other_labels {
-                if look == ButtonLook::Segment {
-                    labels.push(label(look, !chosen, cut, other.clone()));
-                }
-                labels.push(label(look, chosen, cut, other));
-            }
-            parts.push(Element::new(Widest { labels }));
+            let reserve = if self.trailing.is_some() {
+                f32::from(ACTION_ICON) + f32::from(space.space_xxs)
+            } else {
+                0.0
+            };
+            let forms = self.forms(false);
+            parts.push(Element::new(Widest {
+                labels: forms,
+                cut: shown,
+                reserve,
+                is_cut: flag,
+            }));
             parts.extend(
                 self.trailing
+                    .take()
                     .map(|icon| widget::icon::icon(icon).size(ACTION_ICON).into()),
             );
-            widget::row::with_children(parts)
-                .spacing(space.space_xxs)
-                .align_y(Alignment::Center)
-                .into()
+            Element::new(Whole {
+                content: widget::row::with_children(parts)
+                    .spacing(space.space_xxs)
+                    .align_y(Alignment::Center)
+                    .into(),
+            })
         };
         let (width, padding) = if compact {
             (Length::Fixed(square), Padding::ZERO)
@@ -747,77 +903,224 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             class: class(look, self.selected, self.fill, self.corners),
             enabled,
         });
-        (button, self.tip)
+        (button, self.tip, cut_flag)
     }
 }
 
 impl<'a, M: Clone + 'a> From<Button<'a, M>> for Element<'a, M> {
+    /// The button with its tooltip. A button with no tooltip of its own
+    /// whose label a parent's room cuts short ends the label in an ellipsis
+    /// and gives it whole in a tooltip, and only then (rules 14-16)
     fn from(button: Button<'a, M>) -> Self {
-        let (button, tip) = button.into_native();
-        match tip {
-            Some((tip, position)) => tooltip_with(button, tip, position),
-            None => button.into(),
+        let (button, tip, cut) = button.assemble();
+        match (tip, cut) {
+            (Some((tip, position)), _) => tooltip_with(button, tip, position),
+            (None, Some((flag, full))) => {
+                let tip = Tip::new(("cut label", full.clone()), move || {
+                    widget::text(full.clone()).into()
+                });
+                tooltip_when_cut(button, tip, Position::Bottom, flag)
+            }
+            (None, None) => button,
         }
     }
 }
 
+/// The width of a button of `look` with room to spare, from what it holds:
+/// the `labels` (the label and its [`Button::other_labels`]), the width of a
+/// leading element if any, and whether it has a trailing icon, in whole
+/// pixels. This is [`Button::natural_width`] for a button an app has not
+/// built yet; a [`Button`] with a leading element measures it in place
+pub fn width_of(
+    renderer: &Renderer,
+    look: ButtonLook,
+    labels: &[&str],
+    leading: Option<f32>,
+    trailing_icon: bool,
+) -> f32 {
+    let space = theme::active().cosmic().spacing;
+    if look == ButtonLook::Icon && leading.is_some() {
+        return f32::from(space.space_l);
+    }
+    let (first, others) = labels.split_first().map_or(("", &[][..]), |(f, o)| (*f, o));
+    let others: Vec<String> = others.iter().map(|s| (*s).to_string()).collect();
+    let mut forms: Vec<Element<'_, ()>> = label_forms(look, false, false, first, &others);
+    let widest = natural(&mut forms, renderer).width;
+    row_width(leading, widest, trailing_icon, &space) + 2.0 * look.inset(&space)
+}
+
+/// A headless renderer, for a doctest or an app's test to measure with
+#[doc(hidden)]
+pub fn headless_renderer() -> Renderer {
+    use cosmic::iced::advanced::renderer::Headless;
+    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
+        cosmic::iced::Font::default(),
+        cosmic::iced::Pixels(14.0),
+        Some("tiny-skia"),
+    ))
+    .expect("native renderer")
+}
+
+/// The content row's width in whole pixels: its parts and the spacing
+/// between them, as the row lays them out, then rounded up
+fn row_width(
+    leading: Option<f32>,
+    widest: f32,
+    trailing: bool,
+    space: &cosmic::cosmic_theme::Spacing,
+) -> f32 {
+    let mut parts = vec![widest.ceil()];
+    parts.extend(leading);
+    if trailing {
+        parts.push(f32::from(ACTION_ICON));
+    }
+    let gaps = parts.len().saturating_sub(1) as f32;
+    (parts.iter().sum::<f32>() + gaps * f32::from(space.space_xxs)).ceil()
+}
+
+fn unbounded() -> layout::Limits {
+    layout::Limits::new(Size::ZERO, Size::new(f32::INFINITY, f32::INFINITY))
+}
+
+/// The largest size of `forms` laid out with all the room they want
+fn natural<M>(forms: &mut [Element<'_, M>], renderer: &Renderer) -> Size {
+    forms.iter_mut().fold(Size::ZERO, |most, form| {
+        let mut tree = Tree::new(form.as_widget());
+        let size = form
+            .as_widget_mut()
+            .layout(&mut tree, renderer, &unbounded())
+            .size();
+        Size::new(most.width.max(size.width), most.height.max(size.height))
+    })
+}
+
+/// The forms of a label to measure: the label and `others`, each in the
+/// weight `look` draws it, and a segment's in both of its weights so that
+/// choosing moves nothing
+fn label_forms<'a, M: 'a>(
+    look: ButtonLook,
+    chosen: bool,
+    cut: bool,
+    text: &str,
+    others: &[String],
+) -> Vec<Element<'a, M>> {
+    let mut forms = vec![label(look, chosen, cut, text.to_string())];
+    if look == ButtonLook::Segment {
+        forms.push(label(look, !chosen, cut, text.to_string()));
+    }
+    for other in others {
+        if look == ButtonLook::Segment {
+            forms.push(label(look, !chosen, cut, other.clone()));
+        }
+        forms.push(label(look, chosen, cut, other.clone()));
+    }
+    forms
+}
+
 /// A label in `look`'s type: semibold for the boxed looks; bold and
 /// underlined for Tertiary; a segment's semibold when `chosen` and regular
-/// otherwise (rule 6a's weights)
+/// otherwise (rule 6a's weights); Plain's regular. `cut` makes it fill the
+/// room it is given and end in an ellipsis if that is too little
 fn label<'a, M: 'a>(look: ButtonLook, chosen: bool, cut: bool, text: String) -> Element<'a, M> {
-    if look == ButtonLook::Segment {
-        let text = widget::text(text)
-            .size(LABEL_SIZE)
-            .line_height(LineHeight::Absolute(LABEL_LINE.into()))
-            .font(if chosen {
-                cosmic::font::semibold()
-            } else {
-                cosmic::font::default()
-            })
-            .wrapping(Wrapping::None);
-        if cut {
-            use cosmic::iced::advanced::text::{Ellipsize, EllipsizeHeightLimit};
-            return text
-                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-                .width(Length::Fill)
-                .into();
-        }
-        return text.into();
-    }
+    use cosmic::iced::advanced::text::{Ellipsize, EllipsizeHeightLimit};
+    let ellipsis = Ellipsize::End(EllipsizeHeightLimit::Lines(1));
     if look.tertiary() {
         let span: cosmic::iced::widget::text::Span<'a, (), cosmic::iced::Font> =
             cosmic::iced::widget::text::Span::new(text)
                 .underline(true)
                 .font(cosmic::font::bold());
-        cosmic::iced::widget::rich_text([span])
+        let rich = cosmic::iced::widget::rich_text([span])
             .size(LABEL_SIZE)
             .line_height(LineHeight::Absolute(LABEL_LINE.into()))
-            .wrapping(Wrapping::None)
-            .into()
+            .wrapping(Wrapping::None);
+        return if cut {
+            rich.ellipsize(ellipsis).width(Length::Fill).into()
+        } else {
+            rich.into()
+        };
+    }
+    let regular = match look {
+        ButtonLook::Segment => !chosen,
+        ButtonLook::Plain => true,
+        _ => false,
+    };
+    let text = widget::text(text)
+        .size(LABEL_SIZE)
+        .line_height(LineHeight::Absolute(LABEL_LINE.into()))
+        .font(if regular {
+            cosmic::font::default()
+        } else {
+            cosmic::font::semibold()
+        })
+        .wrapping(Wrapping::None);
+    if cut {
+        text.ellipsize(ellipsis).width(Length::Fill).into()
     } else {
-        widget::text(text)
-            .size(LABEL_SIZE)
-            .line_height(LineHeight::Absolute(LABEL_LINE.into()))
-            .font(cosmic::font::semibold())
-            .wrapping(Wrapping::None)
-            .into()
+        text.into()
+    }
+}
+
+/// The content rounded up to whole pixels: its width is the next whole
+/// pixel, so a button's width is whole whatever its content measures
+struct Whole<'a, M> {
+    content: Element<'a, M>,
+}
+
+impl<M> Widget<M, Theme, Renderer> for Whole<'_, M> {
+    forward_widget!(M, Theme, Renderer; children, diff, size, operate, update, draw, mouse_interaction, overlay, drag_destinations, a11y_nodes);
+
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+        let node = self
+            .content
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits);
+        let size = node.size();
+        layout::Node::with_children(Size::new(size.width.ceil(), size.height), node.children().to_vec())
     }
 }
 
 /// The first of `labels`, laid out in the room of the largest of them
 /// all and centred in it: how a button is as wide in every state. Only
-/// the first is drawn or seen by operations; the others are measured
+/// the first is drawn or seen by operations; the others are measured.
+///
+/// Given less room than the largest wants, and a `cut` form (the label
+/// filling its room, ending in an ellipsis), it takes all the room and draws
+/// that form instead, saying so in `is_cut`; a button's natural width stays
+/// the full label's, and only a parent giving less cuts it. `reserve` is room
+/// the row keeps after it (a trailing icon)
 struct Widest<'a, M> {
     labels: Vec<Element<'a, M>>,
+    cut: Option<Element<'a, M>>,
+    reserve: f32,
+    is_cut: Rc<Cell<bool>>,
+}
+
+impl<M> Widest<'_, M> {
+    /// The tree of the cut form, after the labels'
+    fn cut_tree<'t>(&self, tree: &'t Tree) -> Option<&'t Tree> {
+        tree.children.get(self.labels.len())
+    }
 }
 
 impl<M> Widget<M, Theme, Renderer> for Widest<'_, M> {
     fn children(&self) -> Vec<Tree> {
-        self.labels.iter().map(|label| Tree::new(label)).collect()
+        self.labels
+            .iter()
+            .chain(self.cut.iter())
+            .map(|label| Tree::new(label))
+            .collect()
     }
 
     fn diff(&mut self, tree: &mut Tree) {
+        let n = self.labels.len();
         tree.diff_children(self.labels.as_mut_slice());
+        // The cut form's tree sits after the labels'; keep it in step
+        if let Some(cut) = self.cut.as_mut() {
+            if tree.children.len() <= n {
+                tree.children.push(Tree::new(&*cut));
+            }
+            tree.children[n].diff(cut);
+        }
     }
 
     fn size(&self) -> Size<Length> {
@@ -830,11 +1133,16 @@ impl<M> Widget<M, Theme, Renderer> for Widest<'_, M> {
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
+        let n = self.labels.len();
+        let open = layout::Limits::new(
+            Size::ZERO,
+            Size::new(f32::INFINITY, limits.max().height),
+        );
         let mut nodes = self
             .labels
             .iter_mut()
             .zip(tree.children.iter_mut())
-            .map(|(label, tree)| label.as_widget_mut().layout(tree, renderer, limits));
+            .map(|(label, tree)| label.as_widget_mut().layout(tree, renderer, &open));
         let Some(shown) = nodes.next() else {
             return layout::Node::new(Size::ZERO);
         };
@@ -844,6 +1152,25 @@ impl<M> Widget<M, Theme, Renderer> for Widest<'_, M> {
                 most.height.max(node.size().height),
             )
         });
+        let size = Size::new(size.width.ceil(), size.height);
+        let room = limits.max().width - self.reserve;
+        if let (Some(cut), true) = (self.cut.as_mut(), size.width > room + 0.01 && room.is_finite()) {
+            if let Some(cut_tree) = tree.children.get_mut(n) {
+                let room = room.max(0.0);
+                let fitted = cut.as_widget_mut().layout(
+                    cut_tree,
+                    renderer,
+                    &layout::Limits::new(Size::ZERO, Size::new(room, limits.max().height)),
+                );
+                self.is_cut.set(true);
+                let whole = Size::new(room, size.height);
+                return layout::Node::with_children(
+                    whole,
+                    vec![fitted.align(Alignment::Start, Alignment::Center, whole)],
+                );
+            }
+        }
+        self.is_cut.set(false);
         let shown = shown.align(Alignment::Center, Alignment::Center, size);
         layout::Node::with_children(size, vec![shown])
     }
@@ -858,14 +1185,28 @@ impl<M> Widget<M, Theme, Renderer> for Widest<'_, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        if let (Some(label), Some(state), Some(layout)) = (
-            self.labels.first(),
-            tree.children.first(),
-            layout.children().next(),
-        ) {
-            label
-                .as_widget()
-                .draw(state, renderer, theme, style, layout, cursor, viewport);
+        let Some(layout) = layout.children().next() else {
+            return;
+        };
+        let shown = match (self.is_cut.get(), self.cut.as_ref(), self.cut_tree(tree)) {
+            (true, Some(cut), Some(state)) => Some((cut, state)),
+            _ => self.labels.first().zip(tree.children.first()),
+        };
+        if let Some((label, state)) = shown {
+            if self.is_cut.get() {
+                // A cut label's underline is measured on the whole label and
+                // would run on past the ellipsis: clip it to the room given
+                use cosmic::iced::advanced::Renderer as _;
+                renderer.with_layer(layout.bounds(), |renderer| {
+                    label
+                        .as_widget()
+                        .draw(state, renderer, theme, style, layout, cursor, viewport);
+                });
+            } else {
+                label
+                    .as_widget()
+                    .draw(state, renderer, theme, style, layout, cursor, viewport);
+            }
         }
     }
 

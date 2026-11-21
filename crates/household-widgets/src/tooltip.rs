@@ -70,12 +70,12 @@ fn adapt<'a, M: 'a>(
     tip: Tip<'a, M>,
     position: Position,
     at: Option<f32>,
-    hidden: bool,
+    hidden: impl Fn() -> bool + 'a,
 ) -> Element<'a, M> {
     let view = tip.view;
     let child = layout::child(move |_| view())
         .minimum_width(|_, preferred| preferred.width.min(TEXT_MIN_WIDTH))
-        .hidden_when(move |_| hidden);
+        .hidden_when(move |_| hidden());
     hover_card::retained_hover_box(tip.key, at, content, child, candidates(position))
 }
 
@@ -85,7 +85,7 @@ pub fn tooltip_with<'a, M: 'a>(
     tip: Tip<'a, M>,
     position: Position,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, None, false)
+    adapt(content.into(), tip, position, None, || false)
 }
 
 /// [`tooltip_with`], giving no information while `hidden`. The tree is the
@@ -96,7 +96,21 @@ pub fn tooltip_unless<'a, M: 'a>(
     position: Position,
     hidden: bool,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, None, hidden)
+    adapt(content.into(), tip, position, None, move || hidden)
+}
+
+/// [`tooltip_with`] for text that may be cut short: the household's
+/// convention for cut-off text (rules 14-16) is the ellipsis and the whole
+/// text in a tooltip, and *only* when it is cut. `cut` is the flag the
+/// content sets while it is laid out cut (the button's label does), read each
+/// time the tip would show, so a tip is given only while the text is cut.
+pub fn tooltip_when_cut<'a, M: 'a>(
+    content: impl Into<Element<'a, M>>,
+    tip: Tip<'a, M>,
+    position: Position,
+    cut: std::rc::Rc<std::cell::Cell<bool>>,
+) -> Element<'a, M> {
+    adapt(content.into(), tip, position, None, move || !cut.get())
 }
 
 /// [`tooltip_unless`] about the one place `x` pixels from `content`'s left
@@ -109,7 +123,7 @@ pub fn tooltip_at<'a, M: 'a>(
     x: f32,
     hidden: bool,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, Some(x), hidden)
+    adapt(content.into(), tip, position, Some(x), move || hidden)
 }
 
 /// A libcosmic tooltip, for the two sites the window's information cannot
