@@ -3,8 +3,8 @@
 //! Composable building blocks for menu contents. State, including expansion and
 //! whether an activation closes a popup, belongs to the application.
 
-use cosmic::Element;
 use crate::spacing::Kind;
+use cosmic::Element;
 use cosmic::iced::widget::{self, tooltip::Position};
 use cosmic::iced::{Alignment, Length};
 

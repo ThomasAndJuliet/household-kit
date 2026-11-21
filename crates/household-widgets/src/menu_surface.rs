@@ -11,8 +11,8 @@ use crate::menu_parts::{self, RowContour, RowSlots, TooltipChoice};
 #[cfg(test)]
 use crate::popup::Anchors;
 use crate::popup::{FocusTarget, Panel};
-use crate::window::Owner;
 use crate::spacing::Kind;
+use crate::window::Owner;
 use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::advanced::widget::Id;
 use cosmic::iced::{Length, Rectangle, Size};
@@ -20,7 +20,6 @@ use cosmic::{Element, widget};
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-
 
 /// How long the pointer rests on a submenu's row before its submenu opens
 /// beside the menu, as desktop menus do (GTK's default menu popup delay):
@@ -796,7 +795,7 @@ impl<M: Clone + 'static> Content<M> {
                 .iter()
                 .any(|row| matches!(row, Row::Item(item) if item.icon.is_some()))
                 .then_some(crate::menu::ICON_SIZE),
-            gap: 8.0,
+            gap: Kind::MenuRow.gap(&self.spacing),
         };
         let mut groups = vec![Vec::new()];
         let ordered = crate::menu::ordered(rows);
@@ -1003,10 +1002,12 @@ impl<M: Clone + 'static> Content<M> {
                     child.path.push(keys[at]);
                     let group =
                         menu_parts::inline_group(row, child.rows_view(embedded - 1, probe, true));
-                    groups
-                        .last_mut()
-                        .unwrap()
-                        .push(inset_group(group, framed, last == Some(at), nested_inset));
+                    groups.last_mut().unwrap().push(inset_group(
+                        group,
+                        framed,
+                        last == Some(at),
+                        nested_inset,
+                    ));
                 } else {
                     groups.last_mut().unwrap().push(row);
                 }
@@ -1020,13 +1021,11 @@ impl<M: Clone + 'static> Content<M> {
                 TooltipChoice::NoTooltip,
                 message,
                 move |button| {
-                    button
-                        .padding(row_padding(inline))
-                        .class(if tertiary {
-                            menu_parts::tertiary_row_style(contour)
-                        } else {
-                            menu_parts::row_style(selected_style, branch_open, contour)
-                        })
+                    button.padding(row_padding(inline)).class(if tertiary {
+                        menu_parts::tertiary_row_style(contour)
+                    } else {
+                        menu_parts::row_style(selected_style, branch_open, contour)
+                    })
                 },
             );
             let target = menu_parts::row_target(id.clone(), row, contour);
@@ -1070,10 +1069,12 @@ impl<M: Clone + 'static> Content<M> {
                 child.path.push(keys[at]);
                 let group =
                     menu_parts::inline_group(row, child.rows_view(embedded - 1, probe, true));
-                groups
-                    .last_mut()
-                    .unwrap()
-                    .push(inset_group(group, framed, last == Some(at), nested_inset));
+                groups.last_mut().unwrap().push(inset_group(
+                    group,
+                    framed,
+                    last == Some(at),
+                    nested_inset,
+                ));
             } else {
                 groups.last_mut().unwrap().push(row);
             }
@@ -1652,11 +1653,9 @@ mod presentation_tests {
             TooltipChoice::NoTooltip,
             Some(()),
             |button| {
-                button.padding(Kind::MenuRow.inset(&Spacing::default())).class(menu_parts::row_style(
-                    false,
-                    true,
-                    RowContour::Rounded,
-                ))
+                button
+                    .padding(Kind::MenuRow.inset(&Spacing::default()))
+                    .class(menu_parts::row_style(false, true, RowContour::Rounded))
             },
         );
         let (reference, reference_labels) = paint(reference);

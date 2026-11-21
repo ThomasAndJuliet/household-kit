@@ -153,7 +153,11 @@ fn pin_standard_density_menu_geometry() {
     );
     let near = |a: f32, b: f32, what: &str| assert!((a - b).abs() < 0.01, "{what}: {a} vs {b}");
     near(one.height, 16.0 + 8.0 + 6.0 + 19.6 + 6.0, "one row");
-    near(two.height - one.height, 6.0 + 19.6 + 6.0, "no gap between rows");
+    near(
+        two.height - one.height,
+        6.0 + 19.6 + 6.0,
+        "no gap between rows",
+    );
     let with = measure(
         Menu::new().item(MenuItem::new("Open", ()).detail("path")),
         &renderer,
@@ -168,7 +172,11 @@ fn a_menu_follows_the_density() {
     use cosmic::cosmic_theme::{Density, Spacing};
     let renderer = renderer();
     let compact = Spacing::from(Density::Compact);
-    let one = measure_in(Menu::new().item(MenuItem::new("Open", ())), &renderer, compact);
+    let one = measure_in(
+        Menu::new().item(MenuItem::new("Open", ())),
+        &renderer,
+        compact,
+    );
     let two = measure_in(
         Menu::new()
             .item(MenuItem::new("Open", ()))

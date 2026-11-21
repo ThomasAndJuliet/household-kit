@@ -262,6 +262,9 @@ mod tests {
 
     #[test]
     fn a_line_taller_than_the_control_leaves_nothing() {
-        assert_eq!(centred_in_control(&Spacing::from(Density::Compact), 40.0), 0.0);
+        assert_eq!(
+            centred_in_control(&Spacing::from(Density::Compact), 40.0),
+            0.0
+        );
     }
 }
