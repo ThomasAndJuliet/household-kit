@@ -43,7 +43,7 @@
 //! | [`MenuRow`](Kind::MenuRow) | at least `space_l` tall, content centred; `space_xxs` at the sides | `space_xxs` |
 //! | [`GroupRelated`](Kind::GroupRelated) | none | `space_xs` |
 //! | [`GroupSeparate`](Kind::GroupSeparate) | none | `space_m` |
-//! | [`Toolbar`](Kind::Toolbar) | `space_xxs` | `space_xs` |
+//! | [`Toolbar`](Kind::Toolbar) | `space_xxs` | 0: its buttons touch |
 //! | [`Tab`](Kind::Tab) | `space_s` at the sides (a close control is nested: it sits one gap from the end) | `space_xxs` |
 //! | [`Header`](Kind::Header) | `space_xs` | `space_xxs` |
 //!
@@ -139,11 +139,20 @@ pub enum Kind {
     ListRow,
     /// A row in a menu: at least `space_l` tall, its content centred
     MenuRow,
-    /// Actions that belong together
+    /// Actions in a form or dialog that belong together (Cancel · Save,
+    /// Use default · Change… · Open): `space_xs` apart (rule 24a)
     GroupRelated,
-    /// Actions that are not (when in doubt, they are not)
+    /// Groups that are not related (when in doubt, they are not): `space_m`
+    /// apart. Also the gap between the groups of a toolbar
     GroupSeparate,
-    /// Actions that appear over a block or figure on hover
+    /// A bar or list of controls (not a form): the composer's tools and
+    /// choices, a header's buttons, the actions over a block or figure.
+    /// Its buttons touch, so their hover washes meet with no dead strip
+    /// between them, as in COSMIC's panel; the space between their
+    /// contents is each button's own side inset (Juliet, 21 Nov 2026: "the
+    /// usual convention for UI elements (aka not forms) seems to be to
+    /// have no space so the hover washes would touch"). Groups within a
+    /// toolbar are [`Kind::GroupSeparate`] apart
     Toolbar,
     /// A tab's content
     Tab,
@@ -176,7 +185,8 @@ impl Kind {
         let [xxxs, xxs, xs, _, m] = steps(spacing);
         match self {
             Self::Page | Self::Card | Self::GroupSeparate => m,
-            Self::InputCard | Self::GroupRelated | Self::Toolbar => xs,
+            Self::InputCard | Self::GroupRelated => xs,
+            Self::Toolbar => 0.0,
             Self::InformationCard => xxxs,
             Self::DenseRow | Self::ListRow | Self::MenuRow | Self::Tab | Self::Header => xxs,
             Self::Popup => 0.0,
@@ -249,6 +259,8 @@ mod tests {
         assert_eq!(Kind::Tab.inset(&s), pad(0.0, 16.0, 0.0, 16.0));
         assert_eq!(Kind::GroupRelated.gap(&s), 12.0);
         assert_eq!(Kind::GroupSeparate.gap(&s), 24.0);
+        // A toolbar's buttons touch: their washes meet (21 Nov)
+        assert_eq!(Kind::Toolbar.gap(&s), 0.0);
         assert_eq!(control_height(&s), 32.0);
     }
 
