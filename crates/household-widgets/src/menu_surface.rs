@@ -12,6 +12,8 @@ use crate::menu_parts::{self, RowContour, RowSlots, TooltipChoice};
 use crate::popup::Anchors;
 use crate::popup::{FocusTarget, Panel};
 use crate::window::Owner;
+use crate::spacing::Kind;
+use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::advanced::widget::Id;
 use cosmic::iced::{Length, Rectangle, Size};
 use cosmic::{Element, widget};
@@ -19,7 +21,6 @@ use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-const PADDING: f32 = 4.0;
 
 /// How long the pointer rests on a submenu's row before its submenu opens
 /// beside the menu, as desktop menus do (GTK's default menu popup delay):
@@ -205,6 +206,8 @@ pub struct MenuSurface<M> {
     initial_target: Option<usize>,
     hover: Option<Hover<M>>,
     disclosure: Option<Disclosure<M>>,
+    /// The spacing steps the rows and card are built with
+    spacing: Spacing,
 }
 
 /// Opening submenus beside their menu by the pointer's resting on a row
@@ -256,7 +259,16 @@ impl<M: Clone + 'static> MenuSurface<M> {
             initial_target: None,
             hover: None,
             disclosure: None,
+            spacing: cosmic::theme::spacing(),
         }
+    }
+
+    /// With the given spacing steps instead of the theme's, for tests of
+    /// the other densities
+    #[cfg(test)]
+    pub(crate) fn in_spacing(mut self, spacing: Spacing) -> Self {
+        self.spacing = spacing;
+        self
     }
 
     /// The session's disclosure state for the menu's [`Row::More`] rows:
@@ -384,6 +396,7 @@ impl<M: Clone + 'static> MenuSurface<M> {
             hover: self.hover.clone(),
             disclosure: self.disclosure.clone(),
             reveal: Reveal::State,
+            spacing: self.spacing,
         };
         let mut definitions = vec![(content.clone(), source, self.candidates)];
         let mut stale = None;
@@ -482,6 +495,7 @@ struct Content<M> {
     hover: Option<Hover<M>>,
     disclosure: Option<Disclosure<M>>,
     reveal: Reveal,
+    spacing: Spacing,
 }
 
 impl<M: Clone + 'static> Content<M> {
@@ -699,9 +713,10 @@ impl<M: Clone + 'static> Content<M> {
     /// shortened in the selected composition; native text wraps at that width.
     fn probe(&self, embedded: usize, minimum: bool) -> layout::Child<'static, M> {
         let content = self.clone();
+        let spacing = self.spacing;
         layout::child(move |_| {
             widget::container(content.rows_view(embedded, Some(minimum), false))
-                .padding([PADDING, 0.0])
+                .padding(Kind::Popup.inset(&spacing))
                 .into()
         })
     }
@@ -731,7 +746,7 @@ impl<M: Clone + 'static> Content<M> {
             body
         };
         let card = widget::container(inner)
-            .padding([PADDING, 0.0])
+            .padding(Kind::Popup.inset(&self.spacing))
             .width(Length::Fill)
             .max_width(if self.preferred_width.is_some() {
                 f32::INFINITY
@@ -761,6 +776,17 @@ impl<M: Clone + 'static> Content<M> {
         let frame_inset = crate::look::Look::normal()
             .border(&cosmic::theme::active(), crate::look::State::Focused)
             .width;
+        // A menu row's padding, and for a row of an inline frame also the
+        // frame's border at each side
+        let row_padding = |inline: bool| {
+            let mut padding = Kind::MenuRow.inset(&self.spacing);
+            if inline {
+                padding.left += frame_inset;
+                padding.right += frame_inset;
+            }
+            padding
+        };
+        let nested_inset = Kind::NestedFrame.inset(&self.spacing).left;
         let slots = RowSlots {
             mark_width: slot_rows
                 .iter()
@@ -969,7 +995,7 @@ impl<M: Clone + 'static> Content<M> {
                 }
                 pieces.push(widget::row(cell).spacing(slots.gap).into());
                 let row = widget::container(widget::row(pieces).spacing(slots.gap))
-                    .padding([6.0, 8.0 + if inline { frame_inset } else { 0.0 }])
+                    .padding(row_padding(inline))
                     .into();
                 if inline && let Row::Folder(_, submenu) = &rows[at] {
                     let mut child = self.clone();
@@ -980,7 +1006,7 @@ impl<M: Clone + 'static> Content<M> {
                     groups
                         .last_mut()
                         .unwrap()
-                        .push(inset_group(group, framed, last == Some(at)));
+                        .push(inset_group(group, framed, last == Some(at), nested_inset));
                 } else {
                     groups.last_mut().unwrap().push(row);
                 }
@@ -995,7 +1021,7 @@ impl<M: Clone + 'static> Content<M> {
                 message,
                 move |button| {
                     button
-                        .padding([6.0, 8.0 + if inline { frame_inset } else { 0.0 }])
+                        .padding(row_padding(inline))
                         .class(if tertiary {
                             menu_parts::tertiary_row_style(contour)
                         } else {
@@ -1047,7 +1073,7 @@ impl<M: Clone + 'static> Content<M> {
                 groups
                     .last_mut()
                     .unwrap()
-                    .push(inset_group(group, framed, last == Some(at)));
+                    .push(inset_group(group, framed, last == Some(at), nested_inset));
             } else {
                 groups.last_mut().unwrap().push(row);
             }
@@ -1189,11 +1215,11 @@ fn inset_group<M: 'static>(
     group: Element<'static, M>,
     nested: bool,
     last: bool,
+    inset: f32,
 ) -> Element<'static, M> {
     if !nested {
         return group;
     }
-    let inset = f32::from(cosmic::theme::active().cosmic().spacing.space_xxs);
     widget::container(group)
         .width(Length::Fill)
         .padding(cosmic::iced::Padding {
@@ -1612,6 +1638,7 @@ mod presentation_tests {
             hover: None,
             disclosure: None,
             reveal: Reveal::State,
+            spacing: cosmic::theme::spacing(),
         };
         let (side, side_labels) = paint(content.rows_view(0, None, false));
         let reference = menu_parts::action_row_with(
@@ -1625,7 +1652,7 @@ mod presentation_tests {
             TooltipChoice::NoTooltip,
             Some(()),
             |button| {
-                button.padding([6.0, 8.0]).class(menu_parts::row_style(
+                button.padding(Kind::MenuRow.inset(&Spacing::default())).class(menu_parts::row_style(
                     false,
                     true,
                     RowContour::Rounded,
@@ -1702,6 +1729,7 @@ mod presentation_tests {
             hover: None,
             disclosure: None,
             reveal: Reveal::State,
+            spacing: cosmic::theme::spacing(),
         };
         let (w, h) = (240usize, 150usize);
         let mut renderer = cosmic::iced::futures::executor::block_on(

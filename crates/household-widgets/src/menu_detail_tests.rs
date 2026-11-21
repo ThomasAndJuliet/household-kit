@@ -20,12 +20,20 @@ fn body(text: String) -> Element<'static, ()> {
     widget::text(text).size(14).into()
 }
 fn measure(menu: Menu<()>, renderer: &cosmic::Renderer) -> Size {
+    measure_in(menu, renderer, cosmic::cosmic_theme::Spacing::default())
+}
+fn measure_in(
+    menu: Menu<()>,
+    renderer: &cosmic::Renderer,
+    spacing: cosmic::cosmic_theme::Spacing,
+) -> Size {
     MenuSurface::new(
         menu,
         MenuStyle { icon, body },
         Anchors::default(),
         "detail".into(),
     )
+    .in_spacing(spacing)
     .panels(Id::new("source"), vec![], |_| (), |_| ())
     .remove(0)
     .stages
@@ -151,4 +159,24 @@ fn pin_standard_density_menu_geometry() {
         &renderer,
     );
     near(with.height - one.height, 17.0, "a detail line");
+}
+
+/// At Compact density a menu row has 2 px of centring above and below its
+/// line (`space_l` 24), inside the card's 4 px
+#[test]
+fn a_menu_follows_the_density() {
+    use cosmic::cosmic_theme::{Density, Spacing};
+    let renderer = renderer();
+    let compact = Spacing::from(Density::Compact);
+    let one = measure_in(Menu::new().item(MenuItem::new("Open", ())), &renderer, compact);
+    let two = measure_in(
+        Menu::new()
+            .item(MenuItem::new("Open", ()))
+            .item(MenuItem::new("Save", ())),
+        &renderer,
+        compact,
+    );
+    let near = |a: f32, b: f32, what: &str| assert!((a - b).abs() < 0.01, "{what}: {a} vs {b}");
+    near(one.height, 16.0 + 8.0 + 2.0 + 19.6 + 2.0, "one row");
+    near(two.height - one.height, 2.0 + 19.6 + 2.0, "a row");
 }
