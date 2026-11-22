@@ -12,11 +12,10 @@ use crate::menu::{Menu, MenuItem, MenuStyle};
 use crate::menu_surface::row_key;
 use crate::popup::{FocusProbe, Panel};
 use crate::window::{UiEvent, WindowAction, WindowUi};
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::operation;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
-use cosmic::iced::{Font, Pixels, Point, keyboard, window as native_window};
+use cosmic::iced::{Point, keyboard, window as native_window};
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -176,13 +175,7 @@ struct App {
 
 impl App {
     fn new(width: f32) -> Self {
-        crate::test_fonts::pin();
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut app = Self {
             window: WindowUi::new(),
             size: Size::new(width, 400.0),
@@ -319,6 +312,12 @@ impl App {
     fn surfaces(&self) -> Vec<Rectangle> {
         self.window.anchors().surfaces()
     }
+
+    /// The window `width` wide from the next frame on
+    fn resize(&mut self, width: f32) {
+        self.size.width = width;
+        self.frame();
+    }
 }
 
 /// Wide enough for the titles
@@ -398,7 +397,6 @@ fn another_areas_menu_does_not_switch_to_a_title_the_pointer_passes() {
 }
 
 #[test]
-#[ignore = "fails in the apps' text environment (Open Sans pinned, test_fonts): 'Downcast on stateless state' in popup_focus operate, reached from SourceWidget::overlay; a tree/form mismatch in the bar, found 22 Nov, not yet diagnosed"]
 fn escape_closes_the_innermost_menu_and_focus_returns_to_the_title() {
     let mut app = App::new(WIDE);
     app.focus(MenuBar::<Root>::title_id(NS, 0));
@@ -434,7 +432,6 @@ fn escape_closes_the_innermost_menu_and_focus_returns_to_the_title() {
 }
 
 #[test]
-#[ignore = "fails in the apps' text environment (Open Sans pinned, test_fonts): 'Downcast on stateless state' in popup_focus operate, reached from SourceWidget::overlay; a tree/form mismatch in the bar, found 22 Nov, not yet diagnosed"]
 fn left_and_right_move_between_the_bars_menus_and_wrap_at_its_ends() {
     let mut app = App::new(WIDE);
     app.focus(MenuBar::<Root>::title_id(NS, 0));
@@ -501,7 +498,6 @@ fn where_the_titles_do_not_fit_one_three_bar_menu_holds_them_all() {
 }
 
 #[test]
-#[ignore = "fails in the apps' text environment (Open Sans pinned, test_fonts): 'Downcast on stateless state' in popup_focus operate, reached from SourceWidget::overlay; a tree/form mismatch in the bar, found 22 Nov, not yet diagnosed"]
 fn resting_on_a_submenus_row_opens_it_beside_the_menu_and_resting_elsewhere_closes_it() {
     let mut app = App::new(WIDE);
     app.click_at(app.title(0).center());
@@ -655,7 +651,6 @@ impl Widget<(), Theme, Renderer> for Probe {
 /// `MenuRoot` class gives it: the header's (the renderer's icon colour)
 #[test]
 fn a_title_keeps_the_header_colour_of_the_plain_menu_root_class() {
-    use cosmic::iced::advanced::renderer::Headless;
     use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
     use cosmic::iced::Color;
     let drawn = |class: cosmic::theme::Button, tint: bool| {
@@ -666,10 +661,7 @@ fn a_title_keeps_the_header_colour_of_the_plain_menu_root_class() {
             .class(class)
             .on_press(())
             .into();
-        let mut renderer = cosmic::iced::futures::executor::block_on(
-            <Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("native renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("native renderer");
         let mut ui = UserInterface::build(button, Size::new(60.0, 40.0), Cache::default(), &mut renderer);
         let header = renderer::Style {
             icon_color: Color::from_rgb(0.9, 0.1, 0.2),
@@ -690,4 +682,49 @@ fn a_title_keeps_the_header_colour_of_the_plain_menu_root_class() {
         drawn(crate::button::unringed(cosmic::theme::Button::MenuRoot), false),
         plain
     );
+}
+
+/// The window narrowed past the bar's threshold while a menu and its
+/// submenu are open, and widened again with the three-bar menu open: the
+/// open menu's title (or the three-bar button) goes with the form it
+/// belongs to, so its menus close, and the other form is shown, never both
+#[test]
+fn the_bar_changing_form_under_an_open_menu_closes_it() {
+    let mut app = App::new(WIDE);
+    app.focus(MenuBar::<Root>::title_id(NS, 0));
+    app.named(keyboard::key::Named::Enter);
+    app.named(keyboard::key::Named::ArrowDown);
+    app.named(keyboard::key::Named::ArrowRight);
+    assert_eq!(app.surfaces().len(), 2, "File and Recent are open");
+    app.resize(110.0);
+    assert_eq!(app.open(), None, "File's title is gone, and its menu with it");
+    assert!(app.surfaces().is_empty());
+    assert!(app.visible(&Id::new("bar-all")).is_some());
+    assert!(app.visible(&MenuBar::<Root>::title_id(NS, 0)).is_none());
+    app.resize(WIDE);
+    assert!(app.visible(&Id::new("bar-all")).is_none());
+    app.click_at(app.title(0).center());
+    assert_eq!(app.open(), Some(Root::File), "the titles work again");
+
+    let mut narrow = App::new(110.0);
+    let all = narrow.visible(&Id::new("bar-all")).expect("the three-bar button");
+    narrow.click_at(all.center());
+    let file = narrow
+        .visible(&crate::menu_surface::row_id(
+            "All",
+            &[],
+            row_key("File", true, 0),
+        ))
+        .expect("File's row");
+    narrow.click_at(file.center());
+    assert_eq!(
+        narrow.window.chain().unwrap().path(),
+        [row_key("File", true, 0)],
+        "File inline in the three-bar menu"
+    );
+    narrow.resize(WIDE);
+    assert_eq!(narrow.open(), None, "the three-bar button is gone");
+    assert!(narrow.surfaces().is_empty());
+    assert!(narrow.visible(&Id::new("bar-all")).is_none());
+    narrow.title(0);
 }
