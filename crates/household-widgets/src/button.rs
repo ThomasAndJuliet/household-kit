@@ -134,7 +134,7 @@ const LABEL_LINE: f32 = 20.0;
 /// An action icon's size (rule 10): the 16 px canvas
 pub const ACTION_ICON: u16 = 16;
 /// Secondary's border, drawn inside its box (Juliet, 15 Oct: 2 px)
-const SECONDARY_BORDER: f32 = 2.0;
+pub(crate) const SECONDARY_BORDER: f32 = 2.0;
 
 /// The height of every button: the theme's `space_l`. A row that lines
 /// buttons up with something else asks this rather than counting pixels
@@ -207,7 +207,7 @@ impl ButtonLook {
         matches!(self, Self::Icon | Self::Segment | Self::Plain)
     }
 
-    fn filled(self) -> bool {
+    pub(crate) fn filled(self) -> bool {
         matches!(self, Self::Primary | Self::Destructive)
     }
 }
@@ -408,6 +408,7 @@ fn style(
     fill: Option<FillColours>,
     state: State,
     corners: Option<[f32; 4]>,
+    joined: bool,
     theme: &Theme,
 ) -> button::Style {
     let radius: [f32; 4] = corners.unwrap_or_else(|| theme.cosmic().corner_radii.radius_xl);
@@ -424,12 +425,12 @@ fn style(
             // Pills, every look, washes too (rule 25d); a segment's part is a
             // pill only at the bar's ends
             border_radius: radius.into(),
-            border_width: if paint.border.is_some() {
+            border_width: if paint.border.is_some() && !joined {
                 SECONDARY_BORDER
             } else {
                 0.0
             },
-            border_color: paint.border.unwrap_or(Color::TRANSPARENT),
+            border_color: paint.border.filter(|_| !joined).unwrap_or(Color::TRANSPARENT),
             outline_width: 0.0,
             outline_color: Color::TRANSPARENT,
             icon_color: paint.text,
@@ -447,7 +448,7 @@ pub(crate) fn displayed_fill(
     corners: Option<[f32; 4]>,
     theme: &Theme,
 ) -> Option<Color> {
-    crate::keyboard_target::displayed_solid(&style(look, selected, None, state, corners, theme))
+    crate::keyboard_target::displayed_solid(&style(look, selected, None, state, corners, false, theme))
 }
 
 /// libcosmic's own button `class` with its focus ring left off. libcosmic
@@ -481,19 +482,21 @@ fn class(
     selected: bool,
     fill: Option<FillColours>,
     corners: Option<[f32; 4]>,
+    joined: bool,
+    shown: Option<State>,
 ) -> theme::Button {
     theme::Button::Custom {
         active: Box::new(move |_, theme| {
-            style(look, selected, fill, State::Rest, corners, theme)
+            style(look, selected, fill, shown.unwrap_or(State::Rest), corners, joined, theme)
         }),
         disabled: Box::new(move |theme| {
-            style(look, selected, fill, State::Disabled, corners, theme)
+            style(look, selected, fill, State::Disabled, corners, joined, theme)
         }),
         hovered: Box::new(move |_, theme| {
-            style(look, selected, fill, State::Hovered, corners, theme)
+            style(look, selected, fill, shown.unwrap_or(State::Hovered), corners, joined, theme)
         }),
         pressed: Box::new(move |_, theme| {
-            style(look, selected, fill, State::Pressed, corners, theme)
+            style(look, selected, fill, shown.unwrap_or(State::Pressed), corners, joined, theme)
         }),
     }
 }
@@ -563,6 +566,8 @@ pub struct Button<'a, M> {
     tip: Option<(Tip<'a, M>, Position)>,
     fill: Option<FillColours>,
     corners: Option<[f32; 4]>,
+    joined: bool,
+    shown: Option<State>,
 }
 
 impl<'a, M: Clone + 'a> Button<'a, M> {
@@ -586,6 +591,8 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             tip: None,
             fill: None,
             corners: None,
+            joined: false,
+            shown: None,
         }
     }
 
@@ -713,6 +720,24 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
     /// corners that touch a neighbour ([`crate::segmented::Segmented`])
     pub fn corners(mut self, radii: [f32; 4]) -> Self {
         self.corners = Some(radii);
+        self
+    }
+
+    /// The button is one of boxes joined with no gap, so it draws no border
+    /// of its own: its parent draws one outline round the group and any
+    /// lines between the boxes ([`crate::spacing`], Borders; it is
+    /// [`crate::split_button`]'s). Fill, washes, label colours and the
+    /// keyboard-target outline are the look's as ever
+    pub(crate) fn joined(mut self, joined: bool) -> Self {
+        self.joined = joined;
+        self
+    }
+
+    /// The button is drawn in `state` whatever the pointer does (a disabled
+    /// button stays disabled): a part of [`crate::split_button`] whose menu
+    /// is open is drawn pressed, as the whole button is
+    pub(crate) fn shown_as(mut self, state: Option<State>) -> Self {
+        self.shown = state;
         self
     }
 
@@ -897,7 +922,7 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         };
         let enabled = self.on_press.is_some();
         let button = button::custom(content)
-            .class(class(look, self.selected, self.fill, self.corners))
+            .class(class(look, self.selected, self.fill, self.corners, self.joined, self.shown))
             .padding(padding)
             .height(Length::Fixed(square))
             .width(width)
@@ -912,7 +937,7 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         let button = button.name(name);
         let button = Element::new(crate::keyboard_target::Target {
             content: button.into(),
-            class: class(look, self.selected, self.fill, self.corners),
+            class: class(look, self.selected, self.fill, self.corners, self.joined, self.shown),
             enabled,
         });
         (button, self.tip, cut_flag)

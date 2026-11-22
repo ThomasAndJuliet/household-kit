@@ -454,7 +454,7 @@ fn every_looks_borders_are_inside_and_within_its_inset() {
         );
         for selected in [false, true] {
             for state in [State::Rest, State::Hovered, State::Pressed, State::Disabled] {
-                let style = style(look, selected, None, state, None, &theme);
+                let style = style(look, selected, None, state, None, false, &theme);
                 assert_eq!(style.outline_width, 0.0, "{look:?} {state:?}: no outline outside");
                 assert!(style.border_width <= look.thickest_border(), "{look:?} {state:?}");
             }
@@ -464,7 +464,7 @@ fn every_looks_borders_are_inside_and_within_its_inset() {
     // the libcosmic class the button draws with changes nothing when focused
     use cosmic::widget::button::Catalog;
     for look in [ButtonLook::Primary, ButtonLook::Secondary, ButtonLook::Icon] {
-        let class = class(look, false, None, None);
+        let class = class(look, false, None, None, false, None);
         assert_eq!(
             format!("{:?}", theme.active(true, false, &class)),
             format!("{:?}", theme.active(false, false, &class))
