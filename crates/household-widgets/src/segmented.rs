@@ -105,6 +105,7 @@ pub struct Part<'a, M> {
     label: String,
     on_press: Option<M>,
     icon: Option<widget::icon::Handle>,
+    leading: Option<Element<'a, M>>,
     tip: Option<Tip<'a, M>>,
 }
 
@@ -114,6 +115,7 @@ impl<'a, M: Clone + 'a> Part<'a, M> {
             label: label.into(),
             on_press: None,
             icon: None,
+            leading: None,
             tip: None,
         }
     }
@@ -135,6 +137,16 @@ impl<'a, M: Clone + 'a> Part<'a, M> {
         self
     }
 
+    /// An element of the caller's before the label, in place of an icon
+    /// handle: a coloured icon (a machine's colour), say. It is measured like
+    /// any button's leading element ([`Button::leading`]). A form
+    /// ([`form_part`]) gives every part an action icon's room, 16 px square,
+    /// so the element should be that size to stand in the icons' column
+    pub fn leading(mut self, element: Element<'a, M>) -> Self {
+        self.leading = Some(element);
+        self
+    }
+
     /// The part's tooltip, below it (why it is disabled, or more about it)
     pub fn tip(mut self, tip: Tip<'a, M>) -> Self {
         self.tip = Some(tip);
@@ -144,7 +156,7 @@ impl<'a, M: Clone + 'a> Part<'a, M> {
     /// What [`form_part`] measures of this part: its label, and whether
     /// it has an icon
     pub fn measure(&self) -> (&str, bool) {
-        (&self.label, self.icon.is_some())
+        (&self.label, self.icon.is_some() || self.leading.is_some())
     }
 }
 
@@ -249,16 +261,17 @@ impl<'a, M: Clone + 'a> From<Segmented<'a, M>> for Element<'a, M> {
                     .selected(chosen == Some(n))
                     .corners(part_corners(n, count, radius))
                     .on_press_maybe(part.on_press);
-                button = match (part.icon, form) {
-                    (Some(icon), _) => button.leading_icon(icon),
+                button = match (part.leading, part.icon, form) {
+                    (Some(element), _, _) => button.leading(element),
+                    (None, Some(icon), _) => button.leading_icon(icon),
                     // An icon's room, where the form's other parts have icons
-                    (None, Some(form)) if form.icons => button.leading(
+                    (None, None, Some(form)) if form.icons => button.leading(
                         widget::Space::new()
                             .width(Length::Fixed(f32::from(ACTION_ICON)))
                             .height(Length::Fixed(f32::from(ACTION_ICON)))
                             .into(),
                     ),
-                    (None, _) => button,
+                    (None, None, _) => button,
                 };
                 if let Some(form) = form {
                     // Content from the inset, so every part's icon and label stand in

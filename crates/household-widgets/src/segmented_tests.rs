@@ -521,3 +521,38 @@ fn stacked_form_bars_keep_icons_in_one_column_and_labels_in_another() {
     let inset = ButtonLook::Segment.inset(&theme::active().cosmic().spacing);
     assert!((icons[0] - inset).abs() < 0.01, "from the inset: {}", icons[0]);
 }
+
+/// A part may carry a coloured element in place of an icon handle; it is
+/// measured as a button's leading element is, and in a form it stands in the
+/// icons' column
+#[test]
+fn a_part_can_lead_with_its_own_element() {
+    let renderer = renderer();
+    let dot = || -> Element<'static, u8> {
+        widget::Space::new().width(Length::Fixed(16.0)).height(Length::Fixed(16.0)).into()
+    };
+    let inset = ButtonLook::Segment.inset(&theme::active().cosmic().spacing);
+    let with = layout_of(
+        Segmented::new([Part::new("Mac").leading(dot()).on_press(0)], None).into(),
+        &renderer,
+    );
+    let without = layout_of(Segmented::new([Part::new("Mac").on_press(0)], None).into(), &renderer);
+    let gap = f32::from(theme::active().cosmic().spacing.space_xxs);
+    assert_eq!(with.size().width, (without.size().width - 2.0 * inset + 16.0 + gap + 2.0 * inset).ceil());
+    assert_eq!(content_columns(&with)[0][0], inset, "from the inset");
+    // Measured as an icon's room, so a form lines it up with icon parts
+    assert_eq!(Part::<u8>::new("Mac").leading(dot()).measure(), ("Mac", true));
+    let form = form_part([("Mac", true), ("Windows", false)], 2, None);
+    let node = layout_of(
+        Segmented::new(
+            [Part::new("Mac").leading(dot()).on_press(0), Part::new("Windows").on_press(1)],
+            None,
+        )
+        .form(form)
+        .into(),
+        &renderer,
+    );
+    let columns = content_columns(&node);
+    assert_eq!(columns[0][0], columns[1][0] - form.width, "icons' column");
+    assert_eq!(columns[0][1], columns[1][1] - form.width, "labels' column");
+}
