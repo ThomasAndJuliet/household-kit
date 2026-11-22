@@ -245,6 +245,35 @@ fn a_title_under_the_pointer_is_the_plain_wash_in_its_pill() {
     hovered_is_the_wash_inside_the_pill(a_title, "title");
 }
 
+/// A title's wash has the menu family's small corners, the trigger's the
+/// button's pill (Juliet, 22 Nov 2026: "keep the small radius"): 3 px in from
+/// the top-left corner is inside a `radius_s` curve and outside a pill's
+#[test]
+fn a_titles_wash_has_small_corners_and_the_triggers_is_a_pill() {
+    let near_corner = |element: fn() -> Element<'static, ()>| {
+        let picture = draw(
+            element(),
+            Some(Point::new(20.0, 16.0)),
+            false,
+            Color::BLACK,
+            1.0,
+        );
+        let b = picture.bounds;
+        picture.at(b.x + 3.0, b.y + 3.0)
+    };
+    let title = near_corner(a_title);
+    assert!(
+        is_near(title, wash(), 2),
+        "title: {title:?} want the wash {:?}",
+        wash()
+    );
+    let trigger = near_corner(the_trigger);
+    assert!(
+        is_near(trigger, ground(), 0),
+        "trigger: {trigger:?} want the ground"
+    );
+}
+
 /// While its menu is open a title keeps the wash, the pointer elsewhere
 #[test]
 fn an_open_titles_wash_is_kept_with_the_pointer_away() {

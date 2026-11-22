@@ -155,7 +155,14 @@ impl<R: Clone + PartialEq + 'static> MenuBar<R> {
 ///
 /// The label is in the colour of the header's controls (the accent, faded
 /// when the window is behind others), as the libcosmic bar drew it
-/// ([`Button::label_in_icon_colour`])
+/// ([`Button::label_in_icon_colour`]).
+///
+/// Its corners are the theme's small radius, not the button's pill: a title
+/// belongs to the menu family whose rows it opens, and their washes are
+/// `radius_s` (approved 12 Nov). Juliet, 22 Nov 2026, choosing between the
+/// pill and the small radius for the titles' hover: "keep the small radius".
+/// The corner shape is part of a look's styling, so the title is still the
+/// Plain look's box and states
 pub(crate) fn title<'a, M: 'a, R: Clone + PartialEq + 'static>(
     id: Id,
     root: R,
@@ -164,7 +171,9 @@ pub(crate) fn title<'a, M: 'a, R: Clone + PartialEq + 'static>(
     switch: bool,
     body: fn(String) -> Element<'static, Toggle>,
 ) -> Element<'a, M> {
+    let small = cosmic::theme::active().cosmic().corner_radii.radius_s;
     let button = Button::with_content(ButtonLook::Plain, body(label.clone()), label)
+        .corners(small)
         .label_in_icon_colour(true)
         .id(id.clone())
         .shown_as(open.then_some(State::Hovered))
