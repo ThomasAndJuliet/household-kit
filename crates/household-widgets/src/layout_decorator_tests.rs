@@ -109,8 +109,10 @@ fn direct_decorated_leaf_view_also_rejects_changed_geometry() {
     assert_eq!(node.size(), Size::ZERO);
 }
 
-fn settings_row() -> Child<'static, ()> {
-    let label = child(|_| {
+/// The label half of a settings row: a name over a longer description, both
+/// filling the width they are given.
+fn settings_label() -> Child<'static, ()> {
+    child(|_| {
         widget::column::with_children(vec![
             widget::row::with_children(vec![
                 widget::text("Label")
@@ -131,7 +133,11 @@ fn settings_row() -> Child<'static, ()> {
         .into()
     })
     .minimum_width(|_, _| 40.0)
-    .grow(1.0);
+    .grow(1.0)
+}
+
+fn settings_row() -> Child<'static, ()> {
+    let label = settings_label();
     let control = child(|_| {
         widget::container(widget::button::text("Action").on_press(()))
             .width(90)
@@ -218,13 +224,7 @@ fn shared_settings_alignment_finds_wrapped_caption_and_preserves_the_row_box() {
 #[test]
 fn allocated_fill_label_occupies_its_width_and_keeps_the_declared_useful_floor() {
     let renderer = renderer();
-    let row = settings_row();
-    let label = match row.kind() {
-        Kind::Composition(composition) => Child::from_part(composition.children()[0].clone()),
-        Kind::Leaf(_) | Kind::Frame(_) | Kind::Forms(_) => {
-            unreachable!("a settings row is a composition")
-        }
-    };
+    let label = settings_label();
     let floor = label.clone().minimum_width(|_, _| 160.0);
     let offer = floor.query(Level::Preferred, &renderer);
     assert_eq!(offer.minimum.width, 160.0);
