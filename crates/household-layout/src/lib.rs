@@ -283,7 +283,7 @@ pub use level::{Arrangement, Level};
 pub use part::{
     Child, Composition, Fixed, Forms, Kind, Leaf, LeafHeight, MinimumQuery, Sharing, is_amount,
 };
-pub use plan::{Placed, Plan};
+pub use plan::{Failure, Placed, Plan};
 pub use size::{
     Measured, Point, Rectangle, Size, finite_size, valid_available, validate_measurement,
 };

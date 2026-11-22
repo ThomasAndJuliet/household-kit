@@ -111,11 +111,114 @@ impl Placed {
     }
 }
 
+/// Why a plan failed, and which part the failure is about: the engine's
+/// error ([`AllocationError`]), with the path from the part that was asked
+/// down to that part (`Child::query_at_blaming`).
+///
+/// **The path.** One step for each placement on the way down, by the rule a
+/// plan's placements follow ([`Placed::index`]): a composition's child is
+/// its index among the composition's declared children, hidden or not, and
+/// a frame's content is 0. Forms add no step: a family and the form it
+/// selects at the level make one node, which the form plans in the
+/// family's place. An empty path is the part that was asked. A host turns
+/// a path back into the part with `Child::part_at`.
+///
+/// **Blame.** Each check that can fail a plan is about one part, and the
+/// failure names that part. A check is made by the part being planned, on
+/// its own size or on one of its children's: whether a child's measurement
+/// is a valid size, or whether a child's floor fits the width of a row, a
+/// wrap or a column, is about that child; whether the gaps fit, or whether
+/// a row's or a column's children together fit the room
+/// (`allocate_with_growth`), is about the composition itself; whether a
+/// leaf fits its offer, a frame its padding, or a part its fixed size or
+/// its room, is about that part. A failure arises with an empty path at the
+/// part that made the check, and each composition and frame it passes up
+/// through, on receiving it from a child it was planning, puts that child's
+/// step in front. So a failure is blamed where it was found, not where its
+/// cause began: a part whose measurement is not a valid size because
+/// something inside it is invalid is blamed at the first check that sees
+/// the measurement, which for the part asked is its own (`query_at` checks
+/// the root's measurement before planning anything). And because a
+/// composition's floor of width is made of its children's floors, a room
+/// too narrow for a part deep inside is usually found by the first part
+/// above it whose floor is checked against that room, often the part asked.
+///
+/// **Cost.** On success, none: planning carries a `Result<Plan, Failure>`
+/// where it carried a `Result<Plan, AllocationError>`, and nothing about a
+/// path is made until a check fails. On a failure, the path: an empty path
+/// allocates nothing, and each step put in front of it may (the first
+/// allocates; the path is as long as the part is deep). A stage that does
+/// not fit is the ordinary case in the apps, which try their stages in
+/// order, so that is what a stage that does not fit costs beyond what it
+/// cost before: a few words of memory for each part it is nested in.
+///
+/// The public planning entries `Child::query_at` and `Child::plan_width`
+/// return this failure's error and nothing else, so what they return, and
+/// when, is what it was before failures had paths.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failure {
+    error: AllocationError,
+    path: Vec<usize>,
+}
+
+impl Failure {
+    /// The engine's error: what was required and what there was, or that
+    /// the input was invalid.
+    pub fn error(&self) -> AllocationError {
+        self.error
+    }
+
+    /// The path from the part that was asked to the part the failure is
+    /// about; empty for the part asked.
+    pub fn path(&self) -> &[usize] {
+        &self.path
+    }
+
+    /// The error alone, as `Child::query_at` returns it.
+    pub fn into_error(self) -> AllocationError {
+        self.error
+    }
+
+    /// This failure, received from the child at `step` (its index among a
+    /// composition's declared children, or 0 for a frame's content), as the
+    /// part planning that child passes it up: the child's step in front.
+    pub(crate) fn in_child(mut self, step: usize) -> Self {
+        self.path.insert(0, step);
+        self
+    }
+}
+
+/// A failure of the part being planned itself: the error, with an empty
+/// path. Every check that fails with an `AllocationError` makes one so,
+/// the `?` on the engine's own checks included.
+impl From<AllocationError> for Failure {
+    fn from(error: AllocationError) -> Self {
+        Self {
+            error,
+            path: Vec::new(),
+        }
+    }
+}
+
+/// A failure of the part making the check: `required` does not fit in
+/// `available`. A check about one of the part's children gives the child's
+/// step to it (`Failure::in_child`).
+pub(crate) fn no_fit(required: f32, available: f32) -> Failure {
+    AllocationError::NoFit {
+        required,
+        available,
+    }
+    .into()
+}
+
 impl<'a, H: Host> Child<'a, H> {
     /// Allocate first, then measure leaves at their allocated width with
     /// unbounded height. Thus a clipped height can never certify a fit. A
     /// useful minimum narrower than intrinsic width must be explicitly
     /// declared.
+    ///
+    /// The error is the one `query_at_blaming` finds, without the part it
+    /// is about.
     // Planning makes the plan; a host that binds it to the parts it came
     // from does so once it is finished, on the plan this returns.
     pub fn query_at(
@@ -124,8 +227,26 @@ impl<'a, H: Host> Child<'a, H> {
         context: &H::Context,
         available: Size,
     ) -> Result<Plan, AllocationError> {
+        self.query_at_blaming(level, context, available)
+            .map_err(Failure::into_error)
+    }
+
+    /// Plan this child at `level` in `available`, as `query_at` does, and
+    /// when it does not fit, say which part the failure is about
+    /// ([`Failure`]): the same plan, or the same error with its path.
+    ///
+    /// The room, the root's measurement and the root's floor of width are
+    /// checked here, before anything is planned, and each is about the
+    /// part asked: a room that is not a size, a measurement that is not a
+    /// valid size, a floor wider than the room.
+    pub fn query_at_blaming(
+        &self,
+        level: Level,
+        context: &H::Context,
+        available: Size,
+    ) -> Result<Plan, Failure> {
         if !valid_available(available) {
-            return Err(AllocationError::InvalidInput);
+            return Err(AllocationError::InvalidInput.into());
         }
         if self.is_hidden(level) {
             return Ok(Plan::hidden());
@@ -142,7 +263,7 @@ impl<'a, H: Host> Child<'a, H> {
         } else {
             allocated
         };
-        self.plan_width(level, context, width, available.height)
+        self.plan_blaming(level, context, width, available.height)
     }
 
     /// Plan this child in `width` × `height`, as its parent does. A child
@@ -156,7 +277,64 @@ impl<'a, H: Host> Child<'a, H> {
         width: f32,
         height: f32,
     ) -> Result<Plan, AllocationError> {
+        self.plan_blaming(level, context, width, height)
+            .map_err(Failure::into_error)
+    }
+
+    /// `plan_width` with the failure's path: how a composition plans its
+    /// children, and puts the child's step in front of what fails there.
+    pub(crate) fn plan_blaming(
+        &self,
+        level: Level,
+        context: &H::Context,
+        width: f32,
+        height: f32,
+    ) -> Result<Plan, Failure> {
         self.plan_inheriting(level, context, width, height, 0.0)
+    }
+
+    /// The part at `path` below this one at `level`: the part a failure's
+    /// path names (`Failure::path`), or a node's in a walk of a plan
+    /// (`Child::walk`). An empty path is this part; a step that names no
+    /// part (an index past a composition's children, a step other than 0
+    /// into a frame, any step into a leaf) gives none.
+    ///
+    /// Descending is by the rule plans follow: a step into a composition is
+    /// its child at that index among the declared children, a step into a
+    /// frame is its content, and a step into forms is taken in the form
+    /// selected at `level` (through forms of forms, to the first that is
+    /// not), since the family adds no step of its own. Nothing here asks
+    /// whether a part is hidden: a path from a failure or a walk never
+    /// passes through a hidden part.
+    ///
+    /// The part at the end of the path is the one its parent placed there.
+    /// Where that is a family, it is the family, not its form: the two make
+    /// one node, and the family's form is one step of reading away
+    /// (`Kind::Forms`, `Forms::select`), while from the form there is no
+    /// way back to the family. A host whose note is on a family finds it
+    /// here; one whose note is on the form looks inside.
+    ///
+    /// When the part named carries no note of use to the host, the nearest
+    /// part that does is the one to name: inside it first, through the
+    /// forms it holds to the form selected, which made the same node; then
+    /// up the path, the part at the path one step shorter and the forms
+    /// it holds, and so on to this part (an empty path). The charts name
+    /// the nearest part that has an identity, and with none at all the
+    /// failure is the whole tree's.
+    pub fn part_at(&self, level: Level, path: &[usize]) -> Option<&Self> {
+        let mut part = self;
+        for &step in path {
+            let mut holder = part;
+            while let Kind::Forms(forms) = &holder.kind {
+                holder = forms.select(level);
+            }
+            part = match &holder.kind {
+                Kind::Composition(composition) => composition.children.get(step)?,
+                Kind::Frame(frame) if step == 0 => &frame.content,
+                Kind::Frame(_) | Kind::Leaf(_) | Kind::Forms(_) => return None,
+            };
+        }
+        Some(part)
     }
 
     /// The growth in height in effect for this child, when the forms or the
@@ -189,6 +367,13 @@ impl<'a, H: Host> Child<'a, H> {
 
     /// Plan this child in `width` × `height`, with the growth in height the
     /// forms or the frame round it pass it (`grow_height_in_effect`).
+    ///
+    /// Every check made here is about this child, so each fails with an
+    /// empty path (`Failure`): its mark of invalid, its fixed size, a leaf's
+    /// size against its offer, and its plan against its room. What fails
+    /// below comes up with its path as it was made: a composition's and a
+    /// frame's planning give it their child's step, and forms add none, the
+    /// form being planned in the family's place.
     pub(crate) fn plan_inheriting(
         &self,
         level: Level,
@@ -196,22 +381,19 @@ impl<'a, H: Host> Child<'a, H> {
         width: f32,
         height: f32,
         inherited_growth: f32,
-    ) -> Result<Plan, AllocationError> {
+    ) -> Result<Plan, Failure> {
         if self.is_hidden(level) {
             return Ok(Plan::hidden());
         }
         if self.invalid {
             // An invalid child has no plan (`invalid_unless`).
-            return Err(AllocationError::InvalidInput);
+            return Err(AllocationError::InvalidInput.into());
         }
         let fixed = self.sharing.fixed.sizes(|| self.query(level, context));
         let width = match fixed.width {
             Some(requested) => {
                 if width + FIT_EPSILON < requested {
-                    return Err(AllocationError::NoFit {
-                        required: requested,
-                        available: width,
-                    });
+                    return Err(no_fit(requested, width));
                 }
                 requested
             }
@@ -220,10 +402,7 @@ impl<'a, H: Host> Child<'a, H> {
         let height = match fixed.height {
             Some(requested) => {
                 if height + FIT_EPSILON < requested {
-                    return Err(AllocationError::NoFit {
-                        required: requested,
-                        available: height,
-                    });
+                    return Err(no_fit(requested, height));
                 }
                 requested
             }
@@ -268,21 +447,15 @@ impl<'a, H: Host> Child<'a, H> {
                     offer(Size::new(width, offered_height)),
                 );
                 if !finite_size(size) {
-                    return Err(AllocationError::InvalidInput);
+                    return Err(AllocationError::InvalidInput.into());
                 }
                 if size.width > width + FIT_EPSILON {
-                    return Err(AllocationError::NoFit {
-                        required: size.width,
-                        available: width,
-                    });
+                    return Err(no_fit(size.width, width));
                 }
                 // Never true for an ordinary leaf: its size is finite here and
                 // its offer unbounded.
                 if size.height > offered_height + FIT_EPSILON {
-                    return Err(AllocationError::NoFit {
-                        required: size.height,
-                        available: offered_height,
-                    });
+                    return Err(no_fit(size.height, offered_height));
                 }
                 // The parent reserves the allocated width even for shrink content.
                 let mut plan = Plan::leaf(Size::new(width, size.height));
@@ -315,16 +488,10 @@ impl<'a, H: Host> Child<'a, H> {
             plan.minimum_height = plan.minimum_height.max(requested);
         }
         if plan.size.width > width + FIT_EPSILON {
-            return Err(AllocationError::NoFit {
-                required: plan.size.width,
-                available: width,
-            });
+            return Err(no_fit(plan.size.width, width));
         }
         if plan.size.height > height + FIT_EPSILON {
-            return Err(AllocationError::NoFit {
-                required: plan.size.height,
-                available: height,
-            });
+            return Err(no_fit(plan.size.height, height));
         }
         Ok(plan)
     }

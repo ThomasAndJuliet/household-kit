@@ -3,10 +3,10 @@
 //! How a row, a column and a wrap are measured and planned.
 
 use crate::part::{Child, Composition};
-use crate::plan::{Placed, Plan};
+use crate::plan::{Failure, Placed, Plan, no_fit};
 use crate::{
-    AllocationError, Arrangement, FIT_EPSILON, Host, Level, Measured, Point, Size, WidthCapacity,
-    allocate_one, allocate_with_growth, validate_measurement,
+    Arrangement, FIT_EPSILON, Host, Level, Measured, Point, Size, WidthCapacity, allocate_one,
+    allocate_with_growth, validate_measurement,
 };
 
 /// A visible child of a composition, as planning carries it: its index among
@@ -93,13 +93,22 @@ impl<'a, H: Host> Composition<'a, H> {
 
     /// Plan the arrangement in `width` × `height`. Each arrangement has a
     /// function of its own, over the helpers below for what they share.
+    ///
+    /// Which part a failure is about (`Failure`). A check on one child (its
+    /// measurement is not a valid size; its floor is wider than the room)
+    /// is that child's, and so is whatever fails while the child is planned,
+    /// which comes up with the child's index in front. A check on the
+    /// children together (the gaps are wider than the room; the room cannot
+    /// hold every child's floor, as `allocate_with_growth` finds for a row's
+    /// widths, a column's heights or a wrap's rows) is the composition's
+    /// own, with an empty path.
     pub(crate) fn plan(
         &self,
         level: Level,
         context: &H::Context,
         width: f32,
         height: f32,
-    ) -> Result<Plan, AllocationError> {
+    ) -> Result<Plan, Failure> {
         match self.arrangement {
             Arrangement::Column => self.plan_column(level, context, width, height),
             Arrangement::Row => self.plan_row(level, context, width, height),
@@ -111,12 +120,12 @@ impl<'a, H: Host> Composition<'a, H> {
     /// among the declared children and its measurement at the level. Every
     /// one is measured first, and then each measurement is checked in order,
     /// so the first that is not a valid size fails the plan with
-    /// `InvalidInput` before anything is allocated.
+    /// `InvalidInput` before anything is allocated: that child's failure.
     fn measure_visible(
         &self,
         level: Level,
         context: &H::Context,
-    ) -> Result<Vec<Visible<'_, 'a, H>>, AllocationError> {
+    ) -> Result<Vec<Visible<'_, 'a, H>>, Failure> {
         let visible: Vec<_> = self
             .children
             .iter()
@@ -124,8 +133,8 @@ impl<'a, H: Host> Composition<'a, H> {
             .filter(|(_, child)| !child.is_hidden(level))
             .map(|(index, child)| (index, child, child.query(level, context)))
             .collect();
-        for (_, _, size) in &visible {
-            validate_measurement(*size)?;
+        for (index, _, size) in &visible {
+            validate_measurement(*size).map_err(|error| Failure::from(error).in_child(*index))?;
         }
         Ok(visible)
     }
@@ -159,23 +168,25 @@ impl<'a, H: Host> Composition<'a, H> {
         context: &H::Context,
         width: f32,
         height: f32,
-    ) -> Result<Plan, AllocationError> {
+    ) -> Result<Plan, Failure> {
         let visible = self.measure_visible(level, context)?;
         let mut result = Plan::leaf(Size::ZERO);
         let gap = self.spacing * visible.len().saturating_sub(1) as f32;
         if gap > height {
-            return Err(AllocationError::NoFit {
-                required: gap,
-                available: height,
-            });
+            return Err(no_fit(gap, height));
         }
         let mut proposals = Vec::new();
         for (index, child, measured) in visible {
-            let allocated =
-                allocate_one(width, child.width_capacity(measured), child.sharing.grow)?;
-            let geometry = child.plan_width(level, context, allocated, f32::INFINITY)?;
+            // The child's width alone: its floor against the column's width.
+            let allocated = allocate_one(width, child.width_capacity(measured), child.sharing.grow)
+                .map_err(|error| Failure::from(error).in_child(index))?;
+            let geometry = child
+                .plan_blaming(level, context, allocated, f32::INFINITY)
+                .map_err(|failure| failure.in_child(index))?;
             proposals.push((index, child, allocated, geometry));
         }
+        // The children's heights together against the room: a shortage here
+        // is the column's own (`Failure`).
         let heights = allocate_with_growth(
             height - gap,
             &proposals
@@ -196,7 +207,9 @@ impl<'a, H: Host> Composition<'a, H> {
             proposals.into_iter().zip(heights)
         {
             let geometry = if (allocated_height - proposal.size.height).abs() > FIT_EPSILON {
-                child.plan_width(level, context, allocated, allocated_height)?
+                child
+                    .plan_blaming(level, context, allocated, allocated_height)
+                    .map_err(|failure| failure.in_child(index))?
             } else {
                 proposal
             };
@@ -240,15 +253,12 @@ impl<'a, H: Host> Composition<'a, H> {
         context: &H::Context,
         width: f32,
         height: f32,
-    ) -> Result<Plan, AllocationError> {
+    ) -> Result<Plan, Failure> {
         let visible = self.measure_visible(level, context)?;
-        for (_, child, measured) in &visible {
+        for (index, child, measured) in &visible {
             let minimum = child.width_capacity(*measured).least();
             if minimum > width + FIT_EPSILON {
-                return Err(AllocationError::NoFit {
-                    required: minimum,
-                    available: width,
-                });
+                return Err(no_fit(minimum, width).in_child(*index));
             }
         }
         let mut result = Plan::leaf(Size::ZERO);
@@ -291,7 +301,7 @@ impl<'a, H: Host> Composition<'a, H> {
         context: &H::Context,
         width: f32,
         height: f32,
-    ) -> Result<Plan, AllocationError> {
+    ) -> Result<Plan, Failure> {
         let visible = self.measure_visible(level, context)?;
         // `row` is the row being filled, with `used` its width so far; it
         // joins `rows` when the next child does not fit beside it, and after
@@ -302,10 +312,7 @@ impl<'a, H: Host> Composition<'a, H> {
         for (index, child, measured) in visible {
             let minimum = child.width_capacity(measured).least();
             if minimum > width + FIT_EPSILON {
-                return Err(AllocationError::NoFit {
-                    required: minimum,
-                    available: width,
-                });
+                return Err(no_fit(minimum, width).in_child(index));
             }
             if !row.is_empty() && used + self.spacing + minimum > width + FIT_EPSILON {
                 rows.push(std::mem::take(&mut row));
@@ -342,13 +349,11 @@ impl<'a, H: Host> Composition<'a, H> {
         if result.size.height > height + FIT_EPSILON {
             let gap = self.spacing * result.rows.len().saturating_sub(1) as f32;
             if gap > height {
-                return Err(AllocationError::NoFit {
-                    required: gap,
-                    available: height,
-                });
+                return Err(no_fit(gap, height));
             }
             // No placement's plan has changed since `row_extents` was
-            // recorded.
+            // recorded. The rows together against the room: a shortage here
+            // is the wrap's own.
             let heights =
                 allocate_with_growth(height - gap, &row_extents, &vec![0.0; row_extents.len()])?;
             let mut y = 0.0;
@@ -359,8 +364,10 @@ impl<'a, H: Host> Composition<'a, H> {
             for (row, row_height) in result.rows.iter().zip(heights) {
                 for (placed, child) in placements.by_ref().take(row.len()) {
                     if placed.plan.size.height > row_height + FIT_EPSILON {
-                        placed.plan =
-                            child.plan_width(level, context, placed.plan.size.width, row_height)?;
+                        let index = placed.index;
+                        placed.plan = child
+                            .plan_blaming(level, context, placed.plan.size.width, row_height)
+                            .map_err(|failure| failure.in_child(index))?;
                     }
                     placed.position.y = y + (row_height - placed.plan.size.height) / 2.0;
                 }
@@ -395,26 +402,27 @@ impl<'a, H: Host> Composition<'a, H> {
         width: f32,
         offered_height: f32,
         result: &mut Plan,
-    ) -> Result<RowExtent, AllocationError> {
+    ) -> Result<RowExtent, Failure> {
         let gap = self.spacing * row.len().saturating_sub(1) as f32;
         if gap > width {
-            return Err(AllocationError::NoFit {
-                required: gap,
-                available: width,
-            });
+            return Err(no_fit(gap, width));
         }
         let capacities: Vec<_> = row
             .iter()
             .map(|(_, child, measured)| child.width_capacity(*measured))
             .collect();
         let grows: Vec<_> = row.iter().map(|(_, child, _)| child.sharing.grow).collect();
+        // The row's children together against its width: a shortage here is
+        // the composition's own.
         let widths = allocate_with_growth(width - gap, &capacities, &grows)?;
         let start = result.children.len();
         let mut row_width = 0.0;
         let mut row_height: f32 = 0.0;
         let mut row_minimum_height: f32 = 0.0;
         for ((index, child, _), allocated) in row.into_iter().zip(widths) {
-            let geometry = child.plan_width(level, context, allocated, offered_height)?;
+            let geometry = child
+                .plan_blaming(level, context, allocated, offered_height)
+                .map_err(|failure| failure.in_child(index))?;
             if result.children.len() > start {
                 row_width += self.spacing;
             }
