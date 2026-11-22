@@ -3,7 +3,7 @@
 use super::*;
 use crate::layout::{Level, child};
 use cosmic::iced::advanced::renderer::{Headless, Renderer as _};
-use cosmic::iced::{Color, Font, Pixels, Point};
+use cosmic::iced::{Color, Point};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -17,12 +17,7 @@ enum Message {
 }
 
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless tiny-skia renderer")
+    crate::test_fonts::renderer().expect("headless tiny-skia renderer")
 }
 fn key(named: keyboard::key::Named) -> Event {
     Event::Keyboard(keyboard::Event::KeyPressed {

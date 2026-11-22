@@ -11,15 +11,15 @@ use crate::menu_parts::{self, RowContour, RowSlots, TooltipChoice};
 #[cfg(test)]
 use crate::popup::Anchors;
 use crate::popup::{FocusTarget, Panel};
+use crate::spacing::Kind;
 use crate::window::Owner;
+use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::advanced::widget::Id;
 use cosmic::iced::{Length, Rectangle, Size};
 use cosmic::{Element, widget};
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-
-const PADDING: f32 = 4.0;
 
 /// How long the pointer rests on a submenu's row before its submenu opens
 /// beside the menu, as desktop menus do (GTK's default menu popup delay):
@@ -35,26 +35,160 @@ pub fn row_key(label: &str, folder: bool, occurrence: usize) -> usize {
     hash.finish() as usize
 }
 
+/// The first word of `text`, up to eight characters: the readable run that
+/// the minimum width probe measures.
+fn first_run(text: &str) -> String {
+    text.split_whitespace()
+        .next()
+        .unwrap_or(text)
+        .chars()
+        .take(8)
+        .collect()
+}
+
 pub fn row_id(namespace: &str, path: &[usize], key: usize) -> Id {
     Id::new(format!("{namespace}:menu:{path:?}:{key}"))
 }
 
-fn keys<M>(menu: &Menu<M>) -> Vec<usize> {
+/// The key of a [`Row::More`] within its menu. A More is told apart from an
+/// item or a folder of the same label by its kind, from another More of its
+/// label by occurrence order, and from the Mores of a More's own rows by
+/// `parent`, the key of the More that reveals them.
+pub fn more_key(parent: Option<usize>, label: &str, occurrence: usize) -> usize {
+    let mut hash = DefaultHasher::new();
+    ("more", parent, label, occurrence).hash(&mut hash);
+    hash.finish() as usize
+}
+
+/// The disclosure key the window chain stores for the More row `key` of the
+/// menu at `path`: the chain's expansion set is one flat set for the whole
+/// session, so the key names the menu (its path of submenu keys, which
+/// includes the keys of inline submenus) as well as the row. Two Mores of the
+/// same label in different submenus, or in a submenu and its parent, never
+/// share a state. Ask the chain with
+/// [`ChainRequest::is_expanded`](crate::window::ChainRequest::is_expanded).
+pub fn expansion_key(path: &[usize], more: usize) -> usize {
+    let mut hash = DefaultHasher::new();
+    ("disclosure", path, more).hash(&mut hash);
+    hash.finish() as usize
+}
+
+/// One level of a menu as drawn: its rows with the expanded disclosures
+/// replaced by the rows they reveal, and each row's key.
+struct Shown<'m, M: Clone> {
+    menu: std::borrow::Cow<'m, Menu<M>>,
+    keys: Vec<usize>,
+}
+
+/// Which disclosures a drawing of a level shows expanded
+#[derive(Clone, Copy, PartialEq)]
+enum Reveal {
+    /// The session's: the chain's disclosure state
+    State,
+    /// All of them: what the width probe measures, so the card is as wide as
+    /// its widest revealed row before anything is expanded
+    All,
+    /// None: the collapsed card, which the width probe also measures
+    None,
+}
+
+/// The rows of `menu` that a drawing shows, with their keys. A row's key is
+/// its [`row_key`] among the shown rows; a More keeps the [`more_key`] it has
+/// among the rows that declare it, so that revealing a sibling never changes
+/// which disclosure a row names.
+fn level<'m, M: Clone>(
+    menu: &'m Menu<M>,
+    path: &[usize],
+    expanded: &dyn Fn(usize) -> bool,
+    all: bool,
+) -> Shown<'m, M> {
+    fn walk<M: Clone>(
+        rows: &[Row<M>],
+        parent: Option<usize>,
+        path: &[usize],
+        expanded: &dyn Fn(usize) -> bool,
+        all: bool,
+        out: &mut Vec<(Row<M>, Option<usize>)>,
+    ) {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for row in rows {
+            let Row::More(label, rest) = row else {
+                out.push((row.clone(), None));
+                continue;
+            };
+            let occurrence = counts.entry(label.as_str()).or_insert(0);
+            let key = more_key(parent, label, *occurrence);
+            *occurrence += 1;
+            if all || expanded(expansion_key(path, key)) {
+                walk(rest.rows(), Some(key), path, expanded, all, out);
+            } else {
+                out.push((row.clone(), Some(key)));
+            }
+        }
+    }
+    if !menu.rows().iter().any(|row| matches!(row, Row::More(_, _))) {
+        return Shown {
+            keys: keys(menu.rows(), &vec![None; menu.rows().len()]),
+            menu: std::borrow::Cow::Borrowed(menu),
+        };
+    }
+    let mut shown = Vec::new();
+    walk(menu.rows(), None, path, expanded, all, &mut shown);
+    let more: Vec<_> = shown.iter().map(|(_, key)| *key).collect();
+    let rows: Vec<_> = shown.into_iter().map(|(row, _)| row).collect();
+    let keys = keys(&rows, &more);
+    let menu = rows.into_iter().fold(Menu::new(), Menu::push);
+    Shown {
+        menu: std::borrow::Cow::Owned(menu),
+        keys,
+    }
+}
+
+/// The keys of `rows`; `more` gives the key already fixed for a More row.
+fn keys<M>(rows: &[Row<M>], more: &[Option<usize>]) -> Vec<usize> {
     let mut counts = HashMap::new();
-    menu.rows()
-        .iter()
-        .map(|row| {
+    rows.iter()
+        .zip(more)
+        .map(|(row, fixed)| {
             let (label, folder) = match row {
                 Row::Item(item) => (item.label.as_str(), false),
                 Row::Folder(label, _) => (label.as_str(), true),
+                Row::More(label, _) => (label.as_str(), false),
                 Row::Divider => ("", false),
             };
+            if let Some(key) = fixed {
+                return *key;
+            }
             let occurrence = counts.entry((label, folder)).or_insert(0);
             let key = row_key(label, folder, *occurrence);
             *occurrence += 1;
             key
         })
         .collect()
+}
+
+/// Whether a menu has a [`Row::More`] anywhere, submenus included
+fn has_more<M>(menu: &Menu<M>) -> bool {
+    menu.rows().iter().any(|row| match row {
+        Row::More(_, _) => true,
+        Row::Folder(_, submenu) => has_more(submenu),
+        _ => false,
+    })
+}
+
+/// The session's disclosure state, as the window chain holds it
+struct Disclosure<M> {
+    expanded: std::collections::BTreeSet<usize>,
+    on_expand: Rc<dyn Fn(usize, bool) -> M>,
+}
+
+impl<M> Clone for Disclosure<M> {
+    fn clone(&self) -> Self {
+        Self {
+            expanded: self.expanded.clone(),
+            on_expand: self.on_expand.clone(),
+        }
+    }
 }
 
 pub struct MenuSurface<M> {
@@ -70,6 +204,9 @@ pub struct MenuSurface<M> {
     root_region: Option<Rectangle>,
     initial_target: Option<usize>,
     hover: Option<Hover<M>>,
+    disclosure: Option<Disclosure<M>>,
+    /// The spacing steps the rows and card are built with
+    spacing: Spacing,
 }
 
 /// Opening submenus beside their menu by the pointer's resting on a row
@@ -120,7 +257,44 @@ impl<M: Clone + 'static> MenuSurface<M> {
             root_region: None,
             initial_target: None,
             hover: None,
+            disclosure: None,
+            spacing: cosmic::theme::spacing(),
         }
+    }
+
+    /// With the given spacing steps instead of the theme's, for tests of
+    /// the other densities
+    #[cfg(test)]
+    pub(crate) fn in_spacing(mut self, spacing: Spacing) -> Self {
+        self.spacing = spacing;
+        self
+    }
+
+    /// The session's disclosure state for the menu's [`Row::More`] rows:
+    /// `expanded` is the set of expansion keys the window chain holds
+    /// ([`ChainRequest::expanded`](crate::window::ChainRequest::expanded)) and
+    /// `on_expand` makes the message that expands or collapses one
+    /// ([`ChainRequest::on_expand`](crate::window::ChainRequest::on_expand)).
+    ///
+    /// How a More flows through the window: the row is drawn as a Tertiary
+    /// action; activating it publishes `on_expand(expansion_key(path, key),
+    /// true)`, which is not an action of the menu, so the chain stays open; the
+    /// window stores the key in the chain's session state and rebuilds the
+    /// panels with it in `expanded`; the menu then shows the hidden rows where
+    /// the More was. The focused row's identity is gone with the More row, and
+    /// the host keeps the keyboard's position in the list, which is now the
+    /// first revealed row. Without this call a menu shows every disclosure
+    /// expanded, since nothing could ever expand it.
+    pub fn disclosures(
+        mut self,
+        expanded: std::collections::BTreeSet<usize>,
+        on_expand: impl Fn(usize, bool) -> M + 'static,
+    ) -> Self {
+        self.disclosure = Some(Disclosure {
+            expanded,
+            on_expand: Rc::new(on_expand),
+        });
+        self
     }
 
     /// The root panel's keyboard target on opening is its row `index` (a
@@ -219,25 +393,31 @@ impl<M: Clone + 'static> MenuSurface<M> {
             emphasized_body: self.emphasized_body,
             preferred_width: self.preferred_width,
             hover: self.hover.clone(),
+            disclosure: self.disclosure.clone(),
+            reveal: Reveal::State,
+            spacing: self.spacing,
         };
         let mut definitions = vec![(content.clone(), source, self.candidates)];
         let mut stale = None;
         for key in path {
-            let submenu = content
-                .menu
-                .rows()
-                .iter()
-                .zip(keys(&content.menu))
-                .find_map(|(row, candidate)| {
-                    if key != candidate {
-                        return None;
-                    }
-                    if let Row::Folder(_, submenu) = row {
-                        Some(submenu.clone())
-                    } else {
-                        None
-                    }
-                });
+            let submenu = {
+                let level = content.level();
+                level
+                    .menu
+                    .rows()
+                    .iter()
+                    .zip(level.keys.iter())
+                    .find_map(|(row, candidate)| {
+                        if key != *candidate {
+                            return None;
+                        }
+                        if let Row::Folder(_, submenu) = row {
+                            Some(submenu.clone())
+                        } else {
+                            None
+                        }
+                    })
+            };
             let source = row_id(&content.namespace, &content.path, key);
             content.path.push(key);
             let Some(submenu) = submenu else {
@@ -312,9 +492,31 @@ struct Content<M> {
     emphasized_body: Option<fn(String) -> Element<'static, M>>,
     preferred_width: Option<f32>,
     hover: Option<Hover<M>>,
+    disclosure: Option<Disclosure<M>>,
+    reveal: Reveal,
+    spacing: Spacing,
 }
 
 impl<M: Clone + 'static> Content<M> {
+    /// This menu's rows as drawn now, with their keys
+    fn level(&self) -> Shown<'_, M> {
+        let expanded = |key: usize| {
+            self.disclosure
+                .as_ref()
+                .is_none_or(|disclosure| disclosure.expanded.contains(&key))
+        };
+        match self.reveal {
+            Reveal::State => level(&self.menu, &self.path, &expanded, false),
+            Reveal::All => level(&self.menu, &self.path, &expanded, true),
+            Reveal::None => level(&self.menu, &self.path, &|_| false, false),
+        }
+    }
+    /// The messages of a More row `key` of this menu: expand it
+    fn expand(&self, key: usize) -> Option<M> {
+        let disclosure = self.disclosure.as_ref()?;
+        Some((disclosure.on_expand)(expansion_key(&self.path, key), true))
+    }
+
     /// What activating submenu row `path`, open or not, does: open it, or
     /// close it; but one the pointer's resting opened stays open, as the
     /// click that usually follows the resting means to open it
@@ -331,13 +533,21 @@ impl<M: Clone + 'static> Content<M> {
         }
     }
     fn panel<'a>(&self, source: Id, candidates: Vec<AnchorCandidate>) -> Panel<'a, M> {
-        let keys = keys(&self.menu);
-        let targets = crate::menu::ordered(self.menu.rows())
+        let level = self.level();
+        let keys = &level.keys;
+        let targets = crate::menu::ordered(level.menu.rows())
             .into_iter()
             .flatten()
             .filter_map(|at| {
                 let id = row_id(&self.namespace, &self.path, keys[at]);
-                match &self.menu.rows()[at] {
+                match &level.menu.rows()[at] {
+                    Row::More(_, _) => {
+                        let target = FocusTarget::new(id);
+                        Some(match self.expand(keys[at]) {
+                            Some(expand) => target.activate(expand),
+                            None => target,
+                        })
+                    }
                     Row::Item(item) => {
                         let target = FocusTarget::new(id);
                         Some(if item.disabled_reason.is_none() {
@@ -370,15 +580,50 @@ impl<M: Clone + 'static> Content<M> {
         .focus_first()
     }
 
+    /// The width probes' contents: a menu with disclosures is measured fully
+    /// revealed and fully collapsed (the More row's own label counts), so its
+    /// width is the same before and after any expansion (rule 8b)
+    fn probe_variants(&self) -> Vec<Self> {
+        if !has_more(&self.menu) {
+            return vec![self.clone()];
+        }
+        [Reveal::All, Reveal::None]
+            .into_iter()
+            .map(|reveal| Self {
+                reveal,
+                ..self.clone()
+            })
+            .collect()
+    }
+
+    /// The widest of the probes' `minimum` or preferred widths
+    fn probed_width(
+        variants: &[Self],
+        embedded: usize,
+        minimum: bool,
+        level: Level,
+        renderer: &cosmic::Renderer,
+    ) -> f32 {
+        variants
+            .iter()
+            .map(|content| {
+                content
+                    .probe(embedded, minimum)
+                    .query(level, renderer)
+                    .preferred
+                    .width
+            })
+            .fold(0.0, f32::max)
+    }
+
     fn stages<'a>(&self, embedded: usize) -> Vec<Stage<'a, M>> {
         let normal = self.clone();
         let scrolling = self.clone();
-        let minimum = self.clone();
-        let preferred = self.clone();
-        let scroll_minimum = self.clone();
-        let scroll_preferred = self.clone();
-        let scroll_minimum_for_width = self.clone();
         let preferred_width = self.preferred_width;
+        let variants = Rc::new(self.probe_variants());
+        let (preferred, minimum) = (variants.clone(), variants.clone());
+        let (scroll_minimum, scroll_preferred, scroll_minimum_for_width) =
+            (variants.clone(), variants.clone(), variants);
         vec![
             Stage::new(
                 Level::Preferred,
@@ -389,18 +634,10 @@ impl<M: Clone + 'static> Content<M> {
                         move |_| {
                             let child = layout::child(move |_| normal.view(false, embedded))
                                 .minimum_width_with(move |level, renderer, _| {
-                                    preferred
-                                        .probe(embedded, false)
-                                        .query(level, renderer)
-                                        .preferred
-                                        .width
+                                    Self::probed_width(&preferred, embedded, false, level, renderer)
                                 })
                                 .minimum_width_with(move |level, renderer, _| {
-                                    minimum
-                                        .probe(embedded, true)
-                                        .query(level, renderer)
-                                        .preferred
-                                        .width
+                                    Self::probed_width(&minimum, embedded, true, level, renderer)
                                 })
                                 // Repeated native chrome subtraction must
                                 // not offer a fraction below a text run.
@@ -426,28 +663,34 @@ impl<M: Clone + 'static> Content<M> {
                                 move |_| scrolling.view(true, embedded),
                                 move |level, renderer| {
                                     Size::new(
-                                        scroll_minimum
-                                            .probe(embedded, true)
-                                            .query(level, renderer)
-                                            .preferred
-                                            .width,
+                                        Self::probed_width(
+                                            &scroll_minimum,
+                                            embedded,
+                                            true,
+                                            level,
+                                            renderer,
+                                        ),
                                         72.0,
                                     )
                                 },
                             )
                             .minimum_width_with(move |level, renderer, _| {
-                                scroll_preferred
-                                    .probe(embedded, false)
-                                    .query(level, renderer)
-                                    .preferred
-                                    .width
+                                Self::probed_width(
+                                    &scroll_preferred,
+                                    embedded,
+                                    false,
+                                    level,
+                                    renderer,
+                                )
                             })
                             .minimum_width_with(move |level, renderer, _| {
-                                scroll_minimum_for_width
-                                    .probe(embedded, true)
-                                    .query(level, renderer)
-                                    .preferred
-                                    .width
+                                Self::probed_width(
+                                    &scroll_minimum_for_width,
+                                    embedded,
+                                    true,
+                                    level,
+                                    renderer,
+                                )
                             })
                             .round_width_up();
                             let child = if let Some(width) = preferred_width {
@@ -469,9 +712,10 @@ impl<M: Clone + 'static> Content<M> {
     /// shortened in the selected composition; native text wraps at that width.
     fn probe(&self, embedded: usize, minimum: bool) -> layout::Child<'static, M> {
         let content = self.clone();
+        let spacing = self.spacing;
         layout::child(move |_| {
             widget::container(content.rows_view(embedded, Some(minimum), false))
-                .padding([PADDING, 0.0])
+                .padding(Kind::Popup.inset(&spacing))
                 .into()
         })
     }
@@ -501,7 +745,7 @@ impl<M: Clone + 'static> Content<M> {
             body
         };
         let card = widget::container(inner)
-            .padding([PADDING, 0.0])
+            .padding(Kind::Popup.inset(&self.spacing))
             .width(Length::Fill)
             .max_width(if self.preferred_width.is_some() {
                 f32::INFINITY
@@ -517,21 +761,43 @@ impl<M: Clone + 'static> Content<M> {
     }
 
     fn rows_view(&self, embedded: usize, probe: Option<bool>, framed: bool) -> Element<'static, M> {
-        let rows = self.menu.rows();
-        let keys = keys(&self.menu);
-        let frame_inset = crate::look::Look::normal()
-            .border(&cosmic::theme::active(), crate::look::State::Focused)
-            .width;
+        let shown = self.level();
+        let rows = shown.menu.rows();
+        let keys = &shown.keys;
+        // The columns are reserved for every row the menu can reveal, so
+        // expanding a disclosure moves no label sideways
+        let all = Self {
+            reveal: Reveal::All,
+            ..self.clone()
+        };
+        let all = all.level();
+        let slot_rows = all.menu.rows();
+        let frame_inset = menu_parts::frame_inset();
+        // A menu row's padding. The title of an inline frame stands on the
+        // frame's own edge, so it takes the frame's inset (its thickest
+        // border, drawn inside the edge) in its padding; the rows under it
+        // get that inset from the frame, and their labels line up
+        let row_padding = |inline: bool| {
+            let mut padding = Kind::MenuRow.inset(&self.spacing);
+            if inline {
+                padding.left += frame_inset;
+                padding.right += frame_inset;
+            }
+            padding
+        };
+        // The frame an open folder draws inside the menu stands one `space_xxs`
+        // from the menu's rows: the menu's own detail, not a kind
+        let nested_inset = f32::from(self.spacing.space_xxs);
         let slots = RowSlots {
-            mark_width: rows
+            mark_width: slot_rows
                 .iter()
                 .any(|row| matches!(row, Row::Item(item) if item.mark.is_some() && !(self.choice_body.is_some() && matches!(item.mark, Some(MenuMark::Radio(_))))))
                 .then_some(crate::menu::ICON_SIZE),
-            icon_width: rows
+            icon_width: slot_rows
                 .iter()
                 .any(|row| matches!(row, Row::Item(item) if item.icon.is_some()))
                 .then_some(crate::menu::ICON_SIZE),
-            gap: 8.0,
+            gap: Kind::MenuRow.gap(&self.spacing),
         };
         let mut groups = vec![Vec::new()];
         let ordered = crate::menu::ordered(rows);
@@ -553,9 +819,18 @@ impl<M: Clone + 'static> Content<M> {
                 RowContour::Rounded
             };
             let selected = matches!(&rows[at], Row::Item(item) if matches!(item.mark, Some(MenuMark::Radio(true))));
-            let (mark, icon, label, trailing, message, reason, folder, destructive) = match &rows
-                [at]
-            {
+            let (
+                mark,
+                icon,
+                label,
+                trailing,
+                message,
+                reason,
+                folder,
+                destructive,
+                detail,
+                tertiary,
+            ) = match &rows[at] {
                 Row::Divider => {
                     groups.push(Vec::new());
                     continue;
@@ -596,6 +871,8 @@ impl<M: Clone + 'static> Content<M> {
                         item.disabled_reason.clone(),
                         false,
                         item.destructive,
+                        item.detail.clone(),
+                        false,
                     )
                 }
                 Row::Folder(label, _) => {
@@ -620,9 +897,34 @@ impl<M: Clone + 'static> Content<M> {
                         None,
                         true,
                         false,
+                        None,
+                        false,
                     )
                 }
+                Row::More(label, _) => (
+                    None,
+                    None,
+                    label.clone(),
+                    None,
+                    self.expand(keys[at]),
+                    None,
+                    false,
+                    false,
+                    None,
+                    true,
+                ),
             };
+            // A row's second line is shortened in the minimum probe as its
+            // label is (a readable run, so the narrowest width still shows a
+            // word of it), but never in the preferred probe or the drawn row,
+            // where it is measured whole and wraps rather than clips.
+            let detail = detail.map(|detail| {
+                if probe == Some(true) {
+                    first_run(&detail)
+                } else {
+                    detail
+                }
+            });
             let label = if probe == Some(true) {
                 label
                     .split_whitespace()
@@ -640,6 +942,17 @@ impl<M: Clone + 'static> Content<M> {
                 } else {
                     widget::text(label).font(cosmic::font::semibold()).into()
                 }
+            } else if tertiary {
+                // Rule 7: no box, accent, underlined, bold. The span is not a
+                // link: the whole row is the button, and the row is what
+                // activates. The click handler only gives the text its type.
+                let noop = (self.on_path)(self.path.clone());
+                cosmic::iced::widget::rich_text([cosmic::iced::widget::span(label)
+                    .underline(true)
+                    .font(cosmic::font::bold())])
+                .size(14.0)
+                .on_link_click(move |()| noop.clone())
+                .into()
             } else if selected {
                 if let Some(body) = self.choice_body.or(self.emphasized_body) {
                     body(label)
@@ -655,6 +968,16 @@ impl<M: Clone + 'static> Content<M> {
                     .into()
             } else {
                 (self.style.body)(label)
+            };
+            let label = match detail {
+                Some(detail) => widget::column::with_children(vec![
+                    label,
+                    widget::text::caption(detail)
+                        .shaping(cosmic::iced::advanced::text::Shaping::Advanced)
+                        .into(),
+                ])
+                .into(),
+                None => label,
             };
             if probe.is_some() {
                 let mut pieces: Vec<Element<'static, M>> = Vec::new();
@@ -672,25 +995,33 @@ impl<M: Clone + 'static> Content<M> {
                     cell.push(trailing);
                 }
                 pieces.push(widget::row(cell).spacing(slots.gap).into());
-                let row = widget::container(widget::row(pieces).spacing(slots.gap))
-                    .padding([6.0, 8.0 + if inline { frame_inset } else { 0.0 }])
-                    .into();
+                let row = widget::container(menu_parts::at_least_a_line(
+                    widget::row(pieces).spacing(slots.gap).into(),
+                    Length::Shrink,
+                ))
+                .padding(row_padding(inline))
+                .into();
                 if inline && let Row::Folder(_, submenu) = &rows[at] {
                     let mut child = self.clone();
                     child.menu = submenu.clone();
                     child.path.push(keys[at]);
                     let group =
                         menu_parts::inline_group(row, child.rows_view(embedded - 1, probe, true));
-                    groups
-                        .last_mut()
-                        .unwrap()
-                        .push(inset_group(group, framed, last == Some(at)));
+                    groups.last_mut().unwrap().push(inset_group(
+                        group,
+                        framed,
+                        last == Some(at),
+                        nested_inset,
+                    ));
                 } else {
                     groups.last_mut().unwrap().push(row);
                 }
                 continue;
             }
-            let row = menu_parts::row_content(slots, mark, icon, label, trailing);
+            let row = menu_parts::at_least_a_line(
+                menu_parts::row_content(slots, mark, icon, label, trailing),
+                Length::Fill,
+            );
             let activation = message.clone();
             let selected_style = selected;
             let row = menu_parts::action_row_with(
@@ -698,9 +1029,11 @@ impl<M: Clone + 'static> Content<M> {
                 TooltipChoice::NoTooltip,
                 message,
                 move |button| {
-                    button
-                        .padding([6.0, 8.0 + if inline { frame_inset } else { 0.0 }])
-                        .class(menu_parts::row_style(selected_style, branch_open, contour))
+                    button.padding(row_padding(inline)).class(if tertiary {
+                        menu_parts::tertiary_row_style(contour)
+                    } else {
+                        menu_parts::row_style(selected_style, branch_open, contour)
+                    })
                 },
             );
             let target = menu_parts::row_target(id.clone(), row, contour);
@@ -744,10 +1077,12 @@ impl<M: Clone + 'static> Content<M> {
                 child.path.push(keys[at]);
                 let group =
                     menu_parts::inline_group(row, child.rows_view(embedded - 1, probe, true));
-                groups
-                    .last_mut()
-                    .unwrap()
-                    .push(inset_group(group, framed, last == Some(at)));
+                groups.last_mut().unwrap().push(inset_group(
+                    group,
+                    framed,
+                    last == Some(at),
+                    nested_inset,
+                ));
             } else {
                 groups.last_mut().unwrap().push(row);
             }
@@ -778,7 +1113,9 @@ impl<M: Clone + 'static> Content<M> {
                 path.push(key);
                 Some((hover.on_path)(path))
             }
-            Row::Item(_) if branch.is_some() => Some((self.on_path)(self.path.clone())),
+            Row::Item(_) | Row::More(_, _) if branch.is_some() => {
+                Some((self.on_path)(self.path.clone()))
+            }
             _ => None,
         }
     }
@@ -887,11 +1224,11 @@ fn inset_group<M: 'static>(
     group: Element<'static, M>,
     nested: bool,
     last: bool,
+    inset: f32,
 ) -> Element<'static, M> {
     if !nested {
         return group;
     }
-    let inset = f32::from(cosmic::theme::active().cosmic().spacing.space_xxs);
     widget::container(group)
         .width(Length::Fill)
         .padding(cosmic::iced::Padding {
@@ -948,12 +1285,7 @@ mod presentation_tests {
     }
     #[test]
     fn family_preference_is_overrideable_without_changing_the_useful_floor() {
-        use cosmic::iced::advanced::renderer::Headless;
-        use cosmic::iced::{Font, Pixels};
-        let renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("native renderer");
+        let renderer = crate::test_fonts::renderer().expect("native renderer");
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -969,6 +1301,7 @@ mod presentation_tests {
                 mark: None,
                 disabled_reason: None,
                 destructive: false,
+                detail: None,
             });
             let surface = MenuSurface::new(
                 menu,
@@ -1005,14 +1338,9 @@ mod presentation_tests {
     fn choice_rows_drop_radio_gutters_but_preserve_checkbox_alignment() {
         use cosmic::iced::advanced::{
             Layout, Widget,
-            renderer::Headless,
             widget::{Operation, Tree},
         };
-        use cosmic::iced::{Font, Pixels};
-        let renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("native renderer");
+        let renderer = crate::test_fonts::renderer().expect("native renderer");
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -1043,6 +1371,7 @@ mod presentation_tests {
                 mark: Some(mark),
                 disabled_reason: None,
                 destructive: false,
+                detail: None,
             };
             let menu = Menu::new()
                 .item(item("First", MenuMark::Radio(true)))
@@ -1097,7 +1426,7 @@ mod presentation_tests {
             renderer::Headless,
             widget::{Operation, Tree},
         };
-        use cosmic::iced::{Color, Event, Font, Pixels};
+        use cosmic::iced::{Color, Event};
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -1123,13 +1452,7 @@ mod presentation_tests {
             }
         }
         let render = |choice_rows: bool| {
-            let mut renderer =
-                cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-                    Font::default(),
-                    Pixels(14.0),
-                    Some("tiny-skia"),
-                ))
-                .expect("native renderer");
+            let mut renderer = crate::test_fonts::renderer().expect("native renderer");
             let item = crate::menu::MenuItem {
                 label: "A selected menu choice".into(),
                 message: (),
@@ -1138,6 +1461,7 @@ mod presentation_tests {
                 mark: Some(MenuMark::Radio(true)),
                 disabled_reason: None,
                 destructive: false,
+                detail: None,
             };
             let mut surface = MenuSurface::new(
                 Menu::new().item(item),
@@ -1213,7 +1537,7 @@ mod presentation_tests {
             renderer::Headless,
             widget::{Operation, Tree},
         };
-        use cosmic::iced::{Color, Event, Font, Pixels};
+        use cosmic::iced::{Color, Event};
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -1237,13 +1561,7 @@ mod presentation_tests {
             }
         }
         let paint = |mut element: Element<'static, ()>| {
-            let mut renderer =
-                cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-                    Font::default(),
-                    Pixels(14.0),
-                    Some("tiny-skia"),
-                ))
-                .expect("native renderer");
+            let mut renderer = crate::test_fonts::renderer().expect("native renderer");
             let mut tree = Tree::new(element.as_widget());
             let size = Size::new(200.0, 120.0);
             let node = element.as_widget_mut().layout(
@@ -1289,6 +1607,7 @@ mod presentation_tests {
             mark: Some(MenuMark::Radio(true)),
             disabled_reason: None,
             destructive: false,
+            detail: None,
         };
         let content = Content {
             menu: Menu::new().folder("Effort", Menu::new().item(item)),
@@ -1304,6 +1623,9 @@ mod presentation_tests {
             emphasized_body: Some(semibold),
             preferred_width: None,
             hover: None,
+            disclosure: None,
+            reveal: Reveal::State,
+            spacing: cosmic::theme::spacing(),
         };
         let (side, side_labels) = paint(content.rows_view(0, None, false));
         let reference = menu_parts::action_row_with(
@@ -1317,11 +1639,9 @@ mod presentation_tests {
             TooltipChoice::NoTooltip,
             Some(()),
             |button| {
-                button.padding([6.0, 8.0]).class(menu_parts::row_style(
-                    false,
-                    true,
-                    RowContour::Rounded,
-                ))
+                button
+                    .padding(Kind::MenuRow.inset(&Spacing::default()))
+                    .class(menu_parts::row_style(false, true, RowContour::Rounded))
             },
         );
         let (reference, reference_labels) = paint(reference);
@@ -1356,8 +1676,8 @@ mod presentation_tests {
 
     #[test]
     fn a_scrolling_menus_scrollbar_does_not_cover_the_inline_frames_right_border() {
+        use cosmic::iced::Color;
         use cosmic::iced::advanced::{Layout, mouse, renderer::Headless, widget::Tree};
-        use cosmic::iced::{Color, Font, Pixels};
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -1372,6 +1692,7 @@ mod presentation_tests {
             mark: None,
             disabled_reason: None,
             destructive: false,
+            detail: None,
         };
         let mut inner = Menu::new();
         for n in 0..12 {
@@ -1391,12 +1712,12 @@ mod presentation_tests {
             emphasized_body: None,
             preferred_width: None,
             hover: None,
+            disclosure: None,
+            reveal: Reveal::State,
+            spacing: cosmic::theme::spacing(),
         };
         let (w, h) = (240usize, 150usize);
-        let mut renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("native renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("native renderer");
         let theme = cosmic::Theme::light();
         let mut element = content.view(true, 1);
         let mut tree = Tree::new(element.as_widget());
@@ -1436,14 +1757,9 @@ mod presentation_tests {
 
     #[test]
     fn real_menu_box_queries_and_commits_native_geometry() {
-        use cosmic::iced::advanced::{
-            Widget, layout as native_layout, renderer::Headless, widget::Tree,
-        };
-        use cosmic::iced::{Font, Pixels, Size};
-        let mut renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("headless renderer");
+        use cosmic::iced::Size;
+        use cosmic::iced::advanced::{Widget, layout as native_layout, widget::Tree};
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let item = crate::menu::MenuItem {
             label: "Open item".into(),
             message: (),
@@ -1452,6 +1768,7 @@ mod presentation_tests {
             mark: Some(MenuMark::Check(true)),
             disabled_reason: None,
             destructive: false,
+            detail: None,
         };
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
@@ -1587,13 +1904,10 @@ mod presentation_tests {
     }
     #[test]
     fn menu_action_activates_after_native_view_rebuilds() {
+        use cosmic::iced::Event;
         use cosmic::iced::advanced::mouse;
-        use cosmic::iced::advanced::{
-            renderer::Headless,
-            widget::{Operation, operation},
-        };
+        use cosmic::iced::advanced::widget::{Operation, operation};
         use cosmic::iced::runtime::{UserInterface, user_interface};
-        use cosmic::iced::{Event, Font, Pixels};
         struct Find {
             id: Id,
             bounds: Option<Rectangle>,
@@ -1628,6 +1942,7 @@ mod presentation_tests {
                 mark: None,
                 disabled_reason: None,
                 destructive: false,
+                detail: None,
             };
             let trigger = anchors.trigger("source", widget::space().width(40).height(20));
             let panels = MenuSurface::new(
@@ -1641,10 +1956,7 @@ mod presentation_tests {
                 .anchors(anchors.clone())
                 .chain(panels)
         }
-        let mut renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let size = Size::new(400.0, 300.0);
         let mut ui = UserInterface::build(
@@ -1683,3 +1995,9 @@ mod presentation_tests {
 #[cfg(test)]
 #[path = "menu_adaptive_tests.rs"]
 mod adaptive_tests;
+#[cfg(test)]
+#[path = "menu_detail_tests.rs"]
+mod detail_tests;
+#[cfg(test)]
+#[path = "menu_more_tests.rs"]
+mod more_tests;

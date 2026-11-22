@@ -141,8 +141,8 @@ impl<M> Widget<M, Theme, Renderer> for Vertical<'_, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmic::iced::advanced::{clipboard, renderer::Headless};
-    use cosmic::iced::{Font, Pixels, Point};
+    use cosmic::iced::Point;
+    use cosmic::iced::advanced::clipboard;
     use cosmic::widget;
 
     fn wheel(y: f32) -> Event {
@@ -151,12 +151,7 @@ mod tests {
         })
     }
     fn exercise(nested: bool, event: Event, at: Point) -> Vec<()> {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .unwrap();
+        let renderer = crate::test_fonts::renderer().unwrap();
         let child: Element<'static, ()> = if nested {
             widget::scrollable(widget::Space::new().width(100).height(500))
                 .width(100)

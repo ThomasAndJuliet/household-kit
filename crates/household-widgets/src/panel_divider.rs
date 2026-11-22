@@ -259,8 +259,6 @@ impl<'a, Message: 'a> From<PanelDivider<'a, Message>> for Element<'a, Message> {
 mod tests {
     use super::*;
     use crate::panel_resize::Dimension;
-    use cosmic::iced::advanced::renderer::Headless;
-    use cosmic::iced::{Font, Pixels};
 
     fn boundary() -> Boundary {
         Boundary {
@@ -271,12 +269,7 @@ mod tests {
         }
     }
     fn renderer() -> Renderer {
-        cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .unwrap()
+        crate::test_fonts::renderer().unwrap()
     }
     fn dispatch(
         widget: &mut PanelDivider<'_, Change>,

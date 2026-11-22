@@ -9,6 +9,7 @@ use cosmic::iced::advanced::widget::{Id, Operation, Tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector};
 use cosmic::{Element, Renderer, Theme, widget};
+use std::rc::Rc;
 
 type ReportPreparation<'a, Message> =
     dyn Fn(Option<crate::layout::SourceReport>) -> crate::layout::Child<'a, Message> + 'a;
@@ -183,9 +184,12 @@ pub(crate) fn hover_with_report_owned<'a, Message: 'a>(
         Ident::new(source),
         None,
         target,
-        Vec::new(),
-        Some(prepare),
-        candidates,
+        Parts {
+            stages: Vec::new(),
+            prepare: Some(prepare),
+            candidates,
+            claims: None,
+        },
     )
 }
 
@@ -223,9 +227,12 @@ pub(crate) fn hover_owned<'a, Message: 'a>(
         Ident::new(source),
         None,
         target,
-        stages,
-        None,
-        candidates,
+        Parts {
+            stages,
+            prepare: None,
+            candidates,
+            claims: None,
+        },
     )
 }
 
@@ -233,25 +240,44 @@ pub(crate) fn hover_owned<'a, Message: 'a>(
 /// has no declared identity: the tree retains one for it, renewed when
 /// `content_key` (a hash of what the box says) changes. The owner may be
 /// outside any window, in which case nothing shows.
+///
+/// `claims`, where given, says whether the box may take the hover now. A box
+/// that does not claim leaves the hover to whatever else is under the
+/// pointer (an outer tooltip, the button's own): the cut-label tooltip
+/// takes it only while the label is cut
 pub(crate) fn retained_hover_box<'a, Message: 'a>(
     content_key: u64,
     at: Option<f32>,
     target: Element<'a, Message>,
     content: crate::layout::Child<'a, Message>,
     candidates: Vec<AnchorCandidate>,
+    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
 ) -> Element<'a, Message> {
     hover_with_preparation(
         Owner::Legacy,
         Ident::new(Id::unique()),
         Some((content_key, at)),
         target,
-        vec![Stage::new(
-            crate::layout::Level::Preferred,
-            surface_box(content),
-        )],
-        None,
-        candidates,
+        Parts {
+            stages: vec![Stage::new(
+                crate::layout::Level::Preferred,
+                surface_box(content),
+            )],
+            prepare: None,
+            candidates,
+            claims,
+        },
     )
+}
+
+/// What a hover box shows and when: the stages it can take, how it is
+/// prepared from the source's report, where it may open, and whether it
+/// claims the hover
+struct Parts<'a, Message> {
+    stages: Vec<Stage<'a, Message>>,
+    prepare: Option<Box<ReportPreparation<'a, Message>>>,
+    candidates: Vec<AnchorCandidate>,
+    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
 }
 
 fn hover_with_preparation<'a, Message: 'a>(
@@ -259,11 +285,16 @@ fn hover_with_preparation<'a, Message: 'a>(
     source: Ident,
     retained: Option<(u64, Option<f32>)>,
     target: Element<'a, Message>,
-    stages: Vec<Stage<'a, Message>>,
-    prepare: Option<Box<ReportPreparation<'a, Message>>>,
-    candidates: Vec<AnchorCandidate>,
+    parts: Parts<'a, Message>,
 ) -> Element<'a, Message> {
+    let Parts {
+        stages,
+        prepare,
+        candidates,
+        claims,
+    } = parts;
     let card = Hover {
+        claims,
         content: target,
         source: source.clone(),
         owner: owner.clone(),
@@ -281,6 +312,8 @@ fn hover_with_preparation<'a, Message: 'a>(
 }
 
 struct Hover<'a, Message> {
+    /// Whether the box takes the hover now; `None`: always
+    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
     content: Element<'a, Message>,
     source: Ident,
     owner: Owner,
@@ -316,10 +349,12 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Hover<'a, Message> {
         if let Some(anchors) = self.owner.resolve() {
             let source = self.source.get();
             let was = anchors.hover_is_owner(&source);
+            let claims = self.claims.as_ref().is_none_or(|claims| claims());
             // A redraw, layout or keystroke cannot let a stationary pointer take
             // ownership back from a deliberate keyboard target.
             if matches!(event, Event::Mouse(mouse::Event::CursorMoved { .. })) {
-                if cursor.is_over(layout.bounds())
+                if claims
+                    && cursor.is_over(layout.bounds())
                     && cursor.position().is_some_and(|p| viewport.contains(p))
                 {
                     anchors.claim_hover(&source);
@@ -358,7 +393,8 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Hover<'a, Message> {
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let anchors = self.owner.resolve();
         let source = self.source.get();
-        if let Some(anchors) = &anchors {
+        let claims = self.claims.as_ref().is_none_or(|claims| claims());
+        if let Some(anchors) = anchors.as_ref().filter(|_| claims) {
             let mut focus = crate::popup::FocusProbe::default();
             self.content.as_widget_mut().operate(
                 &mut tree.children[0],
@@ -487,18 +523,12 @@ impl<'a, Message: 'a> overlay::Overlay<Message, Theme, Renderer> for Card<'_, 'a
 mod tests {
     use super::*;
     use crate::layout::{Alignment, Level, Side, child};
-    use cosmic::iced::advanced::renderer::Headless;
     use cosmic::iced::runtime::{UserInterface, user_interface};
-    use cosmic::iced::{Font, Pixels, Point, window};
+    use cosmic::iced::{Point, window};
 
     #[test]
     fn disabled_target_can_claim_hover_without_capturing_a_click() {
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let id = Id::unique();
         let target = cosmic::iced::widget::button(cosmic::iced::widget::text("Disabled"));
@@ -556,14 +586,69 @@ mod tests {
         );
         assert!(messages.is_empty());
     }
+    /// A box with a `claims` condition takes the hover only while it holds:
+    /// the cut-label tooltip, uncut, leaves the pointer to what else is under
+    /// it (an outer tooltip, the button's own)
+    #[test]
+    fn a_box_that_does_not_claim_leaves_the_hover_alone() {
+        let hover_of = |cut: bool| {
+            let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
+            let anchors = Anchors::default();
+            let id = Id::unique();
+            let flag = Rc::new(std::cell::Cell::new(cut));
+            let claims: Rc<dyn Fn() -> bool> = Rc::new({
+                let flag = flag.clone();
+                move || flag.get()
+            });
+            let card = hover_with_preparation(
+                Owner::Anchors(anchors.clone()),
+                Ident::new(id.clone()),
+                None,
+                cosmic::iced::widget::button(cosmic::iced::widget::text("Label")).into(),
+                Parts {
+                    stages: vec![Stage::new(
+                        Level::Preferred,
+                        child(|_| widget::text("Whole label").into()),
+                    )],
+                    prepare: None,
+                    candidates: vec![AnchorCandidate::new(Side::Below, Alignment::Start)],
+                    claims: Some(claims),
+                },
+            );
+            let mut ui = UserInterface::build(
+                crate::popup::host(card).anchors(anchors.clone()),
+                Size::new(300.0, 200.0),
+                user_interface::Cache::new(),
+                &mut renderer,
+            );
+            let cursor = mouse::Cursor::Available(Point::new(5.0, 5.0));
+            let mut clipboard = cosmic::iced::advanced::clipboard::Null;
+            let mut messages: Vec<()> = Vec::new();
+            for event in [
+                Event::Window(window::Event::RedrawRequested(std::time::Instant::now())),
+                Event::Mouse(mouse::Event::CursorMoved {
+                    position: Point::new(5.0, 5.0),
+                }),
+            ] {
+                ui.update(
+                    &[event],
+                    cursor,
+                    &mut renderer,
+                    &mut clipboard,
+                    &mut messages,
+                );
+            }
+            (anchors.hovered(), id)
+        };
+        let (hovered, id) = hover_of(true);
+        assert_eq!(hovered, Some(id), "cut: it takes the hover");
+        let (hovered, _) = hover_of(false);
+        assert_eq!(hovered, None, "uncut: it does not");
+    }
+
     #[test]
     fn moving_between_sources_transfers_the_single_owner() {
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let first = Id::unique();
         let second = Id::unique();
@@ -620,12 +705,7 @@ mod tests {
 
     #[test]
     fn opening_the_source_suppresses_its_hover() {
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let id = Id::unique();
         let target = hover(
@@ -688,12 +768,7 @@ mod tests {
                 self.0 += 1;
             }
         }
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let id = Id::unique();
         let mut stages: Vec<Stage<'_, ()>> = Vec::new();
@@ -756,16 +831,9 @@ mod text_presentation_tests {
     }
     #[test]
     fn wrapping_text_resolves_and_commits_the_same_narrow_geometry() {
-        use cosmic::iced::advanced::{
-            Widget, layout as native_layout, renderer::Headless, widget::Tree,
-        };
-        use cosmic::iced::{Font, Pixels, Size};
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        use cosmic::iced::Size;
+        use cosmic::iced::advanced::{Widget, layout as native_layout, widget::Tree};
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let content: crate::layout::Child<'_, ()> = text_box(
             "A full explanation with enough words to wrap into several lines at a narrow width."
                 .into(),
@@ -810,16 +878,9 @@ mod text_presentation_tests {
     }
     #[test]
     fn surface_preserves_nested_minimum_and_reserves_padding_and_shadow() {
-        use cosmic::iced::advanced::{
-            Widget, layout as native_layout, renderer::Headless, widget::Tree,
-        };
-        use cosmic::iced::{Font, Pixels, Size};
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        use cosmic::iced::Size;
+        use cosmic::iced::advanced::{Widget, layout as native_layout, widget::Tree};
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let content: crate::layout::Child<'_, ()> = crate::layout::row_child(
             vec![
                 crate::layout::child(|_| widget::space().width(100).height(20).into())
@@ -882,8 +943,6 @@ mod report_preparation_tests {
         self, Alignment, InformationId, InformationLoss, Level, LossKind, Side, SourceId,
         SourceReport,
     };
-    use cosmic::iced::advanced::renderer::Headless;
-    use cosmic::iced::{Font, Pixels};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -898,12 +957,7 @@ mod report_preparation_tests {
     }
 
     fn renderer() -> Renderer {
-        cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer")
+        crate::test_fonts::renderer().expect("headless renderer")
     }
 
     fn source_target(anchors: &Anchors, id: Id, snapshot: Snapshot) -> Element<'static, ()> {
@@ -967,6 +1021,7 @@ mod report_preparation_tests {
         inputs: Inputs,
     ) -> Hover<'static, ()> {
         Hover {
+            claims: None,
             content: source_target(anchors, source.clone(), snapshot),
             source: Ident::new(source),
             owner: Owner::Anchors(anchors.clone()),

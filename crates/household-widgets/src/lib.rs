@@ -12,6 +12,15 @@
 //!   Shift+click, and its selection drawn dimmed while unfocused.
 //! - [`short_text_box`]: the one-line text box, [`ShortTextBox`] and its
 //!   widget, sharing the text box's history, steps and keys.
+//! - [`button`]: the one button every look is, [`Button`]: Primary,
+//!   Secondary, Tertiary, Destructive and Icon differ only in paint and
+//!   side inset; height, width in its largest state, the compact square,
+//!   washes, fade, keyboard-target outline and tooltip are shared.
+//! - [`segmented`]: the segmented control, [`Segmented`]: the Button repeated in
+//!   its Segment look, the parent joining the corners and drawing the bar.
+//! - [`spacing`]: the padding system: each container has a kind, and the
+//!   kind decides its inset and the gap between its children, in COSMIC's
+//!   density-following steps. The widgets here use no pixel values for layout.
 //! - [`dropdown`]: a dropdown whose list is the window's one menu chain.
 //! - [`scroll_list`]: a scrollable list of boxes, optionally virtualised,
 //!   keeping the reader's place.
@@ -25,6 +34,7 @@
 
 #[macro_use]
 mod forward;
+pub mod button;
 #[cfg(feature = "content")]
 pub mod content;
 pub mod dropdown;
@@ -33,6 +43,7 @@ pub mod focus_regions;
 pub mod history;
 pub mod hover_card;
 mod kept;
+mod keyboard_target;
 pub mod layout;
 mod level;
 pub mod list_navigation;
@@ -51,29 +62,34 @@ pub mod popup;
 mod scroll;
 pub mod scroll_intent;
 pub mod scroll_list;
+pub mod segmented;
 pub mod short_text_box;
+pub mod spacing;
+pub mod split_button;
 mod switch;
 pub mod tab_strip;
 pub mod tabs;
 
 pub mod text_box;
-mod text_button;
 pub mod text_menu;
 mod tooltip;
 pub mod window;
 
+pub use button::{Button, ButtonLook, button_height};
 pub use history::{Turn, Undoable};
 pub use level::{LEVEL_CAP, Level};
 pub use look::Look;
 pub use scroll::horizontal_scroll;
+pub use segmented::{Part, Segmented};
 pub use short_text_box::{PasswordBox, ShortTextBox};
+pub use split_button::SplitButton;
 pub use switch::{SwitchItem, Toggler, muted_colours, switch, switch_maybe, toggler};
 pub use text_box::TextBox;
-pub use text_button::{BUTTON_HEIGHT, Tertiary, TextButton, button_padding};
 pub use text_menu::{TextMenu, TextMenuHistory, TextMenuWords, text_menu};
 pub(crate) use tooltip::native_tooltip;
 pub use tooltip::{
-    TIP_WIDTH, Tip, link_tooltip, tip_bubble, tip_padding, tooltip_at, tooltip_unless, tooltip_with,
+    TIP_WIDTH, Tip, link_tooltip, tip_bubble, tip_padding, tooltip_at, tooltip_unless,
+    tooltip_when_cut, tooltip_with,
 };
 
 #[cfg(test)]
@@ -86,6 +102,8 @@ mod panel_fixture_tests;
 mod short_text_box_tests;
 #[cfg(test)]
 mod switch_tests;
+#[cfg(test)]
+pub(crate) mod test_fonts;
 #[cfg(test)]
 mod text_box_tests;
 

@@ -23,6 +23,11 @@ pub fn reserve_shadow<'a, Message: 'a>(
     })
 }
 
+/// The surface's border, drawn inside its edge: it takes no layout room, and
+/// the surface's inset ([`crate::spacing::Kind::Popup`]) is at least this, so
+/// a row's wash never paints over it
+pub const BORDER: f32 = 1.0;
+
 pub fn style() -> cosmic::theme::Container<'static> {
     cosmic::theme::Container::custom(|theme| {
         let cosmic = theme.cosmic();
@@ -35,7 +40,7 @@ pub fn style() -> cosmic::theme::Container<'static> {
             )),
             border: cosmic::iced::Border {
                 color: cosmic::iced::Color { a: 0.12, ..on },
-                width: 1.0,
+                width: BORDER,
                 radius: cosmic.corner_radii.radius_s.into(),
             },
             shadow: cosmic::iced::Shadow {

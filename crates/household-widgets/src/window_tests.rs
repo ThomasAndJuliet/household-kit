@@ -9,12 +9,11 @@ use crate::layout::{Alignment, AnchorCandidate, Attachment, Level, Side, Stage, 
 use crate::list_navigation::Axis;
 use crate::popup::{FocusProbe, FocusTarget, INFORMATION_DELAY, focus_target};
 use crate::scroll_list::{Estimate, EstimateClass, ItemSpec, ListAction, ListChild, ListState};
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::operation;
 use cosmic::iced::event::Status;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
-use cosmic::iced::{Font, Pixels, Point, keyboard, window as native_window};
+use cosmic::iced::{Point, keyboard, window as native_window};
 use cosmic::widget::{self, tooltip::Position};
 use std::time::Instant;
 
@@ -269,12 +268,7 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut app = Self {
             window: WindowUi::new(),
             scene: Scene::new(),
@@ -765,15 +759,32 @@ fn an_earlier_sessions_actions_are_ignored() {
 }
 
 #[test]
+fn a_menus_disclosure_state_flows_through_the_chain() {
+    let mut window: WindowUi<Root> = WindowUi::new();
+    window.open(Root::A, Entry::Pointer);
+    let key =
+        crate::menu_surface::expansion_key(&[], crate::menu_surface::more_key(None, "Rest", 0));
+    assert!(window.chain().unwrap().expanded().is_empty());
+    let expand = window.chain().unwrap().on_expand::<()>()(key, true);
+    let UiEvent::Internal(expand) = expand else {
+        unreachable!()
+    };
+    window.apply(expand);
+    assert!(window.chain().unwrap().expanded().contains(&key));
+    assert!(window.chain().unwrap().is_expanded(key));
+    window.close();
+    window.open(Root::A, Entry::Pointer);
+    assert!(
+        window.chain().unwrap().expanded().is_empty(),
+        "the menu opens collapsed every time"
+    );
+}
+
+#[test]
 #[cfg(debug_assertions)]
 #[should_panic(expected = "outside any window root")]
 fn a_declaration_outside_any_window_root_is_a_construction_error() {
-    let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless renderer");
+    let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
     let content: Element<'_, Message> = info("stray");
     let mut ui = UserInterface::build(
         content,

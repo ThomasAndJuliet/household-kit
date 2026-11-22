@@ -4,9 +4,8 @@ use super::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::operation::Focusable;
-use cosmic::iced::{Font, Pixels, Point, keyboard};
+use cosmic::iced::{Point, keyboard};
 
 const VIEWPORT: Rectangle = Rectangle {
     x: 0.0,
@@ -133,12 +132,7 @@ fn capacity_sharing_uses_original_rates_clamps_and_protects_zero_weight() {
 }
 
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless tiny-skia renderer")
+    crate::test_fonts::renderer().expect("headless tiny-skia renderer")
 }
 
 // Rebuild exactly at the native seam: extract named states before diff/layout,

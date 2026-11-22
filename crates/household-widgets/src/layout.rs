@@ -2211,16 +2211,9 @@ mod presentation_tests;
 #[cfg(test)]
 mod renderer_minimum_tests {
     use super::*;
-    use cosmic::iced::advanced::renderer::Headless;
-    use cosmic::iced::{Font, Pixels};
 
     fn renderer() -> Renderer {
-        cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless tiny-skia renderer")
+        crate::test_fonts::renderer().expect("headless tiny-skia renderer")
     }
 
     fn floor(size: f32) -> Child<'static, ()> {

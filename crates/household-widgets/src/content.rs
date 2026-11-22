@@ -275,6 +275,9 @@ impl<T> ShapingCache<T> {
 /// A key for everything shaping depends on besides the caller's own:
 /// the fonts loaded, the interface fonts and the error tone
 pub(crate) fn shaping_key(hasher: &mut impl Hasher) {
+    // The tests shape in Open Sans, as the apps do (`test_fonts`)
+    #[cfg(test)]
+    crate::test_fonts::pin();
     font_system()
         .read()
         .map(|fonts| fonts.version())
@@ -294,6 +297,8 @@ pub(crate) fn shape_spans(
     width: Option<f32>,
     wrap: cosmic_text::Wrap,
 ) -> Buffer {
+    #[cfg(test)]
+    crate::test_fonts::pin();
     let mut fonts = font_system().write().unwrap_or_else(|p| p.into_inner());
     let mut buffer = Buffer::new_empty(metrics);
     buffer.set_size(width, None);

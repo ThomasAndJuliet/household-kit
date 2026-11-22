@@ -24,14 +24,21 @@
 
 use crate::layout::{self as engine, Child, Level, Stage};
 use crate::menu_parts::RowContour;
+use crate::spacing::control_height;
 use crate::window::{Entry, Toggle, UiEvent};
 use cosmic::iced::advanced::widget::{Id, Operation, Tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector};
 use cosmic::{Element, Renderer, Theme};
 
-/// A title's padding, as a header's menu titles have it
-const TITLE_PADDING: [f32; 2] = [4.0, 12.0];
+/// A title's padding: a title is a control, so none above and below (it is
+/// [`control_height`] tall, its label centred) and `space_xs` at the sides.
+/// The shared button's looks give `space_s` or `space_xxs` and none of them
+/// draws a menu title (libcosmic's `MenuRoot` paint), so the title keeps the
+/// `space_xs` it has always had
+fn title_padding(spacing: &cosmic::cosmic_theme::Spacing) -> cosmic::iced::Padding {
+    cosmic::iced::Padding::from([0.0, f32::from(spacing.space_xs)])
+}
 
 /// A window's menu bar: its menus' titles and the roots they open, in order.
 pub struct MenuBar<R> {
@@ -165,9 +172,14 @@ fn title<'a, M: 'a, R: Clone + PartialEq + 'static>(
     // libcosmic's menu-title button: its label in the colour of the
     // header's controls (the accent, faded when the window is behind
     // others), as the libcosmic bar drew it
-    let button = cosmic::widget::button::custom(body(label))
-        .padding(TITLE_PADDING)
-        .class(cosmic::theme::Button::MenuRoot)
+    let spacing = cosmic::theme::spacing();
+    let centred = cosmic::widget::container(body(label))
+        .height(Length::Fill)
+        .align_y(cosmic::iced::alignment::Vertical::Center);
+    let button = cosmic::widget::button::custom(header_coloured(centred.into()))
+        .padding(title_padding(&spacing))
+        .height(Length::Fixed(control_height(&spacing)))
+        .class(crate::button::unringed(cosmic::theme::Button::MenuRoot))
         .on_press(Toggle);
     let target = crate::popup::focus_target(id.clone(), button)
         .target_border(|theme| RowContour::Rounded.target_border(theme))
@@ -178,6 +190,51 @@ fn title<'a, M: 'a, R: Clone + PartialEq + 'static>(
         switch,
         content: crate::window::trigger(id, root, target),
     })
+}
+
+/// `content` with its text in the colour of the header's controls.
+///
+/// libcosmic's button draws a `MenuRoot` button's text in the *icon* colour
+/// it is given (the header's), but only when the class is exactly
+/// `MenuRoot`; the title wears that class through [`crate::button::unringed`],
+/// a `Custom` class, so that no focus ring is drawn outside the box, and a
+/// `Custom` class draws text in the body-text colour. This hands the
+/// content the icon colour as its text colour, which is what the plain
+/// class does, so the title keeps its colour with no outside ring
+fn header_coloured<'a, M: 'a>(content: Element<'a, M>) -> Element<'a, M> {
+    Element::new(HeaderColoured { content })
+}
+
+struct HeaderColoured<'a, M> {
+    content: Element<'a, M>,
+}
+
+impl<M> Widget<M, Theme, Renderer> for HeaderColoured<'_, M> {
+    forward_widget!(M, Theme, Renderer; children, diff, size, layout, operate, update, mouse_interaction, overlay, drag_destinations, a11y_nodes);
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let style = renderer::Style {
+            text_color: style.icon_color,
+            ..*style
+        };
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            &style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
 }
 
 /// A title: the normal hover wash under the pointer and while its menu is

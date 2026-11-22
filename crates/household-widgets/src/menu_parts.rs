@@ -3,6 +3,7 @@
 //! Composable building blocks for menu contents. State, including expansion and
 //! whether an activation closes a popup, belongs to the application.
 
+use crate::spacing::Kind;
 use cosmic::Element;
 use cosmic::iced::widget::{self, tooltip::Position};
 use cosmic::iced::{Alignment, Length};
@@ -103,6 +104,37 @@ pub fn row_style(
     }))
 }
 
+/// A Tertiary action in a menu's list (the More row): the shared button's
+/// Tertiary paint ([`crate::button`]), its accent text and its wash on hover
+/// and press, as every Tertiary washes (Juliet, 21 Nov 2026, replacing rule
+/// 7's "no hover area"), in the row's contour rather than the button's pill,
+/// as the wash and the row's keyboard outline (rule 6a) share that contour.
+/// The label is drawn underlined and bold by the caller.
+pub fn tertiary_row_style(contour: RowContour) -> cosmic::theme::style::iced::Button {
+    cosmic::theme::style::iced::Button::Custom(Box::new(move |theme, status| {
+        use crate::button::State;
+        use widget::button::{Catalog, Status};
+        let mut style = Catalog::style(theme, &cosmic::theme::style::iced::Button::Text, status);
+        let paint = crate::button::tertiary_paint(
+            match status {
+                Status::Active => State::Rest,
+                Status::Hovered => State::Hovered,
+                Status::Pressed => State::Pressed,
+                Status::Disabled => State::Disabled,
+            },
+            theme,
+        );
+        style.border.radius = contour.radius(theme);
+        style.border_radius = contour.radius(theme);
+        style.background = paint.background.map(Into::into);
+        if let Some(text) = paint.text {
+            style.text_color = text;
+        }
+        style.icon_color = Some(style.text_color);
+        style
+    }))
+}
+
 /// Give a row its native target and its family's dark-grey contour. Disabled
 /// rows use the same target wrapper and omit `on_activate`.
 pub fn row_target<'a, M>(
@@ -113,12 +145,22 @@ pub fn row_target<'a, M>(
     crate::popup::focus_target(id, content).target_border(move |theme| contour.target_border(theme))
 }
 
+/// The inset of an inline disclosure frame: its thickest border
+pub fn frame_inset() -> f32 {
+    crate::look::Look::normal().thickest_border(&cosmic::theme::active())
+}
+
 /// The accepted inline disclosure frame: one outer contour shared by its
 /// title, with the normal focused text-box border around its contents.
+///
+/// The border is drawn inside the frame's edge and takes no layout room.
+/// The frame's inset is measured from its outer edge and is its thickest
+/// border ([`Look::thickest_border`](crate::look::Look::thickest_border),
+/// 2 px), so the contents stand that far in and never meet the border; the
+/// title, which shares the frame's contour, is given the same inset in its
+/// own padding ([`frame_inset`]) so its label lines up with the rows' under it.
 pub fn inline_group<'a, M: 'a>(title: Element<'a, M>, contents: Element<'a, M>) -> Element<'a, M> {
-    let edge = crate::look::Look::normal()
-        .border(&cosmic::theme::active(), crate::look::State::Focused)
-        .width;
+    let edge = frame_inset();
     let contents = widget::container(contents)
         .width(Length::Fill)
         .padding(cosmic::iced::Padding {
@@ -152,9 +194,30 @@ impl Default for RowSlots {
         Self {
             mark_width: None,
             icon_width: None,
-            gap: 8.0,
+            gap: Kind::MenuRow.gap(&cosmic::theme::spacing()),
         }
     }
+}
+
+/// A row's content, at least [`LABEL_LINE`](crate::spacing::LABEL_LINE) tall
+/// and centred in that: with the row's inset above and below
+/// ([`Kind::MenuRow`]) the row is exactly [`control_height`](crate::spacing::control_height)
+/// tall, as every control is, and a row whose content is taller (a detail
+/// line) grows. The label's own line is 19.6 px, so without this a row would
+/// be 31.6.
+pub fn at_least_a_line<'a, M: 'a>(content: Element<'a, M>, width: Length) -> Element<'a, M> {
+    widget::row(vec![
+        // Shrink-wide, not zero-wide: iced's row leaves out a child that is
+        // 0 wide
+        widget::Space::new()
+            .width(Length::Shrink)
+            .height(Length::Fixed(crate::spacing::LABEL_LINE))
+            .into(),
+        content,
+    ])
+    .align_y(cosmic::iced::Alignment::Center)
+    .width(width)
+    .into()
 }
 
 /// Construct the inside of a row. The label and trailing content share one

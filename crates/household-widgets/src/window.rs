@@ -389,6 +389,12 @@ impl<'w, R: 'static> ChainRequest<'w, R> {
     pub fn is_expanded(&self, row: usize) -> bool {
         self.expanded.contains(&row)
     }
+    /// The session's expanded disclosures, as expansion keys
+    /// ([`expansion_key`](crate::menu_surface::expansion_key)), for
+    /// [`MenuSurface::disclosures`](crate::menu_surface::MenuSurface::disclosures).
+    pub fn expanded(&self) -> BTreeSet<usize> {
+        self.expanded.clone()
+    }
     pub fn entry(&self) -> Entry {
         self.entry
     }
@@ -444,6 +450,13 @@ impl<'w, R: 'static> ChainRequest<'w, R> {
             entry,
             declared: None,
         }))
+    }
+    /// The message a menu's disclosure row sends to expand or collapse itself,
+    /// for `MenuSurface::disclosures`: like [`Self::expand`], but owning the
+    /// session, so a surface can hold it.
+    pub fn on_expand<M>(&self) -> impl Fn(usize, bool) -> UiEvent<R, M> + Clone + 'static {
+        let session = self.session;
+        move |row, open| UiEvent::Internal(WindowAction(Internal::Expand { session, row, open }))
     }
     /// The message that expands or collapses the disclosure `row`; it is
     /// session state, gone when the chain closes.

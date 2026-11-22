@@ -8,11 +8,10 @@
 use super::*;
 use crate::menu::{Menu, MenuItem, MenuStyle};
 use crate::popup::{FocusProbe, Panel};
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::operation;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
-use cosmic::iced::{Font, Pixels, Point, keyboard, window as native_window};
+use cosmic::iced::{Point, keyboard, window as native_window};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
@@ -73,6 +72,7 @@ fn item(label: String, row: &str) -> MenuItem<Ev> {
         mark: None,
         disabled_reason: None,
         destructive: false,
+        detail: None,
     }
 }
 
@@ -223,12 +223,7 @@ const SIZE: Size = Size::new(600.0, 500.0);
 
 impl App {
     fn new(rows: Rows) -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut app = Self {
             window: WindowUi::new(),
             rows,

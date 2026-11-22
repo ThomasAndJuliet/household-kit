@@ -4,6 +4,7 @@
 
 use crate::hover_card::{self, TEXT_MIN_WIDTH};
 use crate::layout::{self, Alignment, AnchorCandidate, Side};
+use crate::spacing::Kind;
 use cosmic::iced::Padding;
 use cosmic::widget::{self, tooltip::Position};
 use cosmic::{Element, theme};
@@ -14,8 +15,7 @@ use std::rc::Rc;
 pub const TIP_WIDTH: f32 = 320.0;
 
 pub fn tip_padding() -> Padding {
-    let space = theme::active().cosmic().spacing;
-    Padding::from([space.space_xs, space.space_s])
+    Kind::InformationCard.inset(&theme::spacing())
 }
 
 pub fn tip_bubble<'a, M: 'a>(
@@ -70,13 +70,14 @@ fn adapt<'a, M: 'a>(
     tip: Tip<'a, M>,
     position: Position,
     at: Option<f32>,
-    hidden: bool,
+    hidden: impl Fn() -> bool + 'a,
+    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
 ) -> Element<'a, M> {
     let view = tip.view;
     let child = layout::child(move |_| view())
         .minimum_width(|_, preferred| preferred.width.min(TEXT_MIN_WIDTH))
-        .hidden_when(move |_| hidden);
-    hover_card::retained_hover_box(tip.key, at, content, child, candidates(position))
+        .hidden_when(move |_| hidden());
+    hover_card::retained_hover_box(tip.key, at, content, child, candidates(position), claims)
 }
 
 /// Information about `content` as a tooltip says it.
@@ -85,7 +86,7 @@ pub fn tooltip_with<'a, M: 'a>(
     tip: Tip<'a, M>,
     position: Position,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, None, false)
+    adapt(content.into(), tip, position, None, || false, None)
 }
 
 /// [`tooltip_with`], giving no information while `hidden`. The tree is the
@@ -96,7 +97,34 @@ pub fn tooltip_unless<'a, M: 'a>(
     position: Position,
     hidden: bool,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, None, hidden)
+    adapt(content.into(), tip, position, None, move || hidden, None)
+}
+
+/// [`tooltip_with`] for text that may be cut short: the household's
+/// convention for cut-off text (rules 14-16) is the ellipsis and the whole
+/// text in a tooltip, and *only* when it is cut. `cut` is the flag the
+/// content sets while it is laid out cut (the button's label does), read each
+/// time the tip would show, so a tip is given only while the text is cut.
+pub fn tooltip_when_cut<'a, M: 'a>(
+    content: impl Into<Element<'a, M>>,
+    tip: Tip<'a, M>,
+    position: Position,
+    cut: std::rc::Rc<std::cell::Cell<bool>>,
+) -> Element<'a, M> {
+    // Uncut, the box is not the hover's: it gives the pointer to whatever
+    // else is under it (an outer tooltip), as if it were not there
+    let claims: Rc<dyn Fn() -> bool + 'a> = Rc::new({
+        let cut = cut.clone();
+        move || cut.get()
+    });
+    adapt(
+        content.into(),
+        tip,
+        position,
+        None,
+        move || !cut.get(),
+        Some(claims),
+    )
 }
 
 /// [`tooltip_unless`] about the one place `x` pixels from `content`'s left
@@ -109,7 +137,7 @@ pub fn tooltip_at<'a, M: 'a>(
     x: f32,
     hidden: bool,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, Some(x), hidden)
+    adapt(content.into(), tip, position, Some(x), move || hidden, None)
 }
 
 /// A libcosmic tooltip, for the two sites the window's information cannot
@@ -161,6 +189,19 @@ pub fn link_tooltip<'a, M: 'a>(
 
 #[cfg(test)]
 mod tests {
+    /// Pin (Standard density): an information card is 12 px above and
+    /// below its text and 16 at the sides
+    #[test]
+    fn pin_standard_density_tip_padding() {
+        let standard = cosmic::cosmic_theme::Spacing::default();
+        assert_eq!(standard.space_xs, 12);
+        assert_eq!(standard.space_s, 16);
+        let padding = super::tip_padding();
+        if cosmic::theme::spacing() == standard {
+            assert_eq!((padding.top, padding.left), (12.0, 16.0));
+        }
+    }
+
     /// libcosmic's tooltip is called in this file alone: every other
     /// tooltip is the window's information or goes through
     /// [`super::native_tooltip`]

@@ -84,18 +84,12 @@ mod tests {
     use super::*;
     use crate::layout::{Stage, child, choose_stage, stages};
     use cosmic::iced::advanced::layout;
-    use cosmic::iced::advanced::renderer::Headless;
     use cosmic::iced::advanced::widget::{Tree, Widget};
-    use cosmic::iced::{Font, Pixels, Size, widget};
+    use cosmic::iced::{Size, widget};
     use cosmic::{Renderer, Theme};
 
     fn renderer() -> Renderer {
-        cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer")
+        crate::test_fonts::renderer().expect("headless renderer")
     }
 
     fn box_child(width: f32, height: f32) -> Child<'static, ()> {

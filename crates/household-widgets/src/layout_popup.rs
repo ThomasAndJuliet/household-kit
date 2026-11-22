@@ -581,16 +581,9 @@ fn origin(window: Rectangle, anchor: Rectangle, candidate: AnchorCandidate, size
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmic::iced::advanced::renderer::Headless;
-    use cosmic::iced::{Font, Pixels};
 
     fn renderer() -> Renderer {
-        cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless tiny-skia renderer")
+        crate::test_fonts::renderer().expect("headless tiny-skia renderer")
     }
     fn box_child(width: f32, height: f32) -> Child<'static, ()> {
         child(move |_| widget::space().width(width).height(height).into())

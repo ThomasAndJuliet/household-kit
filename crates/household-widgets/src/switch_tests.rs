@@ -19,7 +19,7 @@ use cosmic::cosmic_theme::{
 use cosmic::iced::advanced::clipboard;
 use cosmic::iced::advanced::renderer::{Headless, Style};
 use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-use cosmic::iced::{Color, Event, Font, Length, Pixels, Point, Size, mouse};
+use cosmic::iced::{Color, Event, Length, Point, Size, mouse};
 use cosmic::widget::settings;
 use cosmic::{Element, Theme, widget};
 use household_tones::{Srgb, muted_accent, on_muted};
@@ -30,9 +30,10 @@ type Message = bool;
 type Rgb = [u8; 3];
 
 const SIZE: Size = Size::new(240.0, 48.0);
-/// The switch is at the window's top left; 48 x 24
-const ON_FILL: Point = Point::new(10.0, 12.0);
-const OFF_FILL: Point = Point::new(38.0, 12.0);
+/// The switch is at the window's top left; 52 x 26 (twice and once the
+/// toggle height), its knob 22 px square, 2 px in
+const ON_FILL: Point = Point::new(10.0, 13.0);
+const OFF_FILL: Point = Point::new(42.0, 13.0);
 
 /// What was drawn, and the messages published on the way
 struct Shot {
@@ -55,10 +56,7 @@ fn draw(
     pointer: Option<Point>,
     events: &[Event],
 ) -> Shot {
-    let mut renderer = cosmic::iced::futures::executor::block_on(
-        <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-    )
-    .expect("a headless renderer");
+    let mut renderer = crate::test_fonts::renderer().expect("a headless renderer");
     let cursor = pointer.map_or(mouse::Cursor::Unavailable, mouse::Cursor::Available);
     let mut messages = Vec::new();
     let mut cache = Cache::default();
@@ -94,12 +92,21 @@ fn draw(
     Shot { rgba, messages }
 }
 
+/// libcosmic's toggler, laid out at the household's switch size (26 x 52)
+/// as the switch is: the references differ from the switch only by what the
+/// switch changes, its colour. The size itself is checked on its own
+fn at_toggle_size(toggler: widget::Toggler<'static, Message>) -> Element<'static, Message> {
+    Element::new(crate::switch::Sized {
+        content: toggler.into(),
+    })
+}
+
 fn plain(on: bool) -> Element<'static, Message> {
-    widget::toggler(on).on_toggle(|on| on).into()
+    at_toggle_size(widget::toggler(on).on_toggle(|on| on))
 }
 
 fn plain_disabled(on: bool) -> Element<'static, Message> {
-    widget::toggler(on).into()
+    at_toggle_size(widget::toggler(on))
 }
 
 /// A click at `at`: the pointer there, pressed and released
@@ -306,10 +313,12 @@ fn a_labelled_switch_keeps_its_layout_and_label() {
             .on_toggle(|on| on)
     };
     let reference_on = |on| {
-        widget::toggler(on)
-            .label("Pointer".to_string())
-            .spacing(8)
-            .on_toggle(|on| on)
+        at_toggle_size(
+            widget::toggler(on)
+                .label("Pointer".to_string())
+                .spacing(8)
+                .on_toggle(|on| on),
+        )
     };
     for (theme, accent, _, dark) in themes() {
         let [r, g, b] = accent;
@@ -354,11 +363,12 @@ fn a_labelled_switch_has_the_standard_label_gap_itself() {
         );
         let reference = draw(
             || {
-                widget::toggler(false)
-                    .label("Pointer".to_string())
-                    .spacing(gap)
-                    .on_toggle(|on| on)
-                    .into()
+                at_toggle_size(
+                    widget::toggler(false)
+                        .label("Pointer".to_string())
+                        .spacing(gap)
+                        .on_toggle(|on| on),
+                )
             },
             &theme,
             None,
@@ -367,10 +377,11 @@ fn a_labelled_switch_has_the_standard_label_gap_itself() {
         assert!(ours.rgba == reference.rgba, "the label gap differs");
         let bare = draw(
             || {
-                widget::toggler(false)
-                    .label("Pointer".to_string())
-                    .on_toggle(|on| on)
-                    .into()
+                at_toggle_size(
+                    widget::toggler(false)
+                        .label("Pointer".to_string())
+                        .on_toggle(|on| on),
+                )
             },
             &theme,
             None,
@@ -423,4 +434,73 @@ fn a_disabled_settings_row_publishes_nothing() {
         &click(Point::new(40.0, 20.0)),
     );
     assert!(shot.messages.is_empty());
+}
+
+/// Juliet, 22 Nov 2026: "Let's go for 26px for everything": the switch is
+/// 26 tall and keeps its 2:1 shape, with and without a label
+#[test]
+fn the_switch_is_toggle_height_and_twice_as_wide() {
+    use cosmic::iced::advanced::layout;
+    use cosmic::iced::advanced::widget::Tree;
+    let renderer = crate::test_fonts::renderer().expect("a headless renderer");
+    let size = |mut element: Element<'static, Message>| {
+        let mut tree = Tree::new(element.as_widget());
+        element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(400.0, 100.0)),
+        )
+    };
+    assert_eq!(crate::spacing::TOGGLE_HEIGHT, 26.0);
+    let bare = size(switch(true, |on| on));
+    assert_eq!(bare.size(), Size::new(52.0, 26.0));
+    let gap = f32::from(cosmic::theme::spacing().space_xs);
+    let node = size(
+        toggler(false)
+            .label("Pointer".to_string())
+            .on_toggle(|on| on)
+            .into(),
+    );
+    let [label, switch] = node.children() else {
+        panic!("a label and a switch")
+    };
+    assert_eq!(switch.size(), Size::new(52.0, 26.0));
+    assert_eq!(switch.bounds().x, label.size().width + gap);
+    assert_eq!(
+        node.size().height,
+        26.0,
+        "the label is centred against the switch"
+    );
+    assert_eq!(label.bounds().y, (26.0 - label.size().height) / 2.0);
+    // The knob is 22 px and drawn 2 px in, whole pixels
+    let on = draw(
+        || switch_of(true),
+        &theme_with(false, [0x00, 0x66, 0xcc]),
+        None,
+        &[],
+    );
+    let off = draw(
+        || switch_of(false),
+        &theme_with(false, [0x00, 0x66, 0xcc]),
+        None,
+        &[],
+    );
+    assert_ne!(
+        on.at(Point::new(51.0 - 3.0, 13.0)),
+        off.at(Point::new(51.0 - 3.0, 13.0))
+    );
+    assert_eq!(
+        on.at(Point::new(60.0, 13.0)),
+        [0, 0, 0],
+        "nothing beyond 52 px"
+    );
+    assert_eq!(
+        on.at(Point::new(26.0, 26.0)),
+        [0, 0, 0],
+        "nothing below 26 px"
+    );
+}
+
+fn switch_of(on: bool) -> Element<'static, Message> {
+    switch(on, |on| on)
 }

@@ -7,10 +7,9 @@ use crate::menu::{MenuItem, MenuStyle};
 use crate::menu_surface::{row_id, row_key};
 use crate::popup::{INFORMATION_DELAY, Panel};
 use crate::window::{UiEvent, WindowAction, WindowUi};
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
-use cosmic::iced::{Font, Pixels, window as native_window};
+use cosmic::iced::{Font, window as native_window};
 use std::time::Instant;
 
 // --- Pure rules -------------------------------------------------------------
@@ -170,6 +169,7 @@ fn item(tab: TabId) -> MenuItem<Ev> {
         mark: None,
         disabled_reason: None,
         destructive: false,
+        detail: None,
     }
 }
 
@@ -210,7 +210,11 @@ fn panels<'w>(window: &'w WindowUi<Root>, model: &TabStripModel) -> Vec<Panel<'w
     )
 }
 
-fn view<'w>(window: &'w WindowUi<Root>, model: &'w TabStripModel) -> Element<'w, Ev> {
+fn view<'w>(
+    window: &'w WindowUi<Root>,
+    model: &'w TabStripModel,
+    spacing: &cosmic::cosmic_theme::Spacing,
+) -> Element<'w, Ev> {
     let tabs = model
         .order()
         .iter()
@@ -227,13 +231,14 @@ fn view<'w>(window: &'w WindowUi<Root>, model: &'w TabStripModel) -> Element<'w,
         .collect();
     let strip = TabStrip::new(NS, model, tabs, Root::Left, Root::Right)
         .on_reorder(Message::Reorder)
-        .view();
+        .view_in(spacing);
     window.mount(strip, panels(window, model)).into()
 }
 
 struct App {
     window: WindowUi<Root>,
     model: TabStripModel,
+    spacing: cosmic::cosmic_theme::Spacing,
     size: Size,
     renderer: Renderer,
     cache: Option<user_interface::Cache>,
@@ -242,15 +247,15 @@ struct App {
 
 impl App {
     fn new(tabs: u64, width: f32) -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        Self::in_spacing(tabs, width, cosmic::cosmic_theme::Spacing::default())
+    }
+
+    fn in_spacing(tabs: u64, width: f32, spacing: cosmic::cosmic_theme::Spacing) -> Self {
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut app = Self {
             window: WindowUi::new(),
             model: TabStripModel::new(ids(tabs), Some(TabId(0))),
+            spacing,
             size: Size::new(width, 600.0),
             renderer,
             cache: None,
@@ -263,7 +268,7 @@ impl App {
     fn send(&mut self, events: &[Event]) {
         let mut published = Vec::new();
         {
-            let root = view(&self.window, &self.model);
+            let root = view(&self.window, &self.model, &self.spacing);
             let cache = self.cache.take().unwrap_or_default();
             let mut ui = UserInterface::build(root, self.size, cache, &mut self.renderer);
             for event in events {
@@ -295,7 +300,7 @@ impl App {
 
     /// Run an operation (a focus, say) on the window's current tree
     fn operate(&mut self, operation: &mut dyn cosmic::iced::advanced::widget::Operation) {
-        let root = view(&self.window, &self.model);
+        let root = view(&self.window, &self.model, &self.spacing);
         let cache = self.cache.take().unwrap_or_default();
         let mut ui = UserInterface::build(root, self.size, cache, &mut self.renderer);
         ui.operate(&self.renderer, operation);
@@ -800,4 +805,38 @@ fn an_apps_own_changes_are_taken_and_only_a_selection_that_moved_is_shown() {
     model.sync(vec![TabId(0), TabId(1)], Some(TabId(5)));
     assert_eq!(model.order(), &[TabId(0), TabId(1)]);
     assert_eq!(model.selected(), None);
+}
+
+/// Pin (Standard density): a tab is 32 high; at its narrowest it is its
+/// 16 inset, seven characters, an 8 gap, the 16 close control and 8 at the
+/// end; an overflow button is the shared button's Icon square, `space_l`
+/// (32; was 24, a 16 icon in 4 of padding)
+#[test]
+fn pin_standard_density_tab_geometry() {
+    let app = App::new(20, NARROW);
+    let tab = app.tab(0).or_else(|| app.tab(19)).expect("some tab shown");
+    assert_eq!(tab.height, 32.0);
+    let ch = crate::menu::measured_width("0", 14.0, cosmic::font::default());
+    assert!(
+        (tab.width - (ch * 7.0 + 16.0 + 8.0 + 16.0 + 8.0)).abs() < 0.01,
+        "narrowest tab: {tab:?}"
+    );
+    let (start, _) = app.lane();
+    assert_eq!(start, 32.0, "the overflow button");
+}
+
+/// At Compact density a tab is `space_l` (24) high, and at its narrowest its
+/// insets are the Compact steps: 8 at the start, 4 gaps, 4 after the close
+/// control (as Standard: a close control sits one gap from the end)
+#[test]
+fn a_tab_follows_the_density() {
+    let compact = cosmic::cosmic_theme::Spacing::from(cosmic::cosmic_theme::Density::Compact);
+    let app = App::in_spacing(20, NARROW, compact);
+    let tab = app.tab(0).or_else(|| app.tab(19)).expect("some tab shown");
+    assert_eq!(tab.height, 24.0);
+    let ch = crate::menu::measured_width("0", 14.0, cosmic::font::default());
+    assert!(
+        (tab.width - (ch * 7.0 + 8.0 + 4.0 + 16.0 + 4.0)).abs() < 0.01,
+        "narrowest tab: {tab:?}"
+    );
 }

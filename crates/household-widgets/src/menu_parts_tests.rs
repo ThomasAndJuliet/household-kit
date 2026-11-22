@@ -2,16 +2,11 @@
 use crate::menu_parts::*;
 use cosmic::iced::advanced::{Layout, Shell, layout, mouse, renderer::Headless, widget::Tree};
 use cosmic::iced::widget;
-use cosmic::iced::{Event, Font, Pixels, Point, Rectangle, Size};
+use cosmic::iced::{Event, Point, Rectangle, Size};
 use cosmic::{Element, Renderer};
 
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless renderer")
+    crate::test_fonts::renderer().expect("headless renderer")
 }
 fn space(width: f32) -> Element<'static, u8> {
     widget::Space::new().width(width).height(20.0).into()
@@ -391,4 +386,31 @@ fn embedded_native_input_receives_space_before_the_target_activation_adapter() {
         [8],
         "editing space does not activate the surrounding row"
     );
+}
+
+#[test]
+fn a_rows_default_gap_is_the_menu_row_kinds() {
+    use cosmic::cosmic_theme::Spacing;
+    assert_eq!(RowSlots::default().gap, 8.0);
+    assert_eq!(crate::spacing::Kind::MenuRow.gap(&Spacing::default()), 8.0);
+}
+
+/// A row's content is at least a label line tall and centred in it; taller
+/// content grows it
+#[test]
+fn a_rows_content_is_at_least_a_label_line_tall_and_centred() {
+    let renderer = renderer();
+    let mut short = at_least_a_line(
+        widget::container(widget::space().width(10).height(10)).into(),
+        cosmic::iced::Length::Shrink,
+    );
+    let node = layout_of(&mut short, &renderer);
+    assert_eq!(node.size().height, crate::spacing::LABEL_LINE);
+    let inner = &node.children()[1];
+    assert_eq!(inner.bounds().y, 5.0, "centred");
+    let mut tall = at_least_a_line(
+        widget::container(widget::space().width(10).height(36)).into(),
+        cosmic::iced::Length::Shrink,
+    );
+    assert_eq!(layout_of(&mut tall, &renderer).size().height, 36.0);
 }

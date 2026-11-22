@@ -10,9 +10,22 @@ use cosmic::iced::{Font, Length};
 use cosmic::widget::{self, icon, menu::key_bind::KeyBind};
 use cosmic::{Element, theme};
 
+use crate::spacing::Kind;
+
 /// The minimum canvas for menu icons, marks and submenu indicators.
 pub const ICON_SIZE: f32 = 16.0;
-const PADDING: f32 = 16.0;
+/// The room a menu row's width estimate leaves at each side of its content,
+/// beyond the icon and mark columns. The row itself takes only its side
+/// inset ([`Kind::MenuRow`]: `space_xxs`); the estimate adds one more of the
+/// row's gaps (also `space_xxs`) as slack, so a row measured to fit is never
+/// laid out against its edge. Together: `space_s` at Standard density, the
+/// 16 px the estimate has always used
+fn side_room() -> f32 {
+    let spacing = theme::spacing();
+    Kind::MenuRow.inset(&spacing).left + Kind::MenuRow.gap(&spacing)
+}
+/// The caption size of a row's detail line
+const CAPTION: f32 = 12.0;
 pub const MENU_MIN_WIDTH: u16 = 240;
 
 /// A check box or one choice among radio options.
@@ -32,13 +45,63 @@ pub struct MenuItem<M> {
     pub mark: Option<MenuMark>,
     pub disabled_reason: Option<String>,
     pub destructive: bool,
+    /// A second line under the label, in the caption style: what the row
+    /// acts on, such as the folder an "Open in …" row opens. It is measured
+    /// into the menu's width and height, wraps rather than clips, and the row's
+    /// selected, hovered and disabled states cover it with the label.
+    pub detail: Option<String>,
 }
 
+impl<M> MenuItem<M> {
+    /// A plain row: no icon, shortcut, mark, detail or disabled reason.
+    pub fn new(label: impl Into<String>, message: M) -> Self {
+        Self {
+            label: label.into(),
+            message,
+            icon: None,
+            shortcut: None,
+            mark: None,
+            disabled_reason: None,
+            destructive: false,
+            detail: None,
+        }
+    }
+    /// The same row with a caption line under its label.
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+}
+
+/// One row of a [`Menu`].
 #[derive(Clone)]
 pub enum Row<M> {
     Item(MenuItem<M>),
     Divider,
+    /// A submenu: a row that opens another card beside this one, or inline.
     Folder(String, Menu<M>),
+    /// "Show the rest": a disclosure of more rows of this same menu.
+    ///
+    /// The label is a Tertiary action (rule 7: accent text, underlined, bold,
+    /// no wash) in the menu's own list. Activating it (click, Enter or Space)
+    /// keeps the menu open, removes this row and shows the rows of the inner
+    /// menu in its place, in the same group of the same card: no frame, no
+    /// submenu. Keyboard focus lands on the first revealed row. Nothing is
+    /// shown again once expanded in the same session; the state is the window
+    /// chain's disclosure state ([`ChainRequest::expand`](crate::window::ChainRequest::expand)),
+    /// gone when the menu closes, so the menu opens collapsed every time.
+    ///
+    /// The rows a More reveals belong to this menu, as if they had been
+    /// written at its position: they take part in its marks, icon column,
+    /// dividers and destructive-last order, and the menu is as wide as its
+    /// widest revealed row from the start, so expanding changes the card's
+    /// height and never its width (rule 8b). A More inside the revealed rows
+    /// is a second disclosure.
+    ///
+    /// Built by [`Menu::more`]. For the expansion state to reach the menu, the
+    /// surface needs [`MenuSurface::disclosures`](crate::menu_surface::MenuSurface::disclosures);
+    /// without it the rows are simply shown.
+    More(String, Menu<M>),
 }
 
 #[derive(Clone)]
@@ -78,6 +141,26 @@ impl<M> Menu<M> {
         self.rows.push(Row::Folder(label.into(), menu));
         self
     }
+    /// A "show the rest" row with `label`, revealing `rest` in place of itself
+    /// when activated; see [`Row::More`].
+    ///
+    /// ```ignore
+    /// // the newest model of each family, and a tertiary row for the others
+    /// Menu::new()
+    ///     .item(MenuItem::new("Opus 5.5", Pick(Opus55)))
+    ///     .item(MenuItem::new("Sonnet 5.5", Pick(Sonnet55)))
+    ///     .more("Show older models", Menu::new()
+    ///         .item(MenuItem::new("Opus 5.1", Pick(Opus51))))
+    /// ```
+    pub fn more(mut self, label: impl Into<String>, rest: Self) -> Self {
+        self.rows.push(Row::More(label.into(), rest));
+        self
+    }
+    /// The row as written, for the surface to rebuild a level.
+    pub(crate) fn push(mut self, row: Row<M>) -> Self {
+        self.rows.push(row);
+        self
+    }
     pub fn append(mut self, other: Self) -> Self {
         if !other.is_empty() {
             self.rows.push(Row::Divider);
@@ -106,9 +189,11 @@ impl<M> Menu<M> {
                             mark: i.mark,
                             disabled_reason: i.disabled_reason,
                             destructive: i.destructive,
+                            detail: i.detail,
                         }),
                         Row::Divider => Row::Divider,
                         Row::Folder(label, menu) => Row::Folder(label, go(menu, f)),
+                        Row::More(label, menu) => Row::More(label, go(menu, f)),
                     })
                     .collect(),
             }
@@ -147,9 +232,16 @@ impl<M> Menu<M> {
                             line.push_str("\tdestructive");
                         }
                         lines.push(line);
+                        if let Some(detail) = &item.detail {
+                            lines.push(format!("{indent}    {detail}"));
+                        }
                     }
                     Some(Row::Folder(label, menu)) => {
                         lines.push(format!("{indent}{label} ▸"));
+                        add(&menu.rows, &format!("{indent}  "), lines);
+                    }
+                    Some(Row::More(label, menu)) => {
+                        lines.push(format!("{indent}{label} …"));
                         add(&menu.rows, &format!("{indent}  "), lines);
                     }
                     Some(Row::Divider) | None => lines.push(format!("{indent}—")),
@@ -195,6 +287,34 @@ fn has_marks<M>(rows: &[Row<M>]) -> bool {
         .any(|r| matches!(r, Row::Item(i) if i.mark.is_some()))
 }
 
+/// The rows of a menu with every [`Row::More`] replaced, recursively, by the
+/// rows it reveals, and the labels of those disclosure rows.
+fn revealed<M>(rows: &[Row<M>]) -> (Vec<&Row<M>>, Vec<&str>) {
+    let (mut shown, mut labels) = (Vec::new(), Vec::new());
+    for row in rows {
+        if let Row::More(label, rest) = row {
+            let (inner, inner_labels) = revealed(&rest.rows);
+            shown.extend(inner);
+            labels.push(label.as_str());
+            labels.extend(inner_labels);
+        } else {
+            shown.push(row);
+        }
+    }
+    (shown, labels)
+}
+
+/// `rows` with every disclosure expanded: what a menu without disclosure
+/// state shows.
+fn flattened<M>(rows: Vec<Row<M>>) -> Vec<Row<M>> {
+    rows.into_iter()
+        .flat_map(|row| match row {
+            Row::More(_, rest) => flattened(rest.rows),
+            other => vec![other],
+        })
+        .collect()
+}
+
 /// Resolved visual data for one household menu row.
 #[derive(Clone)]
 pub struct MenuRow {
@@ -206,6 +326,8 @@ pub struct MenuRow {
     pub destructive: bool,
     pub selected: bool,
     pub folder: bool,
+    /// The caption line under the label
+    pub detail: Option<String>,
 }
 
 impl MenuRow {
@@ -221,12 +343,15 @@ impl MenuRow {
             cosmic::font::default()
         };
         let label = measured_width(&self.label, 14.0, font);
+        let label = label.max(self.detail.as_deref().map_or(0.0, |detail| {
+            measured_width(detail, CAPTION, cosmic::font::default())
+        }));
         let trailing = if self.folder {
             ICON_SIZE
         } else {
             measured_width(&self.shortcut, 14.0, cosmic::font::default())
         };
-        2.0 * PADDING
+        2.0 * side_room()
             + Self::label_indent(self.reserve_mark)
             + label
             + if self.folder || !self.shortcut.is_empty() {
@@ -237,52 +362,90 @@ impl MenuRow {
     }
 }
 
+/// The width a level of rows needs, with every disclosure counted as
+/// expanded: the revealed rows are measured as members of this level (its mark
+/// and icon columns reserve space for them), and the disclosure rows' own
+/// labels too, so expanding one never widens the card.
 fn width<M>(rows: &[Row<M>]) -> f32 {
-    let marks = has_marks(rows);
-    rows.iter()
-        .map(|r| match r {
-            Row::Item(i) => MenuRow {
-                reserve_mark: marks,
-                mark: None,
-                icon: None,
-                label: i.label.clone(),
-                shortcut: i
-                    .shortcut
-                    .as_ref()
-                    .map_or_else(String::new, ToString::to_string),
-                destructive: false,
-                selected: matches!(i.mark, Some(MenuMark::Radio(true)))
-                    && i.disabled_reason.is_none(),
-                folder: false,
-            }
-            .width(),
-            Row::Folder(label, menu) => MenuRow {
-                reserve_mark: marks,
-                mark: None,
-                icon: None,
-                label: label.clone(),
-                shortcut: String::new(),
-                destructive: false,
-                selected: false,
-                folder: true,
-            }
-            .width()
-            .max(width(&menu.rows)),
-            Row::Divider => 0.0,
-        })
-        .fold(f32::from(MENU_MIN_WIDTH), f32::max)
+    let (shown, labels) = revealed(rows);
+    let marks = shown
+        .iter()
+        .any(|r| matches!(r, Row::Item(i) if i.mark.is_some()));
+    let more = labels.into_iter().map(|label| {
+        2.0 * side_room()
+            + MenuRow::label_indent(marks)
+            + measured_width(label, 14.0, cosmic::font::bold())
+    });
+    let rows = shown.into_iter().map(|r| match r {
+        Row::Item(i) => MenuRow {
+            reserve_mark: marks,
+            mark: None,
+            icon: None,
+            label: i.label.clone(),
+            shortcut: i
+                .shortcut
+                .as_ref()
+                .map_or_else(String::new, ToString::to_string),
+            destructive: false,
+            selected: matches!(i.mark, Some(MenuMark::Radio(true))) && i.disabled_reason.is_none(),
+            folder: false,
+            detail: i.detail.clone(),
+        }
+        .width(),
+        Row::Folder(label, menu) => MenuRow {
+            reserve_mark: marks,
+            mark: None,
+            icon: None,
+            label: label.clone(),
+            shortcut: String::new(),
+            destructive: false,
+            selected: false,
+            folder: true,
+            detail: None,
+        }
+        .width()
+        .max(width(&menu.rows)),
+        Row::Divider | Row::More(_, _) => 0.0,
+    });
+    rows.chain(more).fold(f32::from(MENU_MIN_WIDTH), f32::max)
 }
 
-type Widths = HashMap<(u32, Font, String), f32>;
+type Widths = HashMap<(u32, Font, String, cosmic::iced::advanced::text::Shaping), f32>;
 static WIDTHS: LazyLock<Mutex<Widths>> = LazyLock::new(Default::default);
 /// Shapes text at the requested size and font, retaining at most 4096 widths.
 pub fn measured_width(content: &str, size: f32, font: Font) -> f32 {
+    measured_width_shaped(
+        content,
+        size,
+        font,
+        cosmic::iced::advanced::text::Shaping::Advanced,
+    )
+}
+
+/// [`measured_width`] shaped as `shaping`. The shaping decides the width
+/// (a pixel or more a label), so a measurement that must equal a widget's
+/// layout shapes as the widget does ([`crate::button::label_width`])
+pub(crate) fn measured_width_shaped(
+    content: &str,
+    size: f32,
+    font: Font,
+    shaping: cosmic::iced::advanced::text::Shaping,
+) -> f32 {
     use cosmic::iced::advanced::text::{self, Paragraph as _};
     if content.is_empty() {
         return 0.0;
     }
-    let key = (size.to_bits(), font, content.to_owned());
-    if let Some(width) = WIDTHS.lock().unwrap().get(&key) {
+    // The tests' widths are Open Sans's, whichever test measures first:
+    // these widths are kept for the process, so one measured in the
+    // fallback font would outlive the pinning
+    #[cfg(test)]
+    crate::test_fonts::pin();
+    let key = (size.to_bits(), font, content.to_owned(), shaping);
+    if let Some(width) = WIDTHS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+    {
         return *width;
     }
     let paragraph = <<cosmic::Renderer as text::Renderer>::Paragraph as text::Paragraph>::with_text(
@@ -294,13 +457,15 @@ pub fn measured_width(content: &str, size: f32, font: Font) -> f32 {
             font,
             align_x: text::Alignment::Default,
             align_y: cosmic::iced::alignment::Vertical::Top,
-            shaping: text::Shaping::Advanced,
+            shaping,
             wrapping: text::Wrapping::None,
             ellipsize: text::Ellipsize::default(),
         },
     );
     let result = paragraph.min_bounds().width;
-    let mut widths = WIDTHS.lock().unwrap();
+    let mut widths = WIDTHS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if widths.len() >= 4096 {
         widths.clear();
     }
@@ -314,9 +479,12 @@ impl<M: Clone + 'static> Menu<M> {
     /// editors move (package 2); every other menu is a window's chain
     /// ([`crate::window::menu_surface`]).
     pub(crate) fn trees(self, style: MenuStyle<M>) -> Vec<widget::menu::Tree<M>> {
-        let marks = has_marks(&self.rows);
-        let order = ordered(&self.rows);
-        let mut rows: Vec<_> = self.rows.into_iter().map(Some).collect();
+        // libcosmic's tree has no disclosure state: a text box's menu shows
+        // every row
+        let all = flattened(self.rows);
+        let marks = has_marks(&all);
+        let order = ordered(&all);
+        let mut rows: Vec<_> = all.into_iter().map(Some).collect();
         order
             .into_iter()
             .map(|at| match at.and_then(|i| rows[i].take()) {
@@ -335,19 +503,22 @@ impl<M: Clone + 'static> Menu<M> {
                         destructive: false,
                         selected: false,
                         folder: true,
+                        detail: None,
                     }
                     .contents(style.icon);
-                    let button = widget::menu::menu_button(row).class(if children.is_empty() {
-                        theme::Button::MenuItem
-                    } else {
-                        theme::Button::MenuFolder
-                    });
+                    let button = widget::menu::menu_button(row).class(crate::button::unringed(
+                        if children.is_empty() {
+                            theme::Button::MenuItem
+                        } else {
+                            theme::Button::MenuFolder
+                        },
+                    ));
                     widget::menu::Tree::with_children(
                         widget::RcElementWrapper::new(Element::from(button)),
                         children,
                     )
                 }
-                Some(Row::Divider) | None => {
+                Some(Row::Divider | Row::More(_, _)) | None => {
                     widget::menu::Tree::from(Element::from(widget::divider::horizontal::light()))
                 }
             })
@@ -389,6 +560,7 @@ fn item_element<M: Clone + 'static>(
         destructive,
         selected: chosen,
         folder: false,
+        detail: item.detail,
     }
     .contents(style.icon);
     let mut button = widget::menu::menu_button(row);
@@ -423,6 +595,7 @@ impl MenuRow {
             destructive,
             selected: chosen,
             folder,
+            detail,
         } = self;
         let space = theme::spacing().space_xxs;
         let mut row = Vec::with_capacity(7);
@@ -468,7 +641,16 @@ impl MenuRow {
                 }
             }));
         }
-        row.push(text.into());
+        row.push(match detail {
+            Some(detail) => widget::column::with_children(vec![
+                text.into(),
+                widget::text::caption(detail)
+                    .shaping(cosmic::iced::advanced::text::Shaping::Advanced)
+                    .into(),
+            ])
+            .into(),
+            None => text.into(),
+        });
         row.push(widget::space::horizontal().into());
         if folder {
             row.push(
@@ -521,24 +703,24 @@ fn selected_menu_item() -> theme::Button {
         style
     }
     theme::Button::Custom {
-        active: Box::new(|focused, theme| {
+        active: Box::new(|_, theme| {
             chosen(
-                theme.active(focused, true, &theme::Button::MenuItem),
+                theme.active(false, true, &theme::Button::MenuItem),
                 theme,
                 false,
             )
         }),
         disabled: Box::new(|theme| theme.disabled(&theme::Button::MenuItem)),
-        hovered: Box::new(|focused, theme| {
+        hovered: Box::new(|_, theme| {
             chosen(
-                theme.hovered(focused, true, &theme::Button::MenuItem),
+                theme.hovered(false, true, &theme::Button::MenuItem),
                 theme,
                 false,
             )
         }),
-        pressed: Box::new(|focused, theme| {
+        pressed: Box::new(|_, theme| {
             chosen(
-                theme.pressed(focused, true, &theme::Button::MenuItem),
+                theme.pressed(false, true, &theme::Button::MenuItem),
                 theme,
                 true,
             )
@@ -560,7 +742,28 @@ mod tests {
             mark: None,
             disabled_reason: None,
             destructive: false,
+            detail: None,
         }
+    }
+
+    /// Pin (Standard density): a row's width is its label, its icon column
+    /// and mark column (16 + 8 each) and 16 of padding at each side
+    #[test]
+    fn pin_standard_density_row_width() {
+        let row = |reserve_mark| MenuRow {
+            reserve_mark,
+            mark: None,
+            icon: None,
+            label: "Copy".into(),
+            shortcut: String::new(),
+            destructive: false,
+            selected: false,
+            folder: false,
+            detail: None,
+        };
+        let label = measured_width("Copy", 14.0, cosmic::font::default());
+        assert_eq!(row(false).width(), 32.0 + 24.0 + label);
+        assert_eq!(row(true).width(), 32.0 + 48.0 + label);
     }
 
     #[test]
@@ -577,15 +780,12 @@ mod tests {
 
     #[test]
     fn native_menu_row_reserves_sixteen_pixel_icon_canvases() {
-        use cosmic::iced::advanced::{Widget, layout, renderer::Headless, widget::Tree};
-        use cosmic::iced::{Font, Pixels, Size};
+        use cosmic::iced::Size;
+        use cosmic::iced::advanced::{Widget, layout, widget::Tree};
         fn icon(name: &'static str) -> icon::Handle {
             widget::icon::from_name(name).handle()
         }
-        let renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let row = MenuRow {
             reserve_mark: true,
             mark: Some(icon("object-select-symbolic")),
@@ -595,6 +795,7 @@ mod tests {
             destructive: false,
             selected: false,
             folder: true,
+            detail: None,
         };
         let mut widget = widget::row::with_children(row.contents::<()>(icon));
         let mut tree = Tree::new(&widget as &dyn Widget<(), cosmic::Theme, cosmic::Renderer>);
@@ -616,10 +817,9 @@ mod tests {
 
     #[test]
     fn row_width_fits_the_laid_out_label_and_shortcut() {
-        use cosmic::iced::advanced::renderer::Headless;
         use cosmic::iced::advanced::widget::{Id, Operation};
         use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-        use cosmic::iced::{Font, Pixels, Rectangle, Size};
+        use cosmic::iced::{Rectangle, Size};
         struct Texts(Vec<(String, Rectangle)>);
         impl Operation for Texts {
             fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
@@ -642,19 +842,14 @@ mod tests {
                 destructive: false,
                 selected,
                 folder: false,
+                detail: None,
             };
             let width = row.width().ceil();
             let element: Element<'static, ()> =
                 widget::container(widget::menu::menu_button(row.contents(icon)))
                     .width(Length::Fixed(width))
                     .into();
-            let mut renderer =
-                cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-                    Font::default(),
-                    Pixels(14.0),
-                    Some("tiny-skia"),
-                ))
-                .expect("a headless renderer");
+            let mut renderer = crate::test_fonts::renderer().expect("a headless renderer");
             let mut ui = UserInterface::build(
                 element,
                 Size::new(width, 60.0),
@@ -748,7 +943,7 @@ mod tests {
         use cosmic::iced::advanced::clipboard;
         use cosmic::iced::advanced::renderer::{Headless, Style};
         use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-        use cosmic::iced::{Color, Event, Font, Pixels, Point, Size, mouse};
+        use cosmic::iced::{Color, Event, Point, Size, mouse};
         fn icon(_: &'static str) -> icon::Handle {
             widget::icon::from_svg_bytes(&b"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect x='2' y='2' width='12' height='12' fill='white'/></svg>"[..])
         }
@@ -760,13 +955,7 @@ mod tests {
             item.mark = Some(MenuMark::Check(checked));
             item.disabled_reason = disabled.then(|| "Not now".into());
             let element = item_element(item, true, &MenuStyle { icon, body });
-            let mut renderer =
-                cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-                    Font::default(),
-                    Pixels(14.0),
-                    Some("tiny-skia"),
-                ))
-                .expect("a headless renderer");
+            let mut renderer = crate::test_fonts::renderer().expect("a headless renderer");
             let size = Size::new(240.0, 48.0);
             let mut ui = UserInterface::build(element, size, Cache::default(), &mut renderer);
             let cursor = mouse::Cursor::Available(Point::new(80.0, 16.0));

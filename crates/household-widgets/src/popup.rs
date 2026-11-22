@@ -617,38 +617,77 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
         // This geometry is never drawn, published, or used for input:
         // Chain::layout still queries the current live source and commits a
         // fresh fitting plan, including after expansion or source movement.
+        //
+        // Every panel tree the host keeps past this point must have been
+        // reconciled here, or be discarded. The extraction leaves a
+        // placeholder in place of each named control: its tag, with no state.
+        // `diff` above does not reach the panels' trees (their shape is
+        // chosen only in Chain::layout), so a tree not reconciled here still
+        // holds those placeholders once the map is cleared. The next change
+        // of card ownership in Chain::layout would then extract the
+        // placeholders as if they were state, and the following diff would
+        // restore them into the fresh controls of the same names: a focus
+        // target with no state, whose first operate panics ("Downcast on
+        // stateless state").
+        //
+        // So the old plan's width is tried first, and where the current
+        // content no longer fits it, the content's own preferred width. A
+        // menu grows between two views when its open row is drawn semibold
+        // as its submenu opens beside it: in Open Sans that is wider than
+        // the regular label, so a menu whose widest row is a submenu's would
+        // not fit its old width. A tree that still cannot be reconciled (its
+        // stage gone, or the content no longer valid at any width) is
+        // dropped: its named state went with the map, and Chain::layout
+        // builds the panel afresh.
         for (i, panel) in self.panels.iter_mut().enumerate() {
+            if panel.reset_native {
+                // `diff` already replaced this panel's tree with an empty one
+                continue;
+            }
             let span = state
                 .spans
                 .get(i)
                 .copied()
                 .unwrap_or(1)
                 .min(panel.embedded.len() + 1);
-            if !panel.reset_native
-                && let Some(plan) = &state.plans[i]
-                && let Some(stage) = panel.stages_for(span).get(plan.stage.stage_index)
-                && let Ok(geometry) = stage.content.query_at(
-                    stage.level,
-                    renderer,
-                    Size::new(plan.bounds.width, f32::INFINITY),
-                )
-            {
+            // The fields themselves, not `stages_for`, so that `content`
+            // can be borrowed beside them
+            let stages = if span == 1 {
+                &panel.stages
+            } else {
+                &panel.embedded[span - 2]
+            };
+            let reconciled = state.plans[i].as_ref().is_some_and(|plan| {
+                let Some(stage) = stages.get(plan.stage.stage_index) else {
+                    return false;
+                };
+                let offer = |width: f32| {
+                    stage
+                        .content
+                        .query_at(stage.level, renderer, Size::new(width, f32::INFINITY))
+                };
+                let Ok(geometry) = offer(plan.bounds.width)
+                    .or_else(|_| offer(stage.content.query(stage.level, renderer).preferred.width))
+                else {
+                    return false;
+                };
                 let mut current = plan.clone();
                 current.bounds.width = geometry.size.width;
                 current.bounds.height = geometry.size.height;
                 current.stage.level = stage.level;
                 current.stage.geometry = geometry;
-                let stages = if span == 1 {
-                    &panel.stages
-                } else {
-                    &panel.embedded[span - 2]
-                };
+                // The content is rendered and diffed before its layout is
+                // verified, so the tree is reconciled whatever that layout says
                 let _ = current.commit(
                     stages,
                     renderer,
                     &mut panel.content,
                     &mut tree.children[i + 1],
                 );
+                true
+            });
+            if !reconciled {
+                tree.children[i + 1] = Tree::empty();
             }
         }
         node

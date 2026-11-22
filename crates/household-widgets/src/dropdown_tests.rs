@@ -10,12 +10,11 @@ use crate::menu_surface::{row_id, row_key};
 use crate::popup::{FocusProbe, Panel};
 use crate::window::{Entry, UiEvent, WindowAction, WindowUi};
 use cosmic::Renderer;
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::{Id, Operation, operation};
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
 use cosmic::iced::window as native_window;
-use cosmic::iced::{Event, Font, Pixels, Point, Rectangle, Size, keyboard, mouse};
+use cosmic::iced::{Event, Point, Rectangle, Size, keyboard, mouse};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
@@ -110,6 +109,7 @@ fn panels<'a>(window: &'a WindowUi<Root>) -> Vec<Panel<'a, Ev>> {
                 mark: None,
                 disabled_reason: None,
                 destructive: false,
+                detail: None,
             }),
             MenuStyle { icon, body },
             "other".into(),
@@ -166,12 +166,7 @@ const SIZE: Size = Size::new(500.0, 500.0);
 
 impl App {
     fn new() -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut app = Self {
             window: WindowUi::new(),
             selected: 0,
@@ -319,9 +314,9 @@ fn the_trigger_is_as_wide_as_the_widest_option_and_the_list_as_wide_as_the_trigg
     let wide = trigger_width(&options(&["On", "Off", "Only when the window is in front"]));
     assert!(wide > narrow + 80.0, "{narrow} {wide}");
     let mut app = App::new();
-    // libcosmic's dropdown: 8 px padding round a 14 px label in 1.2 line height
+    // A control: `space_l` tall
     let face = app.visible(&Id::new("sizes")).expect("the trigger");
-    assert!((face.height - (14.0 * 1.2 + 16.0)).abs() < 0.5, "{face:?}");
+    assert!((face.height - 32.0).abs() < 0.5, "{face:?}");
     app.click(app.trigger());
     assert!(app.is_dropdown_open());
     let list = app.window.anchors().surfaces();
@@ -421,4 +416,58 @@ fn a_disabled_option_explains_itself_and_cannot_be_chosen() {
     );
     app.named(Named::Enter);
     assert!(app.app.is_empty(), "it does nothing: {:?}", app.app);
+}
+
+/// Pin (Standard density): the trigger is its text, a 4 px gap and a 16 px
+/// caret, inside 8 px at the sides, and `space_l` (32) tall (was 32.8: a
+/// 16.8 line in 8 above and below)
+#[test]
+fn pin_standard_density_trigger_geometry() {
+    use cosmic::iced::advanced::layout::Limits;
+    use cosmic::iced::advanced::widget::Tree;
+    let option = DropdownOption {
+        label: "Medium".into(),
+        disabled_reason: None,
+    };
+    let text = measured_width("Medium", TEXT_SIZE, cosmic::font::default());
+    assert_eq!(trigger_width(&[option]), (text + 4.0 + 16.0 + 16.0).ceil());
+    let renderer = crate::test_fonts::renderer().expect("headless renderer");
+    let mut face = Face::new("Medium".into(), Length::Shrink);
+    let node = Widget::layout(
+        &mut face,
+        &mut Tree::empty(),
+        &renderer,
+        &Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
+    );
+    assert_eq!(node.size().width, text.round() + 4.0 + 16.0 + 16.0);
+    assert_eq!(node.size().height, 32.0);
+}
+
+/// At Compact density the trigger follows the steps: `space_xxs` is 4 and
+/// `space_xxxs` 4 there, and it is `space_l` (24) tall
+#[test]
+fn the_trigger_follows_the_density() {
+    use cosmic::cosmic_theme::{Density, Spacing};
+    use cosmic::iced::advanced::layout::Limits;
+    use cosmic::iced::advanced::widget::Tree;
+    let compact = Spacing::from(Density::Compact);
+    let option = DropdownOption {
+        label: "Medium".into(),
+        disabled_reason: None,
+    };
+    let text = measured_width("Medium", TEXT_SIZE, cosmic::font::default());
+    assert_eq!(
+        trigger_width_in(&[option], &compact),
+        (text + 4.0 + 16.0 + 8.0).ceil()
+    );
+    let renderer = crate::test_fonts::renderer().expect("headless renderer");
+    let mut face = Face::in_spacing("Medium".into(), Length::Shrink, compact);
+    let node = Widget::layout(
+        &mut face,
+        &mut Tree::empty(),
+        &renderer,
+        &Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
+    );
+    assert_eq!(node.size().width, text.round() + 4.0 + 16.0 + 8.0);
+    assert_eq!(node.size().height, 24.0);
 }

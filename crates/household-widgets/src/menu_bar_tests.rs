@@ -12,11 +12,10 @@ use crate::menu::{Menu, MenuItem, MenuStyle};
 use crate::menu_surface::row_key;
 use crate::popup::{FocusProbe, Panel};
 use crate::window::{UiEvent, WindowAction, WindowUi};
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::operation;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
-use cosmic::iced::{Font, Pixels, Point, keyboard, window as native_window};
+use cosmic::iced::{Point, keyboard, window as native_window};
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,6 +60,7 @@ fn item(label: &'static str) -> MenuItem<Ev> {
         mark: None,
         disabled_reason: None,
         destructive: false,
+        detail: None,
     }
 }
 
@@ -175,12 +175,7 @@ struct App {
 
 impl App {
     fn new(width: f32) -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut app = Self {
             window: WindowUi::new(),
             size: Size::new(width, 400.0),
@@ -316,6 +311,12 @@ impl App {
 
     fn surfaces(&self) -> Vec<Rectangle> {
         self.window.anchors().surfaces()
+    }
+
+    /// The window `width` wide from the next frame on
+    fn resize(&mut self, width: f32) {
+        self.size.width = width;
+        self.frame();
     }
 }
 
@@ -594,4 +595,162 @@ fn f10_opens_the_first_menu_from_the_keyboard_and_closes_it() {
     let mut narrow = App::new(110.0);
     narrow.named(keyboard::key::Named::F10);
     assert_eq!(narrow.open(), Some(Root::All));
+}
+
+/// Pin (Standard density): a title is its text in 12 px at the sides and
+/// `space_l` (32) tall (was 27.6: 4 above and below its 19.6 line)
+#[test]
+fn pin_standard_density_title_geometry() {
+    let app = App::new(900.0);
+    let title = app.title(0);
+    let text = crate::menu::measured_width("File", 14.0, cosmic::font::default());
+    assert!((title.width - (text + 24.0)).abs() < 0.01, "{title:?}");
+    assert!((title.height - 32.0).abs() < 0.01, "{title:?}");
+}
+
+/// At Compact density a title is padded by the Compact steps: 8 at the sides,
+/// and it is `space_l` (24) tall
+#[test]
+fn a_title_follows_the_density() {
+    let compact = cosmic::cosmic_theme::Spacing::from(cosmic::cosmic_theme::Density::Compact);
+    let padding = title_padding(&compact);
+    assert_eq!((padding.top, padding.left), (0.0, 8.0));
+    assert_eq!(crate::spacing::control_height(&compact), 24.0);
+    assert_eq!(
+        title_padding(&cosmic::cosmic_theme::Spacing::default()).left,
+        12.0
+    );
+}
+
+/// What text colour a probe was drawn with
+struct Probe(std::rc::Rc<std::cell::Cell<Option<cosmic::iced::Color>>>);
+
+impl Widget<(), Theme, Renderer> for Probe {
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fixed(10.0), Length::Fixed(10.0))
+    }
+    fn layout(&mut self, _: &mut Tree, _: &Renderer, _: &layout::Limits) -> layout::Node {
+        layout::Node::new(Size::new(10.0, 10.0))
+    }
+    fn draw(
+        &self,
+        _: &Tree,
+        _: &mut Renderer,
+        _: &Theme,
+        style: &renderer::Style,
+        _: Layout<'_>,
+        _: mouse::Cursor,
+        _: &Rectangle,
+    ) {
+        self.0.set(Some(style.text_color));
+    }
+}
+
+/// Bug A (Terminal's UI pass): a title's text was drawn in the body-text
+/// colour once its class was made unringed. It is the colour the plain
+/// `MenuRoot` class gives it: the header's (the renderer's icon colour)
+#[test]
+fn a_title_keeps_the_header_colour_of_the_plain_menu_root_class() {
+    use cosmic::iced::Color;
+    use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
+    let drawn = |class: cosmic::theme::Button, tint: bool| {
+        let seen = std::rc::Rc::new(std::cell::Cell::new(None));
+        let probe: Element<'static, ()> = Element::new(Probe(seen.clone()));
+        let probe = if tint { header_coloured(probe) } else { probe };
+        let button: Element<'static, ()> = cosmic::widget::button::custom(probe)
+            .class(class)
+            .on_press(())
+            .into();
+        let mut renderer = crate::test_fonts::renderer().expect("native renderer");
+        let mut ui = UserInterface::build(
+            button,
+            Size::new(60.0, 40.0),
+            Cache::default(),
+            &mut renderer,
+        );
+        let header = renderer::Style {
+            icon_color: Color::from_rgb(0.9, 0.1, 0.2),
+            text_color: Color::from_rgb(0.1, 0.1, 0.1),
+            ..Default::default()
+        };
+        ui.draw(
+            &mut renderer,
+            &Theme::default(),
+            &header,
+            mouse::Cursor::Unavailable,
+        );
+        seen.get()
+    };
+    let plain = drawn(cosmic::theme::Button::MenuRoot, false);
+    assert_eq!(
+        plain,
+        Some(Color::from_rgb(0.9, 0.1, 0.2)),
+        "libcosmic's own"
+    );
+    assert_eq!(
+        drawn(
+            crate::button::unringed(cosmic::theme::Button::MenuRoot),
+            true
+        ),
+        plain
+    );
+    // And without the tint the unringed class would lose it
+    assert_ne!(
+        drawn(
+            crate::button::unringed(cosmic::theme::Button::MenuRoot),
+            false
+        ),
+        plain
+    );
+}
+
+/// The window narrowed past the bar's threshold while a menu and its
+/// submenu are open, and widened again with the three-bar menu open: the
+/// open menu's title (or the three-bar button) goes with the form it
+/// belongs to, so its menus close, and the other form is shown, never both
+#[test]
+fn the_bar_changing_form_under_an_open_menu_closes_it() {
+    let mut app = App::new(WIDE);
+    app.focus(MenuBar::<Root>::title_id(NS, 0));
+    app.named(keyboard::key::Named::Enter);
+    app.named(keyboard::key::Named::ArrowDown);
+    app.named(keyboard::key::Named::ArrowRight);
+    assert_eq!(app.surfaces().len(), 2, "File and Recent are open");
+    app.resize(110.0);
+    assert_eq!(
+        app.open(),
+        None,
+        "File's title is gone, and its menu with it"
+    );
+    assert!(app.surfaces().is_empty());
+    assert!(app.visible(&Id::new("bar-all")).is_some());
+    assert!(app.visible(&MenuBar::<Root>::title_id(NS, 0)).is_none());
+    app.resize(WIDE);
+    assert!(app.visible(&Id::new("bar-all")).is_none());
+    app.click_at(app.title(0).center());
+    assert_eq!(app.open(), Some(Root::File), "the titles work again");
+
+    let mut narrow = App::new(110.0);
+    let all = narrow
+        .visible(&Id::new("bar-all"))
+        .expect("the three-bar button");
+    narrow.click_at(all.center());
+    let file = narrow
+        .visible(&crate::menu_surface::row_id(
+            "All",
+            &[],
+            row_key("File", true, 0),
+        ))
+        .expect("File's row");
+    narrow.click_at(file.center());
+    assert_eq!(
+        narrow.window.chain().unwrap().path(),
+        [row_key("File", true, 0)],
+        "File inline in the three-bar menu"
+    );
+    narrow.resize(WIDE);
+    assert_eq!(narrow.open(), None, "the three-bar button is gone");
+    assert!(narrow.surfaces().is_empty());
+    assert!(narrow.visible(&Id::new("bar-all")).is_none());
+    narrow.title(0);
 }

@@ -2,8 +2,6 @@
 //! Arbitrary named native controls keep their state when physical ownership changes.
 use super::*;
 use crate::layout::{Alignment, AnchorCandidate, Level, Side, child};
-use cosmic::iced::advanced::renderer::Headless;
-use cosmic::iced::{Font, Pixels};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Message {
@@ -77,12 +75,7 @@ fn layout_root(
 }
 #[test]
 fn native_editor_selection_survives_beside_inline_beside_without_view_rebuild() {
-    let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("native renderer");
+    let renderer = crate::test_fonts::renderer().expect("native renderer");
     let anchors = Anchors::default();
     let mut host = fixture(&anchors);
     let mut tree = Tree::new(&host as &dyn Widget<Message, Theme, Renderer>);

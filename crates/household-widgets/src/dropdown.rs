@@ -14,14 +14,19 @@
 //! as wide as the trigger ([`DropdownMenu::width`]), the keyboard's target
 //! the selected option ([`DropdownMenu::selected`]).
 //!
-//! The trigger ([`Face`]) is libcosmic's dropdown as it draws today: the
-//! theme's pick-list style at rest and hovered, 8 px padding, the label at
-//! 14 px in 1.2 line height, the 16 px `pan-down-symbolic` caret 4 px from
-//! the right edge.
+//! The trigger ([`Face`]) is a control, so it is [`control_height`] tall
+//! (`space_l`) with its label and caret centred in that, as every control is.
+//! It is not the shared [`Button`](crate::button::Button): its paint is the
+//! theme's pick-list style at rest and hovered (a field's, not a button
+//! look's), which no look draws, and it keeps that. Its sides are
+//! `space_xxs` and the 16 px `pan-down-symbolic` caret sits `space_xxxs`
+//! from the right edge; the label is 14 px.
 
 use crate::menu::{Menu, MenuItem, MenuMark, measured_width};
+use crate::spacing::control_height;
 use crate::window::{Declaration, Declared, Toggle, menu_button};
 use cosmic::Element;
+use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::advanced::widget::Tree;
 use cosmic::iced::advanced::{
     Clipboard, Layout, Shell, Widget, layout, mouse, renderer, svg, text,
@@ -34,8 +39,6 @@ use cosmic::{Renderer, Theme};
 use std::marker::PhantomData;
 
 const TEXT_SIZE: f32 = 14.0;
-const PADDING: f32 = 8.0;
-const GAP: f32 = 4.0;
 const CARET: f32 = 16.0;
 
 /// What a dropdown declares to its window: the list as a menu, and the
@@ -59,12 +62,18 @@ pub struct DropdownOption {
 /// The width a trigger needs to show any of `labels` whole: the widest, the
 /// caret, and the padding
 pub fn trigger_width(labels: &[DropdownOption]) -> f32 {
+    trigger_width_in(labels, &cosmic::theme::spacing())
+}
+
+/// [`trigger_width`] at the given spacing steps
+pub fn trigger_width_in(labels: &[DropdownOption], spacing: &Spacing) -> f32 {
+    let (padding, gap) = face_space(spacing);
     let font = cosmic::font::default();
     let text = labels
         .iter()
         .map(|option| measured_width(&option.label, TEXT_SIZE, font))
         .fold(0.0, f32::max);
-    (text + GAP + CARET + 2.0 * PADDING).ceil()
+    (text + gap + CARET + 2.0 * padding).ceil()
 }
 
 /// The list as a menu: every option a row, the selected one marked, a
@@ -84,6 +93,7 @@ pub fn dropdown_menu<M>(
             mark: Some(MenuMark::Radio(selected == Some(i))),
             disabled_reason: option.disabled_reason.clone(),
             destructive: false,
+            detail: None,
         });
     }
     DropdownMenu {
@@ -202,11 +212,17 @@ fn trigger<'a>(shown: String, width: Length, id: Option<widget::Id>) -> Element<
 pub struct Face {
     label: String,
     width: Length,
+    /// The steps it was built with: its padding and gap
+    spacing: Spacing,
     caret: Option<svg::Handle>,
 }
 
 impl Face {
     fn new(label: String, width: Length) -> Self {
+        Self::in_spacing(label, width, cosmic::theme::spacing())
+    }
+
+    fn in_spacing(label: String, width: Length, spacing: Spacing) -> Self {
         let caret = match icon::from_name("pan-down-symbolic").size(16).handle().data {
             icon::Data::Svg(handle) => Some(handle),
             icon::Data::Image(_) => None,
@@ -214,16 +230,24 @@ impl Face {
         Self {
             label,
             width,
+            spacing,
             caret,
         }
     }
+}
+
+/// The face's side room and the gap its caret sits in: `space_xxs` and
+/// `space_xxxs`. A control's vertical room is not a padding: the face is
+/// [`control_height`] tall and centres its content
+fn face_space(spacing: &Spacing) -> (f32, f32) {
+    (f32::from(spacing.space_xxs), f32::from(spacing.space_xxxs))
 }
 
 const LINE: text::LineHeight = text::LineHeight::Relative(1.2);
 
 impl Widget<Toggle, Theme, Renderer> for Face {
     fn size(&self) -> Size<Length> {
-        Size::new(self.width, Length::Shrink)
+        Size::new(self.width, Length::Fixed(control_height(&self.spacing)))
     }
 
     fn layout(
@@ -232,10 +256,12 @@ impl Widget<Toggle, Theme, Renderer> for Face {
         _renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let padding = Padding::new(PADDING);
+        let (inset, gap) = face_space(&self.spacing);
+        let height = control_height(&self.spacing);
+        let padding = Padding::from([0.0, inset]);
         let limits = limits
             .width(self.width)
-            .height(Length::Shrink)
+            .height(Length::Fixed(height))
             .shrink(padding);
         let text = match self.width {
             Length::Shrink => {
@@ -243,13 +269,10 @@ impl Widget<Toggle, Theme, Renderer> for Face {
             }
             _ => 0.0,
         };
-        let intrinsic = Size::new(
-            text + GAP + CARET,
-            f32::from(LINE.to_absolute(Pixels(TEXT_SIZE))),
-        );
+        let intrinsic = Size::new(text + gap + CARET, height);
         layout::Node::new(
             limits
-                .resolve(self.width, Length::Shrink, intrinsic)
+                .resolve(self.width, Length::Fixed(height), intrinsic)
                 .expand(padding),
         )
     }
@@ -304,6 +327,7 @@ impl Widget<Toggle, Theme, Renderer> for Face {
         use cosmic::iced::advanced::svg::Renderer as _;
         use cosmic::iced::advanced::text::Renderer as _;
         let bounds = layout.bounds();
+        let (inset, gap) = face_space(&self.spacing);
         let status = if cursor.is_over(bounds) {
             Status::Hovered
         } else {
@@ -321,7 +345,7 @@ impl Widget<Toggle, Theme, Renderer> for Face {
         );
         if let Some(handle) = self.caret.clone() {
             let at = Rectangle {
-                x: bounds.x + bounds.width - GAP - CARET,
+                x: bounds.x + bounds.width - gap - CARET,
                 y: bounds.center_y() - CARET / 2.0,
                 width: CARET,
                 height: CARET,
@@ -329,9 +353,9 @@ impl Widget<Toggle, Theme, Renderer> for Face {
             renderer.draw_svg(svg::Svg::new(handle).color(style.text_color), at, at);
         }
         let area = Rectangle {
-            x: bounds.x + PADDING,
+            x: bounds.x + inset,
             y: bounds.center_y(),
-            width: bounds.width - 2.0 * PADDING,
+            width: bounds.width - 2.0 * inset,
             height: f32::from(LINE.to_absolute(Pixels(TEXT_SIZE))),
         };
         renderer.fill_text(

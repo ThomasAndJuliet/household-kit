@@ -1,17 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::operation::Focusable;
-use cosmic::iced::{Font, Pixels, Point, keyboard};
+use cosmic::iced::{Point, keyboard};
 
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("native renderer")
+    crate::test_fonts::renderer().expect("native renderer")
 }
 
 fn model() -> Model {
@@ -361,4 +355,13 @@ fn native_tab_keyboard_activation_reaches_the_same_index_callback() {
         &viewport,
     );
     assert_eq!(messages, vec![0]);
+}
+
+/// The gap between a tab's icon and text is `space_xxs`: 8 at Standard and
+/// 4 at Compact
+#[test]
+fn the_icon_text_gap_follows_the_density() {
+    use cosmic::cosmic_theme::{Density, Spacing};
+    assert_eq!(icon_text_gap(&Spacing::default()), 8);
+    assert_eq!(icon_text_gap(&Spacing::from(Density::Compact)), 4);
 }

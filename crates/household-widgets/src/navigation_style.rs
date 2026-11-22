@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Presentation for navigation between fixed sections. Content tabs and action
 //! buttons have different selection and typography rules.
+//!
+//! # The keyboard target is drawn inside the entry
+//!
+//! A border is part of its box and takes no layout room (household padding
+//! system, section 4a). The entry's keyboard-target outline is drawn on the
+//! entry's own edge, inside it: a single 1 px stroke, or, on a solid fill
+//! dark enough for that stroke to be indistinct, 1 px of white nearest the
+//! fill and 1 px of the dark stroke outside it, both inside the edge. The
+//! entry is the same size focused or not, and nothing is drawn outside it.
 
 use cosmic::iced::{Background, Color, Vector};
 use cosmic::{theme, widget::button};
-
-/// Space reserved on each side for the adaptive keyboard-target outline.
-pub const TARGET_OUTSET: f32 = 1.0;
-/// Added width or height of a navigation entry's target footprint.
-pub const TARGET_FOOTPRINT: f32 = 2.0 * TARGET_OUTSET;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Prominence {
@@ -148,210 +152,25 @@ impl<'a, M: Clone + 'a> NavigationButton<'a, M> {
 
 impl<'a, M: Clone + 'a> From<NavigationButton<'a, M>> for cosmic::Element<'a, M> {
     fn from(button: NavigationButton<'a, M>) -> Self {
-        let content = cosmic::widget::container(button.inner).padding(TARGET_OUTSET);
         cosmic::Element::new(Target {
-            content: content.into(),
-            prominence: button.prominence,
-            current: button.current,
+            content: button.inner.into(),
+            class: button_style(button.prominence, button.current, false),
             enabled: button.press_enabled || button.press_down_enabled,
         })
     }
 }
 
-use cosmic::iced::advanced::widget::{Operation, Tree, operation, tree};
-use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
-use cosmic::iced::{Event, Length, Rectangle, Size};
-use cosmic::{Element, Renderer, Theme};
-
-// Contrast is resolved from what the native class actually draws. A translucent
-// fill depends on its containing surface, so it retains the shared neutral line.
-fn displayed_solid(style: &button::Style) -> Option<Color> {
-    let Some(Background::Color(fill)) = style.background else {
-        return None;
-    };
-    if fill.a < 1.0 {
-        return None;
-    }
-    Some(
-        style
-            .overlay
-            .map_or(fill, |overlay| crate::kept::flat(overlay, fill)),
-    )
-}
-
-struct Target<'a, M> {
-    content: Element<'a, M>,
-    prominence: Prominence,
-    current: bool,
-    enabled: bool,
-}
-#[derive(Default)]
-struct TargetState {
-    focused: bool,
-    window_active: bool,
-}
-#[derive(Default)]
-struct Probe(bool);
-impl Operation for Probe {
-    fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation)) {
-        f(self);
-    }
-    fn focusable(
-        &mut self,
-        _: Option<&cosmic::iced::advanced::widget::Id>,
-        _: Rectangle,
-        focus: &mut dyn operation::Focusable,
-    ) {
-        self.0 |= focus.is_focused();
-    }
-}
-impl<M> Target<'_, M> {
-    fn probe(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer) {
-        let mut probe = Probe::default();
-        self.content
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, &mut probe);
-        tree.state.downcast_mut::<TargetState>().focused = probe.0;
-    }
-}
-impl<M> Widget<M, Theme, Renderer> for Target<'_, M> {
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<TargetState>()
-    }
-    fn state(&self) -> tree::State {
-        tree::State::new(TargetState {
-            focused: false,
-            window_active: true,
-        })
-    }
-    forward_widget!(M, Theme, Renderer; children, diff, size, size_hint, layout, mouse_interaction, overlay, drag_destinations, a11y_nodes);
-    fn operate(
-        &mut self,
-        tree: &mut Tree,
-        layout: Layout<'_>,
-        renderer: &Renderer,
-        op: &mut dyn Operation,
-    ) {
-        self.content
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, op);
-        self.probe(tree, layout, renderer);
-    }
-    fn update(
-        &mut self,
-        tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, M>,
-        viewport: &Rectangle,
-    ) {
-        self.content.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
-        );
-        let state = tree.state.downcast_mut::<TargetState>();
-        match event {
-            Event::Window(cosmic::iced::window::Event::Unfocused) => state.window_active = false,
-            Event::Window(cosmic::iced::window::Event::Focused) => state.window_active = true,
-            _ => {}
-        }
-        self.probe(tree, layout, renderer);
-    }
-    fn draw(
-        &self,
-        tree: &Tree,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        use cosmic::iced::advanced::Renderer as _;
-        self.content.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            style,
-            layout,
-            cursor,
-            viewport,
-        );
-        let state = tree.state.downcast_ref::<TargetState>();
-        if !state.focused || !state.window_active {
-            return;
-        }
-        let bounds = layout.bounds();
-        let contour = crate::menu_parts::RowContour::Rounded.target_border(theme);
-        use cosmic::widget::button::Catalog;
-        let class = button_style(self.prominence, self.current, false);
-        let button_bounds = Rectangle {
-            x: bounds.x + TARGET_OUTSET,
-            y: bounds.y + TARGET_OUTSET,
-            width: (bounds.width - TARGET_FOOTPRINT).max(0.0),
-            height: (bounds.height - TARGET_FOOTPRINT).max(0.0),
-        };
-        let appearance = if !self.enabled {
-            theme.disabled(&class)
-        } else if cursor.is_over(button_bounds) {
-            theme.hovered(false, false, &class)
-        } else {
-            theme.active(false, false, &class)
-        };
-        let double = displayed_solid(&appearance).is_some_and(|fill| {
-            household_tones::lighter_on(household_tones::Srgb::new(fill.r, fill.g, fill.b))
-        });
-        let inner = button_bounds;
-        if double {
-            let [tl, tr, br, bl]: [f32; 4] = contour.radius.into();
-            let outer = cosmic::iced::Border {
-                color: contour.color,
-                width: 1.0,
-                radius: [
-                    tl + TARGET_OUTSET,
-                    tr + TARGET_OUTSET,
-                    br + TARGET_OUTSET,
-                    bl + TARGET_OUTSET,
-                ]
-                .into(),
-            };
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds,
-                    border: outer,
-                    ..Default::default()
-                },
-                Color::TRANSPARENT,
-            );
-        }
-        renderer.fill_quad(
-            renderer::Quad {
-                bounds: inner,
-                border: cosmic::iced::Border {
-                    color: if double { Color::WHITE } else { contour.color },
-                    width: 1.0,
-                    radius: contour.radius,
-                },
-                ..Default::default()
-            },
-            Color::TRANSPARENT,
-        );
-    }
-}
+use crate::keyboard_target::Target;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyboard_target::{TargetState, displayed_solid};
+    use cosmic::iced::advanced::widget::{Operation, Tree, operation};
+    use cosmic::iced::advanced::{Layout, layout, mouse, renderer};
+    use cosmic::iced::{Length, Rectangle, Size};
     use cosmic::widget::button::Catalog;
+    use cosmic::{Element, Theme};
 
     #[test]
     fn native_hover_replaces_the_current_wash_and_keeps_prominent_fill() {
@@ -430,16 +249,97 @@ mod tests {
         assert!(!button.press_enabled && button.press_down_enabled);
     }
 
+    /// The target is drawn on the entry's own edge, inside it: a focused
+    /// entry is the same size and paints nothing outside its box, in the
+    /// single and in the double outline
+    #[test]
+    fn the_keyboard_target_is_drawn_inside_the_entry() {
+        use cosmic::iced::Point;
+        use cosmic::iced::advanced::renderer::Headless;
+        use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
+        struct Focus;
+        impl Operation for Focus {
+            fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation)) {
+                f(self);
+            }
+            fn focusable(
+                &mut self,
+                _: Option<&cosmic::iced::advanced::widget::Id>,
+                _: Rectangle,
+                state: &mut dyn operation::Focusable,
+            ) {
+                state.focus();
+            }
+        }
+        for (prominence, current) in [
+            (Prominence::NonProminent, false),
+            (Prominence::NonProminent, true),
+            (Prominence::Prominent, true),
+        ] {
+            let build = || -> Element<'static, ()> {
+                cosmic::widget::container(
+                    NavigationButton::new(cosmic::widget::text("Section"), prominence, current)
+                        .width(Length::Fixed(80.0))
+                        .on_press(()),
+                )
+                .center(Length::Fill)
+                .into()
+            };
+            let draw = |focus: bool| {
+                let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
+                let mut ui = UserInterface::build(
+                    build(),
+                    Size::new(120.0, 60.0),
+                    Cache::default(),
+                    &mut renderer,
+                );
+                if focus {
+                    ui.operate(&renderer, &mut Focus);
+                }
+                ui.draw(
+                    &mut renderer,
+                    &Theme::dark(),
+                    &renderer::Style::default(),
+                    mouse::Cursor::Available(Point::new(1.0, 1.0)),
+                );
+                renderer
+                    .screenshot(Size::new(120, 60), 1.0, Color::from_rgb(0.5, 0.5, 0.5))
+                    .as_chunks::<4>()
+                    .0
+                    .to_vec()
+            };
+            let (rest, focused) = (draw(false), draw(true));
+            assert_ne!(rest, focused, "{prominence:?} {current}: the target shows");
+            // The entry's box, as the layout reports it
+            let mut element = build();
+            let mut tree = Tree::new(element.as_widget());
+            let renderer = crate::test_fonts::renderer().expect("headless renderer");
+            let node = element.as_widget_mut().layout(
+                &mut tree,
+                &renderer,
+                &layout::Limits::new(Size::ZERO, Size::new(120.0, 60.0)),
+            );
+            let entry = node.children()[0].bounds();
+            assert_eq!(entry.width, 80.0, "no footprint added to the entry's width");
+            let changed = (0..60 * 120)
+                .filter(|n| rest[*n] != focused[*n])
+                .map(|n| Point::new((n % 120) as f32 + 0.5, (n / 120) as f32 + 0.5))
+                .collect::<Vec<_>>();
+            assert!(!changed.is_empty());
+            assert!(
+                changed.iter().all(|p| entry.contains(*p)),
+                "{prominence:?} {current}: every target pixel is inside the entry {entry:?}"
+            );
+            assert!(
+                changed.iter().any(|p| p.x < entry.x + 1.0),
+                "{prominence:?} {current}: it is on the entry's own edge"
+            );
+        }
+    }
+
     #[test]
     fn native_focus_operation_updates_target_without_relayout() {
-        use cosmic::iced::advanced::renderer::Headless;
-        use cosmic::iced::{Font, Pixels};
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut element: Element<'_, ()> =
             NavigationButton::new(cosmic::widget::text("Section"), Prominence::Prominent, true)
                 .on_press(())

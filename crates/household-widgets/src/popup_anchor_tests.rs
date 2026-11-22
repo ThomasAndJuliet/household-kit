@@ -2,10 +2,9 @@
 
 use super::*;
 use crate::layout::{Level, child};
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
-use cosmic::iced::{Font, Pixels, Point, window};
+use cosmic::iced::{Point, window};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Message {
@@ -17,12 +16,7 @@ enum Message {
 }
 
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless tiny-skia renderer")
+    crate::test_fonts::renderer().expect("headless tiny-skia renderer")
 }
 fn redraw() -> Event {
     Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))

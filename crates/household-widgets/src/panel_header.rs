@@ -3,6 +3,7 @@
 //! Shared panel header, composed from ordinary measured children.
 
 use crate::layout::{Child, framed_child, row_child_top};
+use crate::spacing::Kind;
 use cosmic::{theme, widget};
 
 /// The square panel surface shared with the application's top panel.
@@ -40,8 +41,8 @@ pub fn header<'a, Message: 'a>(
     toggle: Child<'a, Message>,
 ) -> Child<'a, Message> {
     let spacing = theme::spacing();
-    let gap = f32::from(spacing.space_xxs);
-    let padding = cosmic::iced::Padding::from(spacing.space_xs);
+    let gap = Kind::Header.gap(&spacing);
+    let padding = Kind::Header.inset(&spacing);
     let controls = row_child_top(
         vec![leading.fill_width(), menu.weight(0.0), toggle.weight(0.0)],
         gap,
@@ -60,21 +61,15 @@ pub fn header<'a, Message: 'a>(
 mod tests {
     use super::*;
     use crate::layout::{Level, SourceId, Stage, child, stages, wrap_child};
+    use cosmic::iced::Size;
     use cosmic::iced::advanced::{
         layout,
-        renderer::Headless,
         widget::{Tree, Widget},
     };
-    use cosmic::iced::{Font, Pixels, Size};
     use cosmic::{Renderer, Theme};
 
     fn renderer() -> Renderer {
-        cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer")
+        crate::test_fonts::renderer().expect("headless renderer")
     }
 
     fn box_child(width: f32, height: f32) -> Child<'static, ()> {

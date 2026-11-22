@@ -7,11 +7,10 @@ use std::sync::Arc;
 
 use cosmic::Element;
 use cosmic::iced::advanced::clipboard;
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::keyboard::key::{Code, Named, NativeCode, Physical};
 use cosmic::iced::keyboard::{self, Key, Modifiers};
 use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-use cosmic::iced::{Event, Font, Pixels, Point, Size, mouse};
+use cosmic::iced::{Event, Point, Size, mouse};
 use cosmic::widget::text_editor::{self, Binding, Edit, KeyPress, Motion, Position, Status};
 
 use crate::Undoable;
@@ -429,10 +428,7 @@ impl clipboard::Clipboard for Board {
 /// `events` through a focused-or-not box holding `text_box`, in a window
 /// 300 x 60; what it published
 fn through(text_box: &TextBox, events: &[Event], at: Point) -> Vec<Action> {
-    let mut renderer = cosmic::iced::futures::executor::block_on(
-        <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-    )
-    .expect("a headless renderer");
+    let mut renderer = crate::test_fonts::renderer().expect("a headless renderer");
     let element: Element<'_, Action> = shift_click(
         text_editor::text_editor(text_box)
             .on_action(Action::from)
@@ -562,10 +558,7 @@ fn shift_click_quick_after_a_click_still_extends() {
 #[test]
 fn an_extend_acts_only_on_the_click_just_done() {
     let text_box: TextBox = TextBox::starting_with("hello world", Caret::Start);
-    let mut renderer = cosmic::iced::futures::executor::block_on(
-        <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-    )
-    .expect("a headless renderer");
+    let mut renderer = crate::test_fonts::renderer().expect("a headless renderer");
     let element: Element<'_, Action> =
         shift_click(text_editor::text_editor(&text_box), Action::Extend);
     let mut ui = UserInterface::build(
