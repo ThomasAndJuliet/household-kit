@@ -4,8 +4,8 @@
 //! planned from the part's own plan.
 
 use crate::part::Child;
-use crate::plan::{Placed, Plan};
-use crate::{AllocationError, FIT_EPSILON, Host, Level, Measured, Point, Size};
+use crate::plan::{Failure, Placed, Plan, no_fit};
+use crate::{FIT_EPSILON, Host, Level, Measured, Point, Size};
 
 /// Space round a part's four edges.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -75,6 +75,10 @@ impl<'a, H: Host> Frame<'a, H> {
     /// padding leaves. `grow_height` is the growth in height in effect for
     /// the frame, which its content inherits
     /// (`Child::grow_height_in_effect`).
+    ///
+    /// A room smaller than the padding is the frame's own failure; a
+    /// failure planning the content comes up with the content's step, 0, in
+    /// front (`Failure`).
     pub(crate) fn plan(
         &self,
         level: Level,
@@ -82,28 +86,25 @@ impl<'a, H: Host> Frame<'a, H> {
         width: f32,
         height: f32,
         grow_height: f32,
-    ) -> Result<Plan, AllocationError> {
+    ) -> Result<Plan, Failure> {
         let horizontal = self.padding.x();
         let vertical = self.padding.y();
         if width + FIT_EPSILON < horizontal {
-            return Err(AllocationError::NoFit {
-                required: horizontal,
-                available: width,
-            });
+            return Err(no_fit(horizontal, width));
         }
         if height + FIT_EPSILON < vertical {
-            return Err(AllocationError::NoFit {
-                required: vertical,
-                available: height,
-            });
+            return Err(no_fit(vertical, height));
         }
-        let geometry = self.content.plan_inheriting(
-            level,
-            context,
-            (width - horizontal).max(0.0),
-            (height - vertical).max(0.0),
-            grow_height,
-        )?;
+        let geometry = self
+            .content
+            .plan_inheriting(
+                level,
+                context,
+                (width - horizontal).max(0.0),
+                (height - vertical).max(0.0),
+                grow_height,
+            )
+            .map_err(|failure| failure.in_child(0))?;
         let mut result = Plan::leaf(Size::new(
             geometry.size.width + horizontal,
             geometry.size.height + vertical,

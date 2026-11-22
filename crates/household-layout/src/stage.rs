@@ -11,7 +11,10 @@
 //! first that fits ([`choose_stage`]); a stage that does not fit is
 //! dropped with nothing kept of it. Nothing is promoted to a level the host
 //! did not declare, and when no stage fits the answer says so ([`NoFit`]),
-//! so the host shows its own fallback rather than something clipped.
+//! so the host shows its own fallback rather than something clipped. A
+//! host that tells its reader why asks [`choose_stage_blaming`] instead,
+//! which chooses the same stage and, when none fits, gives what each stage
+//! lacked and the part it lacked it in.
 //!
 //! A popup or a hover card chooses among the same stages, together with
 //! where it is attached ([`crate::attach`], [`crate::hover`]).
@@ -27,7 +30,7 @@
 //! [`crate::hover::place_hover`]). [`Stage`] is the engine's own stage,
 //! for a host with nothing more to keep on one.
 
-use crate::{Child, Host, Level, Plan, Size};
+use crate::{Child, Failure, Host, Level, Plan, Size};
 
 /// No declared stage supplied complete fitting geometry. Nothing is implicitly
 /// hidden, clipped, scrolled or promoted to a stronger undeclared level.
@@ -101,4 +104,41 @@ pub fn choose_stage<'a, H: Host, S: AsStage<'a, H>>(
     Err(NoFit {
         attempted: stages.len(),
     })
+}
+
+/// The first stage that fits, as `choose_stage` chooses it; and when none
+/// does, what each stage lacked: one [`Failure`] per stage tried, in the
+/// declared order (`Child::query_at_blaming`), whose path starts at that
+/// stage's part.
+///
+/// The stages are planned exactly as `choose_stage` plans them, so the
+/// plan chosen is the same, and so is everything asked of the host on the
+/// way. The difference is only what is kept of a stage that does not fit:
+/// `choose_stage` drops its failure and counts it (`NoFit`); this keeps
+/// it, so a host can say which part of each stage could not be fitted
+/// (the charts do, in the words they give their reader). The failures are
+/// collected as the stages fail, so a stage that fits after some that did
+/// not has cost their failures too.
+pub fn choose_stage_blaming<'a, H: Host, S: AsStage<'a, H>>(
+    stages: &[S],
+    context: &H::Context,
+    available: Size,
+) -> Result<StagePlan, Vec<Failure>> {
+    let mut failures = Vec::new();
+    for (stage_index, stage) in stages.iter().enumerate() {
+        match stage
+            .part()
+            .query_at_blaming(stage.level(), context, available)
+        {
+            Ok(plan) => {
+                return Ok(StagePlan {
+                    stage_index,
+                    level: stage.level(),
+                    plan,
+                });
+            }
+            Err(failure) => failures.push(failure),
+        }
+    }
+    Err(failures)
 }

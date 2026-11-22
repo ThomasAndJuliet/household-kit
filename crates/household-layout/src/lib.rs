@@ -98,12 +98,32 @@
 //! [`AllocationError::NoFit`], saying what it required and what there was,
 //! and the host tries its next stage.
 //!
+//! **Which part did not fit.** Inside the engine a failure also names the
+//! part it is about ([`Failure`]): the part whose check failed (a child for
+//! a check on that child, such as its floor against a row's width; the
+//! composition for a check on its children together, such as its gaps or
+//! their floors added up), as a path of placements from the part asked. It
+//! is made where the check fails and gains a step at each composition and
+//! frame it passes up through. `Child::query_at_blaming` and
+//! [`choose_stage_blaming`] return it, and `Child::part_at` turns its path
+//! back into the part, so that a host can tell its reader which part could
+//! not be fitted; `Child::query_at` and [`choose_stage`] return what they
+//! always have.
+//!
 //! **A plan** ([`Plan`]) is the tree of sizes and positions: each part's
 //! size, its placements (index among the declared children, position, own
 //! plan), a row's or a wrap's rows, its floor of height, and for a leaf the
 //! size the host gave it. It holds nothing of the host's; a host that keeps
 //! more (the widgets bind every node to the part that made it) makes its own
 //! plan from this one.
+//!
+//! **Reading a plan with its parts.** A host that draws a plan, or finds a
+//! node by what it keeps on a part, needs the part that made each node.
+//! `Child::walk` visits every node with that part, its position from the
+//! root, its path and the growth in height in effect for it ([`Visit`]),
+//! pairing them by the rule planning followed: a placement's index names
+//! the child, a frame's content is its one placement, and a family and its
+//! selected form share a node ([`walk`]).
 //!
 //! **Stages and attached surfaces.** A host rarely asks for one plan: it
 //! declares stages, (level, part) pairs in the order it prefers them, and
@@ -206,8 +226,12 @@
 //!   How a part is measured is in a private module (`measure`): its kind's
 //!   measurement, then the adjustments its builders declared, in order.
 //! - [`plan`]: [`Plan`], where each part goes, and planning a part in a
-//!   room (`Child::query_at`, `Child::plan_width`). How a row, a column and
-//!   a wrap are measured and planned is in a private module (`arrange`).
+//!   room (`Child::query_at`, `Child::plan_width`); a failure with the part
+//!   it is about ([`Failure`], `Child::query_at_blaming`) and the part at a
+//!   path (`Child::part_at`). How a row, a column and a wrap are measured
+//!   and planned is in a private module (`arrange`).
+//! - [`walk`]: a plan read with the parts that made it (`Child::walk`,
+//!   [`Visit`]).
 //! - [`frame`]: [`Frame`], a [`Padding`] round one part, measured and
 //!   planned.
 //! - [`level`]: [`Level`], how much a part may compromise, and
@@ -219,7 +243,8 @@
 //!   [`validate_measurement`]).
 //! - [`stage`]: a host's stages as the engine reads them ([`AsStage`],
 //!   with the engine's own [`Stage`]), the first that fits
-//!   ([`choose_stage`], [`StagePlan`]), and [`NoFit`] when none does.
+//!   ([`choose_stage`], [`StagePlan`]), and [`NoFit`] when none does, or
+//!   what each stage lacked ([`choose_stage_blaming`]).
 //! - [`attach`]: placing a popup against an anchor in a window: the
 //!   [`Attachment`] and its candidates ([`Side`], [`Alignment`],
 //!   [`AnchorCandidate`], [`PlacementPreference`]), the placement chosen
@@ -283,6 +308,7 @@ pub mod part;
 pub mod plan;
 pub mod size;
 pub mod stage;
+pub mod walk;
 
 // The earlier port of the apps' engine, which the charts still lay out
 // with. It is not repaired, only deleted once the charts move onto the core,
@@ -332,8 +358,9 @@ pub use level::{Arrangement, Level};
 pub use part::{
     Child, Composition, Fixed, Forms, Kind, Leaf, LeafHeight, MinimumQuery, Sharing, is_amount,
 };
-pub use plan::{Placed, Plan};
+pub use plan::{Failure, Placed, Plan};
 pub use size::{
     Measured, Point, Rectangle, Size, finite_size, valid_available, validate_measurement,
 };
-pub use stage::{AsStage, NoFit, Stage, StagePlan, choose_stage};
+pub use stage::{AsStage, NoFit, Stage, StagePlan, choose_stage, choose_stage_blaming};
+pub use walk::Visit;
