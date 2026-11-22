@@ -7,9 +7,9 @@
 use super::*;
 use crate::layout::{Alignment, AnchorCandidate, Level, Side, child};
 use cosmic::iced::advanced::renderer::Headless;
-use cosmic::iced::{Font, Pixels, Point};
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
+use cosmic::iced::{Font, Pixels, Point};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Message {
