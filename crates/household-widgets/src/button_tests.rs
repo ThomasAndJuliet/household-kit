@@ -684,6 +684,32 @@ fn the_measurement_is_the_laid_out_width_in_whole_pixels_for_every_look() {
     assert_eq!(laid, odd().natural_width(&renderer));
 }
 
+/// A button with a trailing icon, given exactly its natural width, shows its
+/// whole label: the room kept for the icon is the icon's, not also the gap
+/// the row has already set aside for it
+#[test]
+fn a_label_with_a_trailing_icon_is_not_cut_in_its_natural_width() {
+    let renderer = renderer();
+    for look in [ButtonLook::Plain, ButtonLook::Secondary] {
+        let build = || {
+            Button::<()>::new(look, "Medium")
+                .trailing_icon(widget::icon::from_name("pan-down-symbolic").handle())
+        };
+        let natural = build().natural_width(&renderer);
+        let (element, _, cut) = build().width(Length::Fixed(natural)).assemble();
+        let (flag, _) = cut.expect("a label may be cut");
+        let mut element = element;
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(500.0, 100.0)),
+        );
+        assert_eq!(node.size().width, natural, "{look:?}");
+        assert!(!flag.get(), "{look:?}: the label is whole");
+    }
+}
+
 #[test]
 fn a_label_wider_than_its_room_is_cut_and_says_so_only_then() {
     let renderer = renderer();

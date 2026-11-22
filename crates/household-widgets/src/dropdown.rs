@@ -14,32 +14,21 @@
 //! as wide as the trigger ([`DropdownMenu::width`]), the keyboard's target
 //! the selected option ([`DropdownMenu::selected`]).
 //!
-//! The trigger ([`Face`]) is a control, so it is [`control_height`] tall
-//! (`space_l`) with its label and caret centred in that, as every control is.
-//! It is not the shared [`Button`](crate::button::Button): its paint is the
-//! theme's pick-list style at rest and hovered (a field's, not a button
-//! look's), which no look draws, and it keeps that. Its sides are
-//! `space_xxs` and the 16 px `pan-down-symbolic` caret sits `space_xxxs`
-//! from the right edge; the label is 14 px.
+//! The trigger is the shared [`Button`](crate::button::Button) in its
+//! [`Plain`](crate::button::ButtonLook::Plain) look (Juliet, 22 Nov 2026):
+//! at rest the label and the trailing caret and nothing else (no fill, no
+//! border), under the pointer, pressed, focused and disabled the Plain look's
+//! states, and the one button's box: `space_l` tall, `space_s` at the sides,
+//! the caret a trailing 16 px icon.
 
-use crate::menu::{Menu, MenuItem, MenuMark, measured_width};
-use crate::spacing::control_height;
+use crate::button::{Button, ButtonLook, label_width_in};
+use crate::menu::{Menu, MenuItem, MenuMark};
 use crate::window::{Declaration, Declared, Toggle, menu_button};
 use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
-use cosmic::iced::advanced::widget::Tree;
-use cosmic::iced::advanced::{
-    Clipboard, Layout, Shell, Widget, layout, mouse, renderer, svg, text,
-};
-use cosmic::iced::widget::pick_list::{Catalog, Status};
-use cosmic::iced::{Event, Pixels, Rectangle, Size, alignment};
-use cosmic::iced::{Length, Padding};
+use cosmic::iced::Length;
 use cosmic::widget::{self, icon};
-use cosmic::{Renderer, Theme};
 use std::marker::PhantomData;
-
-const TEXT_SIZE: f32 = 14.0;
-const CARET: f32 = 16.0;
 
 /// What a dropdown declares to its window: the list as a menu, and the
 /// width of its trigger, which the list is as wide as.
@@ -60,20 +49,15 @@ pub struct DropdownOption {
 }
 
 /// The width a trigger needs to show any of `labels` whole: the widest, the
-/// caret, and the padding
+/// caret, and the button's own room ([`label_width_in`])
 pub fn trigger_width(labels: &[DropdownOption]) -> f32 {
     trigger_width_in(labels, &cosmic::theme::spacing())
 }
 
 /// [`trigger_width`] at the given spacing steps
 pub fn trigger_width_in(labels: &[DropdownOption], spacing: &Spacing) -> f32 {
-    let (padding, gap) = face_space(spacing);
-    let font = cosmic::font::default();
-    let text = labels
-        .iter()
-        .map(|option| measured_width(&option.label, TEXT_SIZE, font))
-        .fold(0.0, f32::max);
-    (text + gap + CARET + 2.0 * padding).ceil()
+    let labels: Vec<&str> = labels.iter().map(|option| option.label.as_str()).collect();
+    label_width_in(ButtonLook::Plain, &labels, None, true, spacing)
 }
 
 /// The list as a menu: every option a row, the selected one marked, a
@@ -198,184 +182,21 @@ pub fn trigger_id(name: &str) -> widget::Id {
     widget::Id::new(format!("{name}:dropdown-trigger"))
 }
 
-/// The trigger: the selected value and a caret, publishing a [`Toggle`], a
-/// focus target Enter and Space open from
-fn trigger<'a>(shown: String, width: Length, id: Option<widget::Id>) -> Element<'a, Toggle> {
-    let face = Element::new(Face::new(shown, width));
-    let id = id.unwrap_or_else(widget::Id::unique);
-    crate::popup::focus_target(id, face)
-        .on_activate(Toggle)
-        .into()
-}
-
-/// libcosmic's dropdown trigger, drawn as it draws it
-pub struct Face {
-    label: String,
+/// The trigger: the selected value and a caret, a Plain
+/// [`Button`](crate::button::Button) publishing a [`Toggle`], which is also
+/// the focus target Enter and Space open from (it has the trigger's id)
+pub(crate) fn trigger<'a>(
+    shown: String,
     width: Length,
-    /// The steps it was built with: its padding and gap
-    spacing: Spacing,
-    caret: Option<svg::Handle>,
-}
-
-impl Face {
-    fn new(label: String, width: Length) -> Self {
-        Self::in_spacing(label, width, cosmic::theme::spacing())
-    }
-
-    fn in_spacing(label: String, width: Length, spacing: Spacing) -> Self {
-        let caret = match icon::from_name("pan-down-symbolic").size(16).handle().data {
-            icon::Data::Svg(handle) => Some(handle),
-            icon::Data::Image(_) => None,
-        };
-        Self {
-            label,
-            width,
-            spacing,
-            caret,
-        }
-    }
-}
-
-/// The face's side room and the gap its caret sits in: `space_xxs` and
-/// `space_xxxs`. A control's vertical room is not a padding: the face is
-/// [`control_height`] tall and centres its content
-fn face_space(spacing: &Spacing) -> (f32, f32) {
-    (f32::from(spacing.space_xxs), f32::from(spacing.space_xxxs))
-}
-
-const LINE: text::LineHeight = text::LineHeight::Relative(1.2);
-
-impl Widget<Toggle, Theme, Renderer> for Face {
-    fn size(&self) -> Size<Length> {
-        Size::new(self.width, Length::Fixed(control_height(&self.spacing)))
-    }
-
-    fn layout(
-        &mut self,
-        _tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let (inset, gap) = face_space(&self.spacing);
-        let height = control_height(&self.spacing);
-        let padding = Padding::from([0.0, inset]);
-        let limits = limits
-            .width(self.width)
-            .height(Length::Fixed(height))
-            .shrink(padding);
-        let text = match self.width {
-            Length::Shrink => {
-                measured_width(&self.label, TEXT_SIZE, cosmic::font::default()).round()
-            }
-            _ => 0.0,
-        };
-        let intrinsic = Size::new(text + gap + CARET, height);
-        layout::Node::new(
-            limits
-                .resolve(self.width, Length::Fixed(height), intrinsic)
-                .expand(padding),
-        )
-    }
-
-    fn update(
-        &mut self,
-        _tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _renderer: &Renderer,
-        _clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, Toggle>,
-        _viewport: &Rectangle,
-    ) {
-        if matches!(
-            event,
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-        ) && cursor.is_over(layout.bounds())
-        {
-            shell.publish(Toggle);
-            shell.capture_event();
-        }
-    }
-
-    fn mouse_interaction(
-        &self,
-        _tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _viewport: &Rectangle,
-        _renderer: &Renderer,
-    ) -> mouse::Interaction {
-        if cursor.is_over(layout.bounds()) {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::default()
-        }
-    }
-
-    fn draw(
-        &self,
-        _tree: &Tree,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        _style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        use cosmic::iced::advanced::Renderer as _;
-        use cosmic::iced::advanced::svg::Renderer as _;
-        use cosmic::iced::advanced::text::Renderer as _;
-        let bounds = layout.bounds();
-        let (inset, gap) = face_space(&self.spacing);
-        let status = if cursor.is_over(bounds) {
-            Status::Hovered
-        } else {
-            Status::Active
-        };
-        let style = Catalog::style(theme, &(), status);
-        renderer.fill_quad(
-            renderer::Quad {
-                bounds,
-                border: style.border,
-                shadow: cosmic::iced::Shadow::default(),
-                snap: true,
-            },
-            style.background,
-        );
-        if let Some(handle) = self.caret.clone() {
-            let at = Rectangle {
-                x: bounds.x + bounds.width - gap - CARET,
-                y: bounds.center_y() - CARET / 2.0,
-                width: CARET,
-                height: CARET,
-            };
-            renderer.draw_svg(svg::Svg::new(handle).color(style.text_color), at, at);
-        }
-        let area = Rectangle {
-            x: bounds.x + inset,
-            y: bounds.center_y(),
-            width: bounds.width - 2.0 * inset,
-            height: f32::from(LINE.to_absolute(Pixels(TEXT_SIZE))),
-        };
-        renderer.fill_text(
-            text::Text {
-                content: self.label.clone(),
-                size: Pixels(TEXT_SIZE),
-                line_height: LINE,
-                font: cosmic::font::default(),
-                bounds: area.size(),
-                align_x: text::Alignment::Left,
-                align_y: alignment::Vertical::Center,
-                shaping: text::Shaping::Advanced,
-                wrapping: text::Wrapping::default(),
-                ellipsize: text::Ellipsize::default(),
-            },
-            area.position(),
-            style.text_color,
-            *viewport,
-        );
-    }
+    id: Option<widget::Id>,
+) -> Element<'a, Toggle> {
+    let caret = icon::from_name("pan-down-symbolic").handle();
+    Button::new(ButtonLook::Plain, shown)
+        .trailing_icon(caret)
+        .width(width)
+        .id(id.unwrap_or_else(widget::Id::unique))
+        .on_press(Toggle)
+        .into()
 }
 
 #[cfg(test)]

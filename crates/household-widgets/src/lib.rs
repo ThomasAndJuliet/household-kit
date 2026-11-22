@@ -99,6 +99,8 @@ mod menu_parts_tests;
 #[cfg(test)]
 mod panel_fixture_tests;
 #[cfg(test)]
+mod plain_controls_tests;
+#[cfg(test)]
 mod short_text_box_tests;
 #[cfg(test)]
 mod switch_tests;

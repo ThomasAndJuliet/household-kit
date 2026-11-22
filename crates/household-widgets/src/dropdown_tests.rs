@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::menu::MenuStyle;
+use crate::menu::measured_width;
 use crate::menu_surface::{row_id, row_key};
 use crate::popup::{FocusProbe, Panel};
 use crate::window::{Entry, UiEvent, WindowAction, WindowUi};
@@ -418,9 +419,9 @@ fn a_disabled_option_explains_itself_and_cannot_be_chosen() {
     assert!(app.app.is_empty(), "it does nothing: {:?}", app.app);
 }
 
-/// Pin (Standard density): the trigger is its text, a 4 px gap and a 16 px
-/// caret, inside 8 px at the sides, and `space_l` (32) tall (was 32.8: a
-/// 16.8 line in 8 above and below)
+/// Pin (Standard density): the trigger is the shared button's box: its text,
+/// the 8 px gap and the 16 px caret, inside `space_s` (16) at the sides, and
+/// `space_l` (32) tall
 #[test]
 fn pin_standard_density_trigger_geometry() {
     use cosmic::iced::advanced::layout::Limits;
@@ -429,45 +430,43 @@ fn pin_standard_density_trigger_geometry() {
         label: "Medium".into(),
         disabled_reason: None,
     };
-    let text = measured_width("Medium", TEXT_SIZE, cosmic::font::default());
-    assert_eq!(trigger_width(&[option]), (text + 4.0 + 16.0 + 16.0).ceil());
+    let text = measured_width("Medium", 14.0, cosmic::font::default());
+    assert_eq!(
+        trigger_width(&[option]),
+        (text.ceil() + 8.0 + 16.0 + 32.0).ceil()
+    );
     let renderer = crate::test_fonts::renderer().expect("headless renderer");
-    let mut face = Face::new("Medium".into(), Length::Shrink);
-    let node = Widget::layout(
-        &mut face,
-        &mut Tree::empty(),
+    let mut face = trigger("Medium".into(), Length::Shrink, None);
+    let mut tree = Tree::new(face.as_widget());
+    let node = face.as_widget_mut().layout(
+        &mut tree,
         &renderer,
         &Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
     );
-    assert_eq!(node.size().width, text.round() + 4.0 + 16.0 + 16.0);
+    assert_eq!(
+        node.size().width,
+        trigger_width_in(&[opt("Medium")], &cosmic::cosmic_theme::Spacing::default())
+    );
     assert_eq!(node.size().height, 32.0);
 }
 
-/// At Compact density the trigger follows the steps: `space_xxs` is 4 and
-/// `space_xxxs` 4 there, and it is `space_l` (24) tall
-#[test]
-fn the_trigger_follows_the_density() {
-    use cosmic::cosmic_theme::{Density, Spacing};
-    use cosmic::iced::advanced::layout::Limits;
-    use cosmic::iced::advanced::widget::Tree;
-    let compact = Spacing::from(Density::Compact);
-    let option = DropdownOption {
-        label: "Medium".into(),
+fn opt(label: &str) -> DropdownOption {
+    DropdownOption {
+        label: label.into(),
         disabled_reason: None,
-    };
-    let text = measured_width("Medium", TEXT_SIZE, cosmic::font::default());
+    }
+}
+
+/// At Compact density the trigger's width follows the steps: `space_s` is 8
+/// there and `space_xxs` 4
+#[test]
+fn the_trigger_width_follows_the_density() {
+    use cosmic::cosmic_theme::{Density, Spacing};
+    let compact = Spacing::from(Density::Compact);
+    let text = measured_width("Medium", 14.0, cosmic::font::default());
     assert_eq!(
-        trigger_width_in(&[option], &compact),
-        (text + 4.0 + 16.0 + 8.0).ceil()
+        trigger_width_in(&[opt("Medium")], &compact),
+        (text.ceil() + f32::from(compact.space_xxs) + 16.0 + 2.0 * f32::from(compact.space_s))
+            .ceil()
     );
-    let renderer = crate::test_fonts::renderer().expect("headless renderer");
-    let mut face = Face::in_spacing("Medium".into(), Length::Shrink, compact);
-    let node = Widget::layout(
-        &mut face,
-        &mut Tree::empty(),
-        &renderer,
-        &Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
-    );
-    assert_eq!(node.size().width, text.round() + 4.0 + 16.0 + 8.0);
-    assert_eq!(node.size().height, 24.0);
 }
