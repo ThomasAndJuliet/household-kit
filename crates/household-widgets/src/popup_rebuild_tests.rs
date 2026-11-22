@@ -7,9 +7,9 @@
 use super::*;
 use crate::layout::{Alignment, AnchorCandidate, Level, Side, child};
 use cosmic::iced::advanced::renderer::Headless;
+use cosmic::iced::{Font, Pixels, Point};
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
-use cosmic::iced::{Font, Pixels, Point};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Message {
@@ -168,5 +168,126 @@ fn named_popup_buttons_survive_per_event_rebuilds_and_expansion_requeries_geomet
         messages,
         vec![Message::Choose],
         "the newly expanded native row dispatches once"
+    );
+}
+
+/// A menu (`source` opens it) of one focusable row which is also the source
+/// of a submenu. With `open` the submenu is open beside the menu, and the row
+/// is `grown` wider, as a submenu's row is when its label turns semibold.
+fn growing_view(anchors: &Anchors, open: bool) -> Host<'static, Message> {
+    let source = anchors.trigger("source", native::space().width(40).height(20));
+    let base = native::column(vec![native::space().height(20).into(), source]);
+    let row_anchors = anchors.clone();
+    let content = child(move |_| {
+        let width = if open { 150.0 } else { 140.0 };
+        let row = focus_target(
+            "row",
+            native::container(native::space().width(width).height(28)).padding([4, 8]),
+        );
+        native::container(native::column(vec![row_anchors.trigger("row-source", row)])).into()
+    });
+    let mut panels = vec![
+        Panel::new(
+            Attachment::new(
+                Rectangle::default(),
+                vec![AnchorCandidate::new(Side::Below, Alignment::StartBounded)],
+            ),
+            vec![Stage::new(Level::Preferred, content)],
+        )
+        .source("source")
+        .key(1),
+    ];
+    if open {
+        panels.push(
+            Panel::new(
+                Attachment::new(
+                    Rectangle::default(),
+                    vec![AnchorCandidate::new(Side::Right, Alignment::Start)],
+                ),
+                vec![Stage::new(
+                    Level::Preferred,
+                    child(|_| native::space().width(60).height(40).into()),
+                )],
+            )
+            .source("row-source")
+            .key(2),
+        );
+    }
+    host(base).anchors(anchors.clone()).chain(panels)
+}
+
+fn frame(
+    anchors: &Anchors,
+    open: bool,
+    cache: user_interface::Cache,
+    renderer: &mut Renderer,
+) -> user_interface::Cache {
+    let mut ui = UserInterface::build(growing_view(anchors, open), WINDOW, cache, renderer);
+    ui.update(
+        &[Event::Window(cosmic::iced::window::Event::RedrawRequested(
+            std::time::Instant::now(),
+        ))],
+        mouse::Cursor::Unavailable,
+        renderer,
+        &mut cosmic::iced::advanced::clipboard::Null,
+        &mut Vec::new(),
+    );
+    ui.into_cache()
+}
+
+fn operate(
+    anchors: &Anchors,
+    open: bool,
+    cache: user_interface::Cache,
+    renderer: &mut Renderer,
+    operation: &mut dyn Operation,
+) -> user_interface::Cache {
+    let mut ui = UserInterface::build(growing_view(anchors, open), WINDOW, cache, renderer);
+    ui.operate(renderer, operation);
+    ui.into_cache()
+}
+
+/// A menu wider in this view than its last plan, while its submenu opens
+/// beside it: the menu's tree must still reclaim its named controls' state in
+/// the build. It was left holding the build's extraction placeholders when
+/// the old width no longer fitted, and the submenu's card then moved them
+/// into the focus target as its state: "Downcast on stateless state" (the
+/// menu bar's tests, in Open Sans, where an open row is semibold and wider).
+#[test]
+fn a_menu_grown_wider_as_its_submenu_opens_keeps_its_named_controls_state() {
+    let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
+        Font::default(),
+        Pixels(14.0),
+        Some("tiny-skia"),
+    ))
+    .expect("headless tiny-skia renderer");
+    let anchors = Anchors::default();
+    let mut cache = user_interface::Cache::new();
+    for _ in 0..2 {
+        cache = frame(&anchors, false, cache, &mut renderer);
+    }
+    let narrow = anchors.surfaces()[0];
+    cache = operate(
+        &anchors,
+        false,
+        cache,
+        &mut renderer,
+        &mut operation::focusable::focus::<()>(Id::new("row")),
+    );
+    for _ in 0..2 {
+        cache = frame(&anchors, true, cache, &mut renderer);
+    }
+    let surfaces = anchors.surfaces();
+    assert_eq!(surfaces.len(), 2, "the submenu is open: {surfaces:?}");
+    assert!(
+        surfaces[0].width > narrow.width,
+        "the menu is wider than its last plan: {surfaces:?} after {narrow:?}"
+    );
+    let mut probe = FocusProbe::default();
+    let _ = operate(&anchors, true, cache, &mut renderer, &mut probe);
+    assert_eq!(
+        probe.focused,
+        Some(Id::new("row")),
+        "the row's focus is its state, kept across the rebuild"
     );
 }
