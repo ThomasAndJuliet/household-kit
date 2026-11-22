@@ -71,12 +71,13 @@ fn adapt<'a, M: 'a>(
     position: Position,
     at: Option<f32>,
     hidden: impl Fn() -> bool + 'a,
+    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
 ) -> Element<'a, M> {
     let view = tip.view;
     let child = layout::child(move |_| view())
         .minimum_width(|_, preferred| preferred.width.min(TEXT_MIN_WIDTH))
         .hidden_when(move |_| hidden());
-    hover_card::retained_hover_box(tip.key, at, content, child, candidates(position))
+    hover_card::retained_hover_box(tip.key, at, content, child, candidates(position), claims)
 }
 
 /// Information about `content` as a tooltip says it.
@@ -85,7 +86,7 @@ pub fn tooltip_with<'a, M: 'a>(
     tip: Tip<'a, M>,
     position: Position,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, None, || false)
+    adapt(content.into(), tip, position, None, || false, None)
 }
 
 /// [`tooltip_with`], giving no information while `hidden`. The tree is the
@@ -96,7 +97,7 @@ pub fn tooltip_unless<'a, M: 'a>(
     position: Position,
     hidden: bool,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, None, move || hidden)
+    adapt(content.into(), tip, position, None, move || hidden, None)
 }
 
 /// [`tooltip_with`] for text that may be cut short: the household's
@@ -110,7 +111,13 @@ pub fn tooltip_when_cut<'a, M: 'a>(
     position: Position,
     cut: std::rc::Rc<std::cell::Cell<bool>>,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, None, move || !cut.get())
+    // Uncut, the box is not the hover's: it gives the pointer to whatever
+    // else is under it (an outer tooltip), as if it were not there
+    let claims: Rc<dyn Fn() -> bool + 'a> = Rc::new({
+        let cut = cut.clone();
+        move || cut.get()
+    });
+    adapt(content.into(), tip, position, None, move || !cut.get(), Some(claims))
 }
 
 /// [`tooltip_unless`] about the one place `x` pixels from `content`'s left
@@ -123,7 +130,7 @@ pub fn tooltip_at<'a, M: 'a>(
     x: f32,
     hidden: bool,
 ) -> Element<'a, M> {
-    adapt(content.into(), tip, position, Some(x), move || hidden)
+    adapt(content.into(), tip, position, Some(x), move || hidden, None)
 }
 
 /// A libcosmic tooltip, for the two sites the window's information cannot

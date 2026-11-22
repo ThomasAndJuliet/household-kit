@@ -5,6 +5,7 @@ use crate::layout::{AnchorCandidate, Attachment, HoverRetained, Stage, commit_ho
 use crate::popup::Anchors;
 use crate::popup::Ident;
 use crate::window::Owner;
+use std::rc::Rc;
 use cosmic::iced::advanced::widget::{Id, Operation, Tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector};
@@ -186,6 +187,7 @@ pub(crate) fn hover_with_report_owned<'a, Message: 'a>(
         Vec::new(),
         Some(prepare),
         candidates,
+        None,
     )
 }
 
@@ -226,6 +228,7 @@ pub(crate) fn hover_owned<'a, Message: 'a>(
         stages,
         None,
         candidates,
+        None,
     )
 }
 
@@ -233,12 +236,18 @@ pub(crate) fn hover_owned<'a, Message: 'a>(
 /// has no declared identity: the tree retains one for it, renewed when
 /// `content_key` (a hash of what the box says) changes. The owner may be
 /// outside any window, in which case nothing shows.
+///
+/// `claims`, where given, says whether the box may take the hover now. A box
+/// that does not claim leaves the hover to whatever else is under the
+/// pointer (an outer tooltip, the button's own): the cut-label tooltip
+/// takes it only while the label is cut
 pub(crate) fn retained_hover_box<'a, Message: 'a>(
     content_key: u64,
     at: Option<f32>,
     target: Element<'a, Message>,
     content: crate::layout::Child<'a, Message>,
     candidates: Vec<AnchorCandidate>,
+    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
 ) -> Element<'a, Message> {
     hover_with_preparation(
         Owner::Legacy,
@@ -251,6 +260,7 @@ pub(crate) fn retained_hover_box<'a, Message: 'a>(
         )],
         None,
         candidates,
+        claims,
     )
 }
 
@@ -262,8 +272,10 @@ fn hover_with_preparation<'a, Message: 'a>(
     stages: Vec<Stage<'a, Message>>,
     prepare: Option<Box<ReportPreparation<'a, Message>>>,
     candidates: Vec<AnchorCandidate>,
+    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
 ) -> Element<'a, Message> {
     let card = Hover {
+        claims,
         content: target,
         source: source.clone(),
         owner: owner.clone(),
@@ -281,6 +293,8 @@ fn hover_with_preparation<'a, Message: 'a>(
 }
 
 struct Hover<'a, Message> {
+    /// Whether the box takes the hover now; `None`: always
+    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
     content: Element<'a, Message>,
     source: Ident,
     owner: Owner,
@@ -316,10 +330,12 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Hover<'a, Message> {
         if let Some(anchors) = self.owner.resolve() {
             let source = self.source.get();
             let was = anchors.hover_is_owner(&source);
+            let claims = self.claims.as_ref().is_none_or(|claims| claims());
             // A redraw, layout or keystroke cannot let a stationary pointer take
             // ownership back from a deliberate keyboard target.
             if matches!(event, Event::Mouse(mouse::Event::CursorMoved { .. })) {
-                if cursor.is_over(layout.bounds())
+                if claims
+                    && cursor.is_over(layout.bounds())
                     && cursor.position().is_some_and(|p| viewport.contains(p))
                 {
                     anchors.claim_hover(&source);
@@ -358,7 +374,8 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Hover<'a, Message> {
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let anchors = self.owner.resolve();
         let source = self.source.get();
-        if let Some(anchors) = &anchors {
+        let claims = self.claims.as_ref().is_none_or(|claims| claims());
+        if let Some(anchors) = anchors.as_ref().filter(|_| claims) {
             let mut focus = crate::popup::FocusProbe::default();
             self.content.as_widget_mut().operate(
                 &mut tree.children[0],
@@ -556,6 +573,61 @@ mod tests {
         );
         assert!(messages.is_empty());
     }
+    /// A box with a `claims` condition takes the hover only while it holds:
+    /// the cut-label tooltip, uncut, leaves the pointer to what else is under
+    /// it (an outer tooltip, the button's own)
+    #[test]
+    fn a_box_that_does_not_claim_leaves_the_hover_alone() {
+        let hover_of = |cut: bool| {
+            let mut renderer = cosmic::iced::futures::executor::block_on(
+                <Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
+            )
+            .expect("headless renderer");
+            let anchors = Anchors::default();
+            let id = Id::unique();
+            let flag = Rc::new(std::cell::Cell::new(cut));
+            let claims: Rc<dyn Fn() -> bool> = Rc::new({
+                let flag = flag.clone();
+                move || flag.get()
+            });
+            let card = hover_with_preparation(
+                Owner::Anchors(anchors.clone()),
+                Ident::new(id.clone()),
+                None,
+                cosmic::iced::widget::button(cosmic::iced::widget::text("Label")).into(),
+                vec![Stage::new(
+                    Level::Preferred,
+                    child(|_| widget::text("Whole label").into()),
+                )],
+                None,
+                vec![AnchorCandidate::new(Side::Below, Alignment::Start)],
+                Some(claims),
+            );
+            let mut ui = UserInterface::build(
+                crate::popup::host(card).anchors(anchors.clone()),
+                Size::new(300.0, 200.0),
+                user_interface::Cache::new(),
+                &mut renderer,
+            );
+            let cursor = mouse::Cursor::Available(Point::new(5.0, 5.0));
+            let mut clipboard = cosmic::iced::advanced::clipboard::Null;
+            let mut messages: Vec<()> = Vec::new();
+            for event in [
+                Event::Window(window::Event::RedrawRequested(std::time::Instant::now())),
+                Event::Mouse(mouse::Event::CursorMoved {
+                    position: Point::new(5.0, 5.0),
+                }),
+            ] {
+                ui.update(&[event], cursor, &mut renderer, &mut clipboard, &mut messages);
+            }
+            (anchors.hovered(), id)
+        };
+        let (hovered, id) = hover_of(true);
+        assert_eq!(hovered, Some(id), "cut: it takes the hover");
+        let (hovered, _) = hover_of(false);
+        assert_eq!(hovered, None, "uncut: it does not");
+    }
+
     #[test]
     fn moving_between_sources_transfers_the_single_owner() {
         let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
@@ -967,6 +1039,7 @@ mod report_preparation_tests {
         inputs: Inputs,
     ) -> Hover<'static, ()> {
         Hover {
+            claims: None,
             content: source_target(anchors, source.clone(), snapshot),
             source: Ident::new(source),
             owner: Owner::Anchors(anchors.clone()),
