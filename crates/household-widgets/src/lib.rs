@@ -53,6 +53,7 @@ pub mod menu_bar;
 pub mod menu_parts;
 pub mod menu_surface;
 pub mod segmented;
+pub mod split_button;
 pub mod navigation_style;
 pub mod panel_divider;
 pub mod panel_header;
@@ -83,6 +84,7 @@ pub use switch::{SwitchItem, Toggler, muted_colours, switch, switch_maybe, toggl
 pub use text_box::TextBox;
 pub use button::{Button, ButtonLook, button_height};
 pub use segmented::{Part, Segmented};
+pub use split_button::SplitButton;
 pub use text_menu::{TextMenu, TextMenuHistory, TextMenuWords, text_menu};
 pub(crate) use tooltip::native_tooltip;
 pub use tooltip::{

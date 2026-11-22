@@ -286,14 +286,34 @@ impl<'a, M: Clone + 'a> From<Segmented<'a, M>> for Element<'a, M> {
             .collect();
         // The bar: one background under parts that touch, one outline over
         // their outer edges, inside the bar's own box
-        Element::new(Outlined {
-            content: widget::row::with_children(parts)
+        outlined(
+            widget::row::with_children(parts)
                 .align_y(Alignment::Center)
                 .into(),
             count,
             chosen,
-        })
+            false,
+        )
     }
+}
+
+/// `row`, `count` parts that touch, drawn as one bar: the background, the
+/// outline and the focused part's outline ([`Outlined`]). `chosen` is the
+/// filled part, if any. `divider` draws the 1 px line between the parts a
+/// bar of choices leaves to their fills and a split button needs
+/// ([`crate::split_button`])
+pub(crate) fn outlined<'a, M: 'a>(
+    row: Element<'a, M>,
+    count: usize,
+    chosen: Option<usize>,
+    divider: bool,
+) -> Element<'a, M> {
+    Element::new(Outlined {
+        content: row,
+        count,
+        chosen,
+        divider,
+    })
 }
 
 /// The bar's paint round its row of parts: the background beneath them and
@@ -315,6 +335,8 @@ struct Outlined<'a, M> {
     /// focused part is drawn from ([`part_corners`], [`crate::keyboard_target`])
     count: usize,
     chosen: Option<usize>,
+    /// A 1 px line between neighbouring parts, in the outline's colour
+    divider: bool,
 }
 
 /// Which part has the keyboard's focus, as the bar last found it
@@ -440,6 +462,22 @@ impl<M> Widget<M, Theme, Renderer> for Outlined<'_, M> {
             },
             Background::Color(Color::TRANSPARENT),
         );
+        if self.divider {
+            for part in layout.children().skip(1) {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: Rectangle {
+                            x: part.bounds().x,
+                            y: bounds.y + OUTLINE,
+                            width: OUTLINE,
+                            height: bounds.height - 2.0 * OUTLINE,
+                        },
+                        ..renderer::Quad::default()
+                    },
+                    Background::Color(cosmic.bg_divider().into()),
+                );
+            }
+        }
         // The focused part's outline, again, over the outline
         let Some(focused) = tree.state.downcast_ref::<Focused>().0 else {
             return;
