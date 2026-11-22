@@ -261,7 +261,9 @@ impl<'a, M: Clone + 'a> From<Segmented<'a, M>> for Element<'a, M> {
                     (None, _) => button,
                 };
                 if let Some(form) = form {
-                    button = button.width(Length::Fixed(form.width));
+                    // Content from the inset, so every part's icon and label stand in
+                    // the form's columns rather than each centred in the shared width
+                    button = button.width(Length::Fixed(form.width)).content_start(true);
                 }
                 if let Some(tip) = part.tip {
                     button = button.tooltip(tip, Position::Bottom);

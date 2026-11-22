@@ -456,3 +456,68 @@ fn the_bars_size_is_the_same_with_any_part_focused() {
     assert_eq!(before.size(), after.size());
     assert_eq!(parts_of(&before).1, parts_of(&after).1);
 }
+
+/// The x, in the bar's own space, of each part's content row's children
+/// (its icon's room, then its label): the first node below the part with
+/// more than one child
+fn content_columns(node: &layout::Node) -> Vec<Vec<f32>> {
+    fn row(node: &layout::Node, x: f32) -> Vec<f32> {
+        let x = x + node.bounds().x;
+        match node.children() {
+            [] => Vec::new(),
+            [only] => row(only, x),
+            many => many.iter().map(|child| x + child.bounds().x).collect(),
+        }
+    }
+    node.children().iter().map(|part| row(part, node.bounds().x)).collect()
+}
+
+/// Bug B (Terminal's UI pass): a part given a form width starts its content
+/// at the inset, so in stacked bars the icons stand in one column and the
+/// labels in another (Juliet, 15 Oct)
+#[test]
+fn stacked_form_bars_keep_icons_in_one_column_and_labels_in_another() {
+    let renderer = renderer();
+    let icon = || cosmic::widget::icon::from_svg_bytes(&b"<svg xmlns='http://www.w3.org/2000/svg'/>"[..]);
+    let first: Vec<(&str, bool)> = vec![("Session", true), ("Codex", true), ("Text", true)];
+    let second: Vec<(&str, bool)> = vec![("Conversation", false), ("Terminal", true)];
+    let part = form_part(first.iter().chain(second.iter()).copied(), 3, None);
+    assert!(part.icons);
+    let build = |parts: &[(&str, bool)]| -> Element<'static, u8> {
+        Segmented::new(
+            parts.iter().map(|(label, has)| {
+                let p = Part::new(*label).on_press(0);
+                if *has { p.icon(icon()) } else { p }
+            }),
+            Some(0),
+        )
+        .form(part)
+        .into()
+    };
+    let columns: Vec<Vec<Vec<f32>>> = [&first, &second]
+        .iter()
+        .map(|parts| content_columns(&layout_of(build(parts), &renderer)))
+        .collect();
+    let mut icons = Vec::new();
+    let mut labels = Vec::new();
+    for bar in &columns {
+        let (mut x, widths) = (0.0, part.width);
+        for (n, columns) in bar.iter().enumerate() {
+            assert_eq!(columns.len(), 2, "an icon's room, then the label");
+            // Relative to the part's own left edge
+            let left = x;
+            icons.push(columns[0] - left);
+            labels.push(columns[1] - left);
+            let _ = n;
+            x += widths;
+        }
+    }
+    for column in [&icons, &labels] {
+        assert!(
+            column.windows(2).all(|pair| (pair[0] - pair[1]).abs() < 0.01),
+            "{column:?}"
+        );
+    }
+    let inset = ButtonLook::Segment.inset(&theme::active().cosmic().spacing);
+    assert!((icons[0] - inset).abs() < 0.01, "from the inset: {}", icons[0]);
+}

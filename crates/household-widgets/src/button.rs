@@ -559,6 +559,7 @@ pub struct Button<'a, M> {
     on_press: Option<M>,
     id: Option<widget::Id>,
     width: Length,
+    start: bool,
     tip: Option<(Tip<'a, M>, Position)>,
     fill: Option<FillColours>,
     corners: Option<[f32; 4]>,
@@ -581,6 +582,7 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             on_press: None,
             id: None,
             width: Length::Shrink,
+            start: false,
             tip: None,
             fill: None,
             corners: None,
@@ -730,6 +732,16 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
     /// the content's own
     pub fn width(mut self, width: impl Into<Length>) -> Self {
         self.width = width.into();
+        self
+    }
+
+    /// Start the content at the inset instead of centring it in a wider
+    /// box ([`Button::width`]). For parts of a form whose icons and labels
+    /// stand in columns ([`crate::segmented::Segmented::form`]): centring
+    /// each part's content in the one shared width would put each part's
+    /// icon at its own x. Has no effect on a button as wide as its content
+    pub fn content_start(mut self, start: bool) -> Self {
+        self.start = start;
         self
     }
 
@@ -889,7 +901,7 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             .padding(padding)
             .height(Length::Fixed(square))
             .width(width)
-            .align_x(Alignment::Center)
+            .align_x(if self.start { Alignment::Start } else { Alignment::Center })
             .align_y(Alignment::Center)
             .on_press_maybe(self.on_press);
         let button = match self.id {
