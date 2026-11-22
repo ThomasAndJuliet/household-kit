@@ -18,7 +18,7 @@ use cosmic::iced::advanced::{
     renderer::{Headless, Style},
 };
 use cosmic::iced::runtime::{UserInterface, user_interface};
-use cosmic::iced::{Event, Font, Length, Pixels, Point, Rectangle, Size, window};
+use cosmic::iced::{Event, Length, Point, Rectangle, Size, window};
 use cosmic::{Element, Renderer, Theme, widget};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -416,12 +416,7 @@ struct Harness {
 }
 impl Harness {
     fn new(size: Size) -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .unwrap();
+        let renderer = crate::test_fonts::renderer().unwrap();
         let mut result = Self {
             model: Demo::default(),
             renderer,

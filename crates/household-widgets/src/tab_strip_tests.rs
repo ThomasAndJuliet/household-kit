@@ -7,10 +7,9 @@ use crate::menu::{MenuItem, MenuStyle};
 use crate::menu_surface::{row_id, row_key};
 use crate::popup::{INFORMATION_DELAY, Panel};
 use crate::window::{UiEvent, WindowAction, WindowUi};
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
-use cosmic::iced::{Font, Pixels, window as native_window};
+use cosmic::iced::{Font, window as native_window};
 use std::time::Instant;
 
 // --- Pure rules -------------------------------------------------------------
@@ -252,12 +251,7 @@ impl App {
     }
 
     fn in_spacing(tabs: u64, width: f32, spacing: cosmic::cosmic_theme::Spacing) -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut app = Self {
             window: WindowUi::new(),
             model: TabStripModel::new(ids(tabs), Some(TabId(0))),

@@ -90,15 +90,12 @@ impl<Message> Widget<Message, Theme, Renderer> for HorizontalScroll<'_, Message>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmic::iced::advanced::{layout, renderer::Headless, widget::Tree};
-    use cosmic::iced::{Font, Pixels, Size};
+    use cosmic::iced::Size;
+    use cosmic::iced::advanced::{layout, widget::Tree};
 
     #[test]
     fn horizontal_scroll_keeps_the_bar_below_native_controls_at_any_content_height() {
-        let renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         for height in [32.0, 48.0] {
             for width in [100.0, 600.0] {
                 let mut view: Element<'_, ()> =

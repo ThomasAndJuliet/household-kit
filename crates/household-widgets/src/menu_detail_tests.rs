@@ -2,16 +2,9 @@
 //! A menu row's second line ([`MenuItem::detail`](crate::menu::MenuItem)).
 use super::*;
 use crate::menu::MenuItem;
-use cosmic::iced::advanced::renderer::Headless;
-use cosmic::iced::{Font, Pixels};
 
 fn renderer() -> cosmic::Renderer {
-    cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("native renderer")
+    crate::test_fonts::renderer().expect("native renderer")
 }
 fn icon(name: &'static str) -> widget::icon::Handle {
     widget::icon::from_name(name).handle()

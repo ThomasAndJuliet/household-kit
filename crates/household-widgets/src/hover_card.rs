@@ -504,18 +504,12 @@ impl<'a, Message: 'a> overlay::Overlay<Message, Theme, Renderer> for Card<'_, 'a
 mod tests {
     use super::*;
     use crate::layout::{Alignment, Level, Side, child};
-    use cosmic::iced::advanced::renderer::Headless;
     use cosmic::iced::runtime::{UserInterface, user_interface};
-    use cosmic::iced::{Font, Pixels, Point, window};
+    use cosmic::iced::{Point, window};
 
     #[test]
     fn disabled_target_can_claim_hover_without_capturing_a_click() {
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let id = Id::unique();
         let target = cosmic::iced::widget::button(cosmic::iced::widget::text("Disabled"));
@@ -579,10 +573,7 @@ mod tests {
     #[test]
     fn a_box_that_does_not_claim_leaves_the_hover_alone() {
         let hover_of = |cut: bool| {
-            let mut renderer = cosmic::iced::futures::executor::block_on(
-                <Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-            )
-            .expect("headless renderer");
+            let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
             let anchors = Anchors::default();
             let id = Id::unique();
             let flag = Rc::new(std::cell::Cell::new(cut));
@@ -630,12 +621,7 @@ mod tests {
 
     #[test]
     fn moving_between_sources_transfers_the_single_owner() {
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let first = Id::unique();
         let second = Id::unique();
@@ -692,12 +678,7 @@ mod tests {
 
     #[test]
     fn opening_the_source_suppresses_its_hover() {
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let id = Id::unique();
         let target = hover(
@@ -760,12 +741,7 @@ mod tests {
                 self.0 += 1;
             }
         }
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let id = Id::unique();
         let mut stages: Vec<Stage<'_, ()>> = Vec::new();
@@ -829,15 +805,10 @@ mod text_presentation_tests {
     #[test]
     fn wrapping_text_resolves_and_commits_the_same_narrow_geometry() {
         use cosmic::iced::advanced::{
-            Widget, layout as native_layout, renderer::Headless, widget::Tree,
+            Widget, layout as native_layout, widget::Tree,
         };
-        use cosmic::iced::{Font, Pixels, Size};
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        use cosmic::iced::Size;
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let content: crate::layout::Child<'_, ()> = text_box(
             "A full explanation with enough words to wrap into several lines at a narrow width."
                 .into(),
@@ -883,15 +854,10 @@ mod text_presentation_tests {
     #[test]
     fn surface_preserves_nested_minimum_and_reserves_padding_and_shadow() {
         use cosmic::iced::advanced::{
-            Widget, layout as native_layout, renderer::Headless, widget::Tree,
+            Widget, layout as native_layout, widget::Tree,
         };
-        use cosmic::iced::{Font, Pixels, Size};
-        let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        use cosmic::iced::Size;
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let content: crate::layout::Child<'_, ()> = crate::layout::row_child(
             vec![
                 crate::layout::child(|_| widget::space().width(100).height(20).into())
@@ -954,8 +920,6 @@ mod report_preparation_tests {
         self, Alignment, InformationId, InformationLoss, Level, LossKind, Side, SourceId,
         SourceReport,
     };
-    use cosmic::iced::advanced::renderer::Headless;
-    use cosmic::iced::{Font, Pixels};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -970,12 +934,7 @@ mod report_preparation_tests {
     }
 
     fn renderer() -> Renderer {
-        cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer")
+        crate::test_fonts::renderer().expect("headless renderer")
     }
 
     fn source_target(anchors: &Anchors, id: Id, snapshot: Snapshot) -> Element<'static, ()> {

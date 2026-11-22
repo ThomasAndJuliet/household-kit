@@ -7,7 +7,7 @@ use cosmic::iced::advanced::{
     renderer::{Headless, Style},
     widget::Tree,
 };
-use cosmic::iced::{Font, Length, Pixels, Point, Rectangle, Size, Vector};
+use cosmic::iced::{Length, Point, Rectangle, Size, Vector};
 use cosmic::{Element, Renderer, Theme, widget};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -117,12 +117,7 @@ fn stages(choices: bool, expanded: bool) -> Vec<engine::Stage<'static, Message>>
 }
 
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless tiny-skia")
+    crate::test_fonts::renderer().expect("headless tiny-skia")
 }
 
 fn frame(choices: bool, expanded: bool, submenu: bool, size: Size) -> Vec<u8> {

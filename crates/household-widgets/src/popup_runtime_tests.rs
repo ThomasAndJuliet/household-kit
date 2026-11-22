@@ -6,21 +6,15 @@
 
 use super::*;
 use crate::layout::{Level, child};
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
-use cosmic::iced::{Color, Font, Pixels, Point, window};
+use cosmic::iced::{Color, Point, window};
 use std::cell::RefCell;
 use std::rc::Rc;
 
 #[test]
 fn real_user_interface_retains_button_status_and_requests_hover_redraw() {
-    let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless tiny-skia renderer");
+    let mut renderer = crate::test_fonts::renderer().expect("headless tiny-skia renderer");
     let drawn = Rc::new(RefCell::new(Vec::new()));
     let observed = drawn.clone();
     let panel = Panel::new(

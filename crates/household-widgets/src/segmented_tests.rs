@@ -4,16 +4,10 @@ use super::*;
 use cosmic::iced::advanced::layout;
 use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::Tree;
-use cosmic::iced::{Color, Font, Pixels, Point, Rectangle, Size};
+use cosmic::iced::{Color, Point, Rectangle, Size};
 
 fn renderer() -> cosmic::Renderer {
-    crate::test_fonts::pin();
-    cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("native renderer")
+    crate::test_fonts::renderer().expect("native renderer")
 }
 
 fn layout_of(mut element: Element<'_, u8>, renderer: &cosmic::Renderer) -> layout::Node {

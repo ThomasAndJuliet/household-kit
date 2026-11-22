@@ -5,10 +5,13 @@
 //! wrapping, the bounds of what is drawn, and formulas on whole pixels.
 #![cfg(feature = "content")]
 
+#[path = "../src/test_fonts.rs"]
+mod test_fonts;
+
+use cosmic::iced::advanced::renderer;
 use cosmic::iced::advanced::widget::{Id, Operation};
-use cosmic::iced::advanced::{renderer, renderer::Headless};
 use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-use cosmic::iced::{Font, Length, Pixels, Rectangle, Size, mouse};
+use cosmic::iced::{Length, Rectangle, Size, mouse};
 use cosmic::{Element, Renderer, widget};
 use household_widgets::content::testing::{DrawnFormula, record};
 use household_widgets::content::{
@@ -22,12 +25,7 @@ struct Window {
 
 impl Window {
     fn new() -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("the actual tiny-skia renderer");
+        let renderer = crate::test_fonts::renderer().expect("the actual tiny-skia renderer");
         Self { renderer }
     }
 

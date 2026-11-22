@@ -5,11 +5,10 @@ use super::*;
 use crate::menu::MenuItem;
 use cosmic::iced::advanced::{
     mouse,
-    renderer::Headless,
     widget::{Operation, operation},
 };
 use cosmic::iced::runtime::{UserInterface, user_interface};
-use cosmic::iced::{Event, Font, Pixels, keyboard};
+use cosmic::iced::{Event, keyboard};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -23,12 +22,7 @@ enum Message {
 }
 
 fn renderer() -> cosmic::Renderer {
-    cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("native renderer")
+    crate::test_fonts::renderer().expect("native renderer")
 }
 fn item(label: &'static str) -> MenuItem<Message> {
     MenuItem::new(label, Message::Action(label))

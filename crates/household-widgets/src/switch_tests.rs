@@ -19,7 +19,7 @@ use cosmic::cosmic_theme::{
 use cosmic::iced::advanced::clipboard;
 use cosmic::iced::advanced::renderer::{Headless, Style};
 use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-use cosmic::iced::{Color, Event, Font, Length, Pixels, Point, Size, mouse};
+use cosmic::iced::{Color, Event, Length, Point, Size, mouse};
 use cosmic::widget::settings;
 use cosmic::{Element, Theme, widget};
 use household_tones::{Srgb, muted_accent, on_muted};
@@ -56,10 +56,7 @@ fn draw(
     pointer: Option<Point>,
     events: &[Event],
 ) -> Shot {
-    let mut renderer = cosmic::iced::futures::executor::block_on(
-        <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-    )
-    .expect("a headless renderer");
+    let mut renderer = crate::test_fonts::renderer().expect("a headless renderer");
     let cursor = pointer.map_or(mouse::Cursor::Unavailable, mouse::Cursor::Available);
     let mut messages = Vec::new();
     let mut cache = Cache::default();
@@ -443,10 +440,7 @@ fn a_disabled_settings_row_publishes_nothing() {
 fn the_switch_is_toggle_height_and_twice_as_wide() {
     use cosmic::iced::advanced::layout;
     use cosmic::iced::advanced::widget::Tree;
-    let renderer = cosmic::iced::futures::executor::block_on(
-        <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-    )
-    .expect("a headless renderer");
+    let renderer = crate::test_fonts::renderer().expect("a headless renderer");
     let size = |mut element: Element<'static, Message>| {
         let mut tree = Tree::new(element.as_widget());
         element.as_widget_mut().layout(

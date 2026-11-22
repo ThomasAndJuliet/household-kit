@@ -3,16 +3,10 @@
 // Acceptance tests use the renderer's actual measurements and public contract,
 // rather than the layout engine's internal allocation helpers.
 use super::*;
-use cosmic::iced::advanced::renderer::Headless;
-use cosmic::iced::{Font, Pixels, Point};
+use cosmic::iced::Point;
 
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless tiny-skia renderer")
+    crate::test_fonts::renderer().expect("headless tiny-skia renderer")
 }
 
 fn box_at_levels() -> Child<'static, u8> {

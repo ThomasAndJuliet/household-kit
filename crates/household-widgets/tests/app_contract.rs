@@ -2,16 +2,19 @@
 //! App-boundary probes against the actual exported native components.
 //! These are not a mock implementation of the proposed ui module.
 
+#[path = "../src/test_fonts.rs"]
+mod test_fonts;
+
 use std::cell::Cell;
 
-use cosmic::iced::advanced::{clipboard, renderer::Headless, widget::Id};
+use cosmic::iced::advanced::{clipboard, widget::Id};
 use cosmic::iced::event::Status;
 use cosmic::iced::keyboard::{
     self, Key, Location, Modifiers,
     key::{Code, Physical},
 };
 use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-use cosmic::iced::{Event, Font, Length, Pixels, Point, Size, mouse};
+use cosmic::iced::{Event, Length, Point, Size, mouse};
 use cosmic::{Element, Renderer, widget};
 use household_widgets::{ShortTextBox, layout, short_text_box};
 
@@ -40,12 +43,7 @@ struct NativeWindow {
 }
 impl NativeWindow {
     fn new() -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("the actual tiny-skia renderer");
+        let renderer = crate::test_fonts::renderer().expect("the actual tiny-skia renderer");
         Self {
             renderer,
             cache: Cache::default(),

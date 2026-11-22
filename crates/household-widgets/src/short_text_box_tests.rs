@@ -19,7 +19,7 @@ use cosmic::iced::event::Status;
 use cosmic::iced::keyboard::key::{Code, Physical};
 use cosmic::iced::keyboard::{self, Key, Location, Modifiers};
 use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-use cosmic::iced::{Color, Event, Font, Length, Pixels, Point, Size, mouse};
+use cosmic::iced::{Color, Event, Length, Point, Size, mouse};
 use cosmic::widget::text_editor::{Cursor, Position};
 use cosmic::{Element, Theme, widget};
 use household_tones::{Srgb, tint};
@@ -527,10 +527,7 @@ struct Window {
 
 impl Window {
     fn new() -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("a headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("a headless renderer");
         Self {
             renderer,
             cache: Cache::default(),

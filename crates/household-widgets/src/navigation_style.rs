@@ -169,7 +169,7 @@ mod tests {
     use cosmic::iced::advanced::widget::{Operation, Tree, operation};
     use cosmic::iced::advanced::{Layout, layout, mouse, renderer};
     use cosmic::iced::{Length, Rectangle, Size};
-    use cosmic::{Element, Renderer, Theme};
+    use cosmic::{Element, Theme};
     use cosmic::widget::button::Catalog;
 
     #[test]
@@ -256,7 +256,7 @@ mod tests {
     fn the_keyboard_target_is_drawn_inside_the_entry() {
         use cosmic::iced::advanced::renderer::Headless;
         use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-        use cosmic::iced::{Font, Pixels, Point};
+        use cosmic::iced::Point;
         struct Focus;
         impl Operation for Focus {
             fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation)) {
@@ -286,10 +286,7 @@ mod tests {
                 .into()
             };
             let draw = |focus: bool| {
-                let mut renderer = cosmic::iced::futures::executor::block_on(
-                    <Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-                )
-                .expect("headless renderer");
+                let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
                 let mut ui = UserInterface::build(
                     build(),
                     Size::new(120.0, 60.0),
@@ -316,12 +313,7 @@ mod tests {
             // The entry's box, as the layout reports it
             let mut element = build();
             let mut tree = Tree::new(element.as_widget());
-            let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-                Font::default(),
-                Pixels(14.0),
-                Some("tiny-skia"),
-            ))
-            .expect("headless renderer");
+            let renderer = crate::test_fonts::renderer().expect("headless renderer");
             let node = element.as_widget_mut().layout(
                 &mut tree,
                 &renderer,
@@ -347,14 +339,7 @@ mod tests {
 
     #[test]
     fn native_focus_operation_updates_target_without_relayout() {
-        use cosmic::iced::advanced::renderer::Headless;
-        use cosmic::iced::{Font, Pixels};
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut element: Element<'_, ()> =
             NavigationButton::new(cosmic::widget::text("Section"), Prominence::Prominent, true)
                 .on_press(())

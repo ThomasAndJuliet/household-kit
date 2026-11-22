@@ -430,8 +430,17 @@ pub(crate) fn measured_width_shaped(
     if content.is_empty() {
         return 0.0;
     }
+    // The tests' widths are Open Sans's, whichever test measures first:
+    // these widths are kept for the process, so one measured in the
+    // fallback font would outlive the pinning
+    #[cfg(test)]
+    crate::test_fonts::pin();
     let key = (size.to_bits(), font, content.to_owned(), shaping);
-    if let Some(width) = WIDTHS.lock().unwrap().get(&key) {
+    if let Some(width) = WIDTHS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+    {
         return *width;
     }
     let paragraph = <<cosmic::Renderer as text::Renderer>::Paragraph as text::Paragraph>::with_text(
@@ -449,7 +458,7 @@ pub(crate) fn measured_width_shaped(
         },
     );
     let result = paragraph.min_bounds().width;
-    let mut widths = WIDTHS.lock().unwrap();
+    let mut widths = WIDTHS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if widths.len() >= 4096 {
         widths.clear();
     }
@@ -764,15 +773,12 @@ mod tests {
 
     #[test]
     fn native_menu_row_reserves_sixteen_pixel_icon_canvases() {
-        use cosmic::iced::advanced::{Widget, layout, renderer::Headless, widget::Tree};
-        use cosmic::iced::{Font, Pixels, Size};
+        use cosmic::iced::advanced::{Widget, layout, widget::Tree};
+        use cosmic::iced::Size;
         fn icon(name: &'static str) -> icon::Handle {
             widget::icon::from_name(name).handle()
         }
-        let renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let row = MenuRow {
             reserve_mark: true,
             mark: Some(icon("object-select-symbolic")),
@@ -804,10 +810,9 @@ mod tests {
 
     #[test]
     fn row_width_fits_the_laid_out_label_and_shortcut() {
-        use cosmic::iced::advanced::renderer::Headless;
         use cosmic::iced::advanced::widget::{Id, Operation};
         use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-        use cosmic::iced::{Font, Pixels, Rectangle, Size};
+        use cosmic::iced::{Rectangle, Size};
         struct Texts(Vec<(String, Rectangle)>);
         impl Operation for Texts {
             fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
@@ -838,12 +843,7 @@ mod tests {
                     .width(Length::Fixed(width))
                     .into();
             let mut renderer =
-                cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-                    Font::default(),
-                    Pixels(14.0),
-                    Some("tiny-skia"),
-                ))
-                .expect("a headless renderer");
+                crate::test_fonts::renderer().expect("a headless renderer");
             let mut ui = UserInterface::build(
                 element,
                 Size::new(width, 60.0),
@@ -937,7 +937,7 @@ mod tests {
         use cosmic::iced::advanced::clipboard;
         use cosmic::iced::advanced::renderer::{Headless, Style};
         use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-        use cosmic::iced::{Color, Event, Font, Pixels, Point, Size, mouse};
+        use cosmic::iced::{Color, Event, Point, Size, mouse};
         fn icon(_: &'static str) -> icon::Handle {
             widget::icon::from_svg_bytes(&b"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect x='2' y='2' width='12' height='12' fill='white'/></svg>"[..])
         }
@@ -950,12 +950,7 @@ mod tests {
             item.disabled_reason = disabled.then(|| "Not now".into());
             let element = item_element(item, true, &MenuStyle { icon, body });
             let mut renderer =
-                cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-                    Font::default(),
-                    Pixels(14.0),
-                    Some("tiny-skia"),
-                ))
-                .expect("a headless renderer");
+                crate::test_fonts::renderer().expect("a headless renderer");
             let size = Size::new(240.0, 48.0);
             let mut ui = UserInterface::build(element, size, Cache::default(), &mut renderer);
             let cursor = mouse::Cursor::Available(Point::new(80.0, 16.0));

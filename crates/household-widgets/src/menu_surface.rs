@@ -1285,12 +1285,7 @@ mod presentation_tests {
     }
     #[test]
     fn family_preference_is_overrideable_without_changing_the_useful_floor() {
-        use cosmic::iced::advanced::renderer::Headless;
-        use cosmic::iced::{Font, Pixels};
-        let renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("native renderer");
+        let renderer = crate::test_fonts::renderer().expect("native renderer");
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -1343,14 +1338,9 @@ mod presentation_tests {
     fn choice_rows_drop_radio_gutters_but_preserve_checkbox_alignment() {
         use cosmic::iced::advanced::{
             Layout, Widget,
-            renderer::Headless,
             widget::{Operation, Tree},
         };
-        use cosmic::iced::{Font, Pixels};
-        let renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("native renderer");
+        let renderer = crate::test_fonts::renderer().expect("native renderer");
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -1436,7 +1426,7 @@ mod presentation_tests {
             renderer::Headless,
             widget::{Operation, Tree},
         };
-        use cosmic::iced::{Color, Event, Font, Pixels};
+        use cosmic::iced::{Color, Event};
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -1462,13 +1452,7 @@ mod presentation_tests {
             }
         }
         let render = |choice_rows: bool| {
-            let mut renderer =
-                cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-                    Font::default(),
-                    Pixels(14.0),
-                    Some("tiny-skia"),
-                ))
-                .expect("native renderer");
+            let mut renderer = crate::test_fonts::renderer().expect("native renderer");
             let item = crate::menu::MenuItem {
                 label: "A selected menu choice".into(),
                 message: (),
@@ -1553,7 +1537,7 @@ mod presentation_tests {
             renderer::Headless,
             widget::{Operation, Tree},
         };
-        use cosmic::iced::{Color, Event, Font, Pixels};
+        use cosmic::iced::{Color, Event};
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -1577,13 +1561,7 @@ mod presentation_tests {
             }
         }
         let paint = |mut element: Element<'static, ()>| {
-            let mut renderer =
-                cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
-                    Font::default(),
-                    Pixels(14.0),
-                    Some("tiny-skia"),
-                ))
-                .expect("native renderer");
+            let mut renderer = crate::test_fonts::renderer().expect("native renderer");
             let mut tree = Tree::new(element.as_widget());
             let size = Size::new(200.0, 120.0);
             let node = element.as_widget_mut().layout(
@@ -1698,8 +1676,8 @@ mod presentation_tests {
 
     #[test]
     fn a_scrolling_menus_scrollbar_does_not_cover_the_inline_frames_right_border() {
+        use cosmic::iced::Color;
         use cosmic::iced::advanced::{Layout, mouse, renderer::Headless, widget::Tree};
-        use cosmic::iced::{Color, Font, Pixels};
         fn icon(name: &'static str) -> widget::icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -1739,10 +1717,7 @@ mod presentation_tests {
             spacing: cosmic::theme::spacing(),
         };
         let (w, h) = (240usize, 150usize);
-        let mut renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("native renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("native renderer");
         let theme = cosmic::Theme::light();
         let mut element = content.view(true, 1);
         let mut tree = Tree::new(element.as_widget());
@@ -1782,14 +1757,9 @@ mod presentation_tests {
 
     #[test]
     fn real_menu_box_queries_and_commits_native_geometry() {
-        use cosmic::iced::advanced::{
-            Widget, layout as native_layout, renderer::Headless, widget::Tree,
-        };
-        use cosmic::iced::{Font, Pixels, Size};
-        let mut renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("headless renderer");
+        use cosmic::iced::Size;
+        use cosmic::iced::advanced::{Widget, layout as native_layout, widget::Tree};
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let item = crate::menu::MenuItem {
             label: "Open item".into(),
             message: (),
@@ -1934,13 +1904,10 @@ mod presentation_tests {
     }
     #[test]
     fn menu_action_activates_after_native_view_rebuilds() {
+        use cosmic::iced::Event;
         use cosmic::iced::advanced::mouse;
-        use cosmic::iced::advanced::{
-            renderer::Headless,
-            widget::{Operation, operation},
-        };
+        use cosmic::iced::advanced::widget::{Operation, operation};
         use cosmic::iced::runtime::{UserInterface, user_interface};
-        use cosmic::iced::{Event, Font, Pixels};
         struct Find {
             id: Id,
             bounds: Option<Rectangle>,
@@ -1989,10 +1956,7 @@ mod presentation_tests {
                 .anchors(anchors.clone())
                 .chain(panels)
         }
-        let mut renderer = cosmic::iced::futures::executor::block_on(
-            <cosmic::Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
-        )
-        .expect("headless renderer");
+        let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let anchors = Anchors::default();
         let size = Size::new(400.0, 300.0);
         let mut ui = UserInterface::build(

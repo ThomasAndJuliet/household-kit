@@ -2,10 +2,9 @@
 //! Exercise information ownership through native UserInterface dispatch.
 use super::*;
 use crate::layout::{Alignment, AnchorCandidate, Level, Side, child};
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::event::Status;
 use cosmic::iced::runtime::{UserInterface, user_interface};
-use cosmic::iced::{Font, Pixels, Point, window};
+use cosmic::iced::{Point, window};
 use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -14,12 +13,7 @@ enum Message {
     Dismiss,
 }
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .unwrap()
+    crate::test_fonts::renderer().unwrap()
 }
 fn key(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Event {
     Event::Keyboard(keyboard::Event::KeyPressed {

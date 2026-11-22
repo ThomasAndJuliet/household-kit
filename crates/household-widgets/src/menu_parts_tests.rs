@@ -2,16 +2,11 @@
 use crate::menu_parts::*;
 use cosmic::iced::advanced::{Layout, Shell, layout, mouse, renderer::Headless, widget::Tree};
 use cosmic::iced::widget;
-use cosmic::iced::{Event, Font, Pixels, Point, Rectangle, Size};
+use cosmic::iced::{Event, Point, Rectangle, Size};
 use cosmic::{Element, Renderer};
 
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless renderer")
+    crate::test_fonts::renderer().expect("headless renderer")
 }
 fn space(width: f32) -> Element<'static, u8> {
     widget::Space::new().width(width).height(20.0).into()

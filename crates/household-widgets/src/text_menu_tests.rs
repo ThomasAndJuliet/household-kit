@@ -169,8 +169,7 @@ fn real_native_targets_supply_the_policy_context() {
 
 #[test]
 fn real_targets_open_the_household_overlay_on_right_press() {
-    use cosmic::iced::advanced::renderer::Headless;
-    use cosmic::iced::{Font, Pixels, Point};
+    use cosmic::iced::Point;
     fn body(text: String) -> Element<'static, TextMenuCommand> {
         cosmic::widget::text(text).into()
     }
@@ -211,12 +210,7 @@ fn real_targets_open_the_household_overlay_on_right_press() {
             .is_some()
         );
     }
-    let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("a headless renderer");
+    let renderer = crate::test_fonts::renderer().expect("a headless renderer");
     exercise(
         cosmic::widget::text_input("", "value").on_input(|_| ()),
         &renderer,
@@ -400,13 +394,7 @@ pub(crate) fn style() -> MenuStyle<TextMenuCommand> {
     MenuStyle { icon, body }
 }
 fn renderer() -> Renderer {
-    use cosmic::iced::advanced::renderer::Headless;
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        cosmic::iced::Font::default(),
-        cosmic::iced::Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("a headless renderer")
+    crate::test_fonts::renderer().expect("a headless renderer")
 }
 const VIEWPORT: Rectangle = Rectangle {
     x: 0.0,

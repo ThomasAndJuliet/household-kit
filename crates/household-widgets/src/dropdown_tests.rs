@@ -10,12 +10,11 @@ use crate::menu_surface::{row_id, row_key};
 use crate::popup::{FocusProbe, Panel};
 use crate::window::{Entry, UiEvent, WindowAction, WindowUi};
 use cosmic::Renderer;
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::{Id, Operation, operation};
 use cosmic::iced::runtime::{UserInterface, user_interface};
 use cosmic::iced::widget as native;
 use cosmic::iced::window as native_window;
-use cosmic::iced::{Event, Font, Pixels, Point, Rectangle, Size, keyboard, mouse};
+use cosmic::iced::{Event, Point, Rectangle, Size, keyboard, mouse};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
@@ -167,12 +166,7 @@ const SIZE: Size = Size::new(500.0, 500.0);
 
 impl App {
     fn new() -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer");
+        let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let mut app = Self {
             window: WindowUi::new(),
             selected: 0,
@@ -437,12 +431,7 @@ fn pin_standard_density_trigger_geometry() {
     };
     let text = measured_width("Medium", TEXT_SIZE, cosmic::font::default());
     assert_eq!(trigger_width(&[option]), (text + 4.0 + 16.0 + 16.0).ceil());
-    let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless renderer");
+    let renderer = crate::test_fonts::renderer().expect("headless renderer");
     let mut face = Face::new("Medium".into(), Length::Shrink);
     let node = Widget::layout(
         &mut face,
@@ -471,12 +460,7 @@ fn the_trigger_follows_the_density() {
         trigger_width_in(&[option], &compact),
         (text + 4.0 + 16.0 + 8.0).ceil()
     );
-    let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("headless renderer");
+    let renderer = crate::test_fonts::renderer().expect("headless renderer");
     let mut face = Face::in_spacing("Medium".into(), Length::Shrink, compact);
     let node = Widget::layout(
         &mut face,

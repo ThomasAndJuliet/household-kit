@@ -3,14 +3,17 @@
 //! what a virtualised list builds, the reading position it keeps, reveal
 //! of items not built, and measurement that commits nothing.
 
+#[path = "../src/test_fonts.rs"]
+mod test_fonts;
+
+use cosmic::iced::advanced::clipboard;
 use cosmic::iced::advanced::widget::operation::Scrollable;
 use cosmic::iced::advanced::widget::operation::{self, Focusable};
 use cosmic::iced::advanced::widget::{Id, Operation};
-use cosmic::iced::advanced::{clipboard, renderer::Headless};
 use cosmic::iced::keyboard;
 use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
 use cosmic::iced::widget::scrollable::AbsoluteOffset;
-use cosmic::iced::{Font, Length, Pixels, Point, Rectangle, Size, Vector, mouse};
+use cosmic::iced::{Length, Point, Rectangle, Size, Vector, mouse};
 use cosmic::{Element, Renderer, widget};
 use household_widgets::layout;
 use household_widgets::scroll_list::{
@@ -40,12 +43,7 @@ struct Window {
 
 impl Window {
     fn new() -> Self {
-        let renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("the actual tiny-skia renderer");
+        let renderer = crate::test_fonts::renderer().expect("the actual tiny-skia renderer");
         Self {
             renderer,
             cache: Cache::default(),

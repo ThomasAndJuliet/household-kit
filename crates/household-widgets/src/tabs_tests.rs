@@ -1,17 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use cosmic::iced::advanced::renderer::Headless;
 use cosmic::iced::advanced::widget::operation::Focusable;
-use cosmic::iced::{Font, Pixels, Point, keyboard};
+use cosmic::iced::{Point, keyboard};
 
 fn renderer() -> Renderer {
-    cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-        Font::default(),
-        Pixels(14.0),
-        Some("tiny-skia"),
-    ))
-    .expect("native renderer")
+    crate::test_fonts::renderer().expect("native renderer")
 }
 
 fn model() -> Model {

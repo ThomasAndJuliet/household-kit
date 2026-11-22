@@ -276,16 +276,10 @@ fn regions(window: Rectangle, obstacles: &[Rectangle]) -> Vec<Rectangle> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmic::iced::advanced::renderer::Headless;
-    use cosmic::iced::{Font, Pixels, Point};
+    use cosmic::iced::Point;
 
     fn renderer() -> Renderer {
-        cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer")
+        crate::test_fonts::renderer().expect("headless renderer")
     }
     fn r(x: f32, y: f32, width: f32, height: f32) -> Rectangle {
         Rectangle {

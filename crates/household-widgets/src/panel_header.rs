@@ -61,21 +61,15 @@ pub fn header<'a, Message: 'a>(
 mod tests {
     use super::*;
     use crate::layout::{Level, SourceId, Stage, child, stages, wrap_child};
+    use cosmic::iced::Size;
     use cosmic::iced::advanced::{
         layout,
-        renderer::Headless,
         widget::{Tree, Widget},
     };
-    use cosmic::iced::{Font, Pixels, Size};
     use cosmic::{Renderer, Theme};
 
     fn renderer() -> Renderer {
-        cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
-            Font::default(),
-            Pixels(14.0),
-            Some("tiny-skia"),
-        ))
-        .expect("headless renderer")
+        crate::test_fonts::renderer().expect("headless renderer")
     }
 
     fn box_child(width: f32, height: f32) -> Child<'static, ()> {
