@@ -603,6 +603,11 @@ fn the_measurement_is_the_laid_out_width_in_whole_pixels_for_every_look() {
                 laid,
                 "{look:?} {labels:?}: the free measurement"
             );
+            assert_eq!(
+                label_width(look, &labels, None, false),
+                laid,
+                "{look:?} {labels:?}: measured without a renderer"
+            );
             // With a leading icon and a trailing one
             let rich = || build().leading_icon(widget::icon::from_name("go-next-symbolic")).trailing_icon(widget::icon::from_name("go-next-symbolic").handle());
             let laid = layout_of(rich().into(), &renderer).size().width;
@@ -611,6 +616,11 @@ fn the_measurement_is_the_laid_out_width_in_whole_pixels_for_every_look() {
                 width_of(&renderer, look, &labels, Some(16.0), true),
                 laid,
                 "{look:?} {labels:?} with icons: the free measurement"
+            );
+            assert_eq!(
+                label_width(look, &labels, Some(16.0), true),
+                laid,
+                "{look:?} {labels:?} with icons: measured without a renderer"
             );
         }
     }

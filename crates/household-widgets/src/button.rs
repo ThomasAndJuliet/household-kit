@@ -961,6 +961,41 @@ pub fn width_of(
     row_width(leading, widest, trailing_icon, &space) + 2.0 * look.inset(&space)
 }
 
+/// [`width_of`] for a view, which decides layout without a `Renderer`: the
+/// text is measured by shaping it in the weights `look` draws
+/// ([`crate::menu::measured_width`]'s measurement, shaped as the label
+/// widget shapes (basic; rich text in full), so that the whole pixels equal the layout's;
+/// [`crate::segmented::part_width`]'s advanced shaping runs a pixel or two
+/// wider), the widest of `labels` (the label and its
+/// [`Button::other_labels`]; a segment's in both of its weights) kept. The
+/// answer is whole pixels and equals [`Button::natural_width`] (`button_tests`
+/// checks every look). `leading` is the width of a leading element, if any
+pub fn label_width(
+    look: ButtonLook,
+    labels: &[&str],
+    leading: Option<f32>,
+    trailing_icon: bool,
+) -> f32 {
+    use crate::menu::measured_width_shaped;
+    let space = theme::active().cosmic().spacing;
+    if look == ButtonLook::Icon && leading.is_some() {
+        return f32::from(space.space_l);
+    }
+    // Rich text (Tertiary's underlined label) is shaped in full, plain text basic
+    let advanced = look.tertiary();
+    let weights = match look {
+        ButtonLook::Segment => vec![cosmic::font::semibold(), cosmic::font::default()],
+        ButtonLook::Plain => vec![cosmic::font::default()],
+        ButtonLook::Tertiary | ButtonLook::TertiaryDestructive => vec![cosmic::font::bold()],
+        _ => vec![cosmic::font::semibold()],
+    };
+    let widest = labels
+        .iter()
+        .flat_map(|text| weights.iter().map(move |font| measured_width_shaped(text, LABEL_SIZE, *font, advanced)))
+        .fold(0.0, f32::max);
+    row_width(leading, widest, trailing_icon, &space) + 2.0 * look.inset(&space)
+}
+
 /// A headless renderer, for a doctest or an app's test to measure with
 #[doc(hidden)]
 pub fn headless_renderer() -> Renderer {
