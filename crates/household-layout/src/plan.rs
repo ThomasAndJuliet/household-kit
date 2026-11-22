@@ -155,6 +155,77 @@ impl Placed {
 /// The public planning entries `Child::query_at` and `Child::plan_width`
 /// return this failure's error and nothing else, so what they return, and
 /// when, is what it was before failures had paths.
+///
+/// **An example.** A row of two boxes, no gap between them: an icon that
+/// keeps its 40 (weight zero), and a label that prefers 120 and cannot go
+/// below 80. Each would fit a room 100 wide on its own; together they need
+/// 40 + 80 = 120, which is the row's floor of width. In a room of 100 the
+/// row is checked against the room before either child is planned, so the
+/// failure is the row's: 120 required, 100 available, and an empty path.
+/// It is not the label's, though the label is the part that cannot give
+/// way: nothing about the label alone fails. In a room of 130 the row fits
+/// in width (the icon 40, the label 90), but the room is only 8 high, and
+/// the first child planned in it, the icon, 10 high, is too tall: 10
+/// required, 8 available, at path `[0]`.
+///
+/// ```
+/// use household_layout::{AllocationError, Child, Host, Level, Offer, Size};
+///
+/// /// A box of its own height, as wide as the room it is given, or as wide
+/// /// as it would like in unbounded room.
+/// struct Boxes;
+///
+/// impl Host for Boxes {
+///     type Leaf = Size;
+///     type Context = ();
+///     type Note = &'static str;
+///     type Chrome = ();
+///
+///     fn size(leaf: &Size, _: Level, _: &(), offer: Offer) -> Size {
+///         let (Offer::NeededHeight(room) | Offer::OfferedHeight(room)) = offer;
+///         let width = if room.width.is_finite() { room.width } else { leaf.width };
+///         Size::new(width, leaf.height)
+///     }
+/// }
+///
+/// let named = |name, mut part: Child<'static, Boxes>| {
+///     *part.note_mut() = name;
+///     part
+/// };
+/// let icon = named("icon", Child::leaf(Size::new(40.0, 10.0)).weight(0.0));
+/// let label = named(
+///     "label",
+///     Child::leaf(Size::new(120.0, 10.0)).minimum_width(|_, _| 80.0),
+/// );
+/// let row = named("row", Child::row(vec![icon, label], 0.0));
+///
+/// let failure = row
+///     .query_at_blaming(Level::Preferred, &(), Size::new(100.0, 50.0))
+///     .unwrap_err();
+/// assert_eq!(
+///     failure.error(),
+///     AllocationError::NoFit { required: 120.0, available: 100.0 },
+/// );
+/// assert!(failure.path().is_empty());
+/// let part = row.part_at(Level::Preferred, failure.path()).unwrap();
+/// assert_eq!(*part.note(), "row");
+/// // `query_at` fails with the same error, without the part.
+/// assert_eq!(
+///     row.query_at(Level::Preferred, &(), Size::new(100.0, 50.0)),
+///     Err(failure.error()),
+/// );
+///
+/// let failure = row
+///     .query_at_blaming(Level::Preferred, &(), Size::new(130.0, 8.0))
+///     .unwrap_err();
+/// assert_eq!(
+///     failure.error(),
+///     AllocationError::NoFit { required: 10.0, available: 8.0 },
+/// );
+/// assert_eq!(failure.path(), [0]);
+/// let part = row.part_at(Level::Preferred, failure.path()).unwrap();
+/// assert_eq!(*part.note(), "icon");
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Failure {
     error: AllocationError,
