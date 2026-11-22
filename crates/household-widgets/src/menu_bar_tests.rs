@@ -621,3 +621,69 @@ fn a_title_follows_the_density() {
         12.0
     );
 }
+
+/// What text colour a probe was drawn with
+struct Probe(std::rc::Rc<std::cell::Cell<Option<cosmic::iced::Color>>>);
+
+impl Widget<(), Theme, Renderer> for Probe {
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fixed(10.0), Length::Fixed(10.0))
+    }
+    fn layout(&mut self, _: &mut Tree, _: &Renderer, _: &layout::Limits) -> layout::Node {
+        layout::Node::new(Size::new(10.0, 10.0))
+    }
+    fn draw(
+        &self,
+        _: &Tree,
+        _: &mut Renderer,
+        _: &Theme,
+        style: &renderer::Style,
+        _: Layout<'_>,
+        _: mouse::Cursor,
+        _: &Rectangle,
+    ) {
+        self.0.set(Some(style.text_color));
+    }
+}
+
+/// Bug A (Terminal's UI pass): a title's text was drawn in the body-text
+/// colour once its class was made unringed. It is the colour the plain
+/// `MenuRoot` class gives it: the header's (the renderer's icon colour)
+#[test]
+fn a_title_keeps_the_header_colour_of_the_plain_menu_root_class() {
+    use cosmic::iced::advanced::renderer::Headless;
+    use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
+    use cosmic::iced::Color;
+    let drawn = |class: cosmic::theme::Button, tint: bool| {
+        let seen = std::rc::Rc::new(std::cell::Cell::new(None));
+        let probe: Element<'static, ()> = Element::new(Probe(seen.clone()));
+        let probe = if tint { header_coloured(probe) } else { probe };
+        let button: Element<'static, ()> = cosmic::widget::button::custom(probe)
+            .class(class)
+            .on_press(())
+            .into();
+        let mut renderer = cosmic::iced::futures::executor::block_on(
+            <Renderer as Headless>::new(Font::default(), Pixels(14.0), Some("tiny-skia")),
+        )
+        .expect("native renderer");
+        let mut ui = UserInterface::build(button, Size::new(60.0, 40.0), Cache::default(), &mut renderer);
+        let header = renderer::Style {
+            icon_color: Color::from_rgb(0.9, 0.1, 0.2),
+            text_color: Color::from_rgb(0.1, 0.1, 0.1),
+            ..Default::default()
+        };
+        ui.draw(&mut renderer, &Theme::default(), &header, mouse::Cursor::Unavailable);
+        seen.get()
+    };
+    let plain = drawn(cosmic::theme::Button::MenuRoot, false);
+    assert_eq!(plain, Some(Color::from_rgb(0.9, 0.1, 0.2)), "libcosmic's own");
+    assert_eq!(
+        drawn(crate::button::unringed(cosmic::theme::Button::MenuRoot), true),
+        plain
+    );
+    // And without the tint the unringed class would lose it
+    assert_ne!(
+        drawn(crate::button::unringed(cosmic::theme::Button::MenuRoot), false),
+        plain
+    );
+}

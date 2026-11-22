@@ -176,7 +176,7 @@ fn title<'a, M: 'a, R: Clone + PartialEq + 'static>(
     let centred = cosmic::widget::container(body(label))
         .height(Length::Fill)
         .align_y(cosmic::iced::alignment::Vertical::Center);
-    let button = cosmic::widget::button::custom(centred)
+    let button = cosmic::widget::button::custom(header_coloured(centred.into()))
         .padding(title_padding(&spacing))
         .height(Length::Fixed(control_height(&spacing)))
         .class(crate::button::unringed(cosmic::theme::Button::MenuRoot))
@@ -190,6 +190,45 @@ fn title<'a, M: 'a, R: Clone + PartialEq + 'static>(
         switch,
         content: crate::window::trigger(id, root, target),
     })
+}
+
+/// `content` with its text in the colour of the header's controls.
+///
+/// libcosmic's button draws a `MenuRoot` button's text in the *icon* colour
+/// it is given (the header's), but only when the class is exactly
+/// `MenuRoot`; the title wears that class through [`crate::button::unringed`],
+/// a `Custom` class, so that no focus ring is drawn outside the box, and a
+/// `Custom` class draws text in the body-text colour. This hands the
+/// content the icon colour as its text colour, which is what the plain
+/// class does, so the title keeps its colour with no outside ring
+fn header_coloured<'a, M: 'a>(content: Element<'a, M>) -> Element<'a, M> {
+    Element::new(HeaderColoured { content })
+}
+
+struct HeaderColoured<'a, M> {
+    content: Element<'a, M>,
+}
+
+impl<M> Widget<M, Theme, Renderer> for HeaderColoured<'_, M> {
+    forward_widget!(M, Theme, Renderer; children, diff, size, layout, operate, update, mouse_interaction, overlay, drag_destinations, a11y_nodes);
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let style = renderer::Style {
+            text_color: style.icon_color,
+            ..*style
+        };
+        self.content
+            .as_widget()
+            .draw(&tree.children[0], renderer, theme, &style, layout, cursor, viewport);
+    }
 }
 
 /// A title: the normal hover wash under the pointer and while its menu is
