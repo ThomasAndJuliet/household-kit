@@ -410,23 +410,27 @@ fn width<M>(rows: &[Row<M>]) -> f32 {
     rows.chain(more).fold(f32::from(MENU_MIN_WIDTH), f32::max)
 }
 
-type Widths = HashMap<(u32, Font, String, bool), f32>;
+type Widths = HashMap<(u32, Font, String, cosmic::iced::advanced::text::Shaping), f32>;
 static WIDTHS: LazyLock<Mutex<Widths>> = LazyLock::new(Default::default);
 /// Shapes text at the requested size and font, retaining at most 4096 widths.
 pub fn measured_width(content: &str, size: f32, font: Font) -> f32 {
-    measured_width_shaped(content, size, font, true)
+    measured_width_shaped(content, size, font, cosmic::iced::advanced::text::Shaping::Advanced)
 }
 
-/// [`measured_width`] shaped as `advanced` (full shaping) or basic text.
-/// The shaping decides the width a little (under a pixel a label), so a
-/// measurement that must equal a widget's layout shapes as the widget does
-/// ([`crate::button::label_width`])
-pub(crate) fn measured_width_shaped(content: &str, size: f32, font: Font, advanced: bool) -> f32 {
+/// [`measured_width`] shaped as `shaping`. The shaping decides the width
+/// (a pixel or more a label), so a measurement that must equal a widget's
+/// layout shapes as the widget does ([`crate::button::label_width`])
+pub(crate) fn measured_width_shaped(
+    content: &str,
+    size: f32,
+    font: Font,
+    shaping: cosmic::iced::advanced::text::Shaping,
+) -> f32 {
     use cosmic::iced::advanced::text::{self, Paragraph as _};
     if content.is_empty() {
         return 0.0;
     }
-    let key = (size.to_bits(), font, content.to_owned(), advanced);
+    let key = (size.to_bits(), font, content.to_owned(), shaping);
     if let Some(width) = WIDTHS.lock().unwrap().get(&key) {
         return *width;
     }
@@ -439,11 +443,7 @@ pub(crate) fn measured_width_shaped(content: &str, size: f32, font: Font, advanc
             font,
             align_x: text::Alignment::Default,
             align_y: cosmic::iced::alignment::Vertical::Top,
-            shaping: if advanced {
-                text::Shaping::Advanced
-            } else {
-                text::Shaping::Basic
-            },
+            shaping,
             wrapping: text::Wrapping::None,
             ellipsize: text::Ellipsize::default(),
         },

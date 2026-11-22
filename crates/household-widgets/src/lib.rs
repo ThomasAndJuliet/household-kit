@@ -102,6 +102,8 @@ mod short_text_box_tests;
 #[cfg(test)]
 mod switch_tests;
 #[cfg(test)]
+pub(crate) mod test_fonts;
+#[cfg(test)]
 mod text_box_tests;
 
 /// The common menu and hover-card surface.

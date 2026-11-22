@@ -7,6 +7,7 @@ use cosmic::iced::advanced::widget::Tree;
 use cosmic::iced::{Color, Font, Pixels, Point, Rectangle, Size};
 
 fn renderer() -> cosmic::Renderer {
+    crate::test_fonts::pin();
     cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
         Font::default(),
         Pixels(14.0),
@@ -86,13 +87,8 @@ fn a_parts_width_is_its_widest_weight_and_never_changes_with_the_choice() {
         assert_eq!(widths(chosen, false), base, "disabled, chosen {chosen:?}");
     }
     for (label, width) in LABELS.iter().zip(&base) {
-        // The form's measure is a pixel or two over what the button lays
-        // out, never under it: parts at that width always hold their label
-        assert!(
-            (0.0..=2.0).contains(&(part_width(label, false) - width)),
-            "{label}: {width} vs {}",
-            part_width(label, false)
-        );
+        // The form's measure is what the button lays out, to the pixel
+        assert_eq!(part_width(label, false), *width, "{label}");
     }
 }
 

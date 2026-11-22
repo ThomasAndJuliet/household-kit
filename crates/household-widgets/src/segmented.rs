@@ -102,8 +102,7 @@ use cosmic::iced::{Alignment, Background, Border, Color, Event, Length, Rectangl
 use cosmic::widget::{self, tooltip::Position};
 use cosmic::{Element, Renderer, Theme, theme};
 
-use crate::button::{ACTION_ICON, Button, ButtonLook, LABEL_SIZE, displayed_fill};
-use crate::menu::measured_width;
+use crate::button::{ACTION_ICON, Button, ButtonLook, displayed_fill};
 use crate::tooltip::Tip;
 
 /// The stroke round the bar: a line, not a layout size. It is painted over
@@ -190,8 +189,7 @@ pub fn part_width(label: &str, icon: bool) -> f32 {
     } else {
         0.0
     };
-    let text = measured_width(label, LABEL_SIZE, cosmic::font::semibold())
-        .max(measured_width(label, LABEL_SIZE, cosmic::font::default()));
+    let text = crate::button::text_width(ButtonLook::Segment, &[label]);
     (icon + text + 2.0 * ButtonLook::Segment.inset(&space)).ceil()
 }
 

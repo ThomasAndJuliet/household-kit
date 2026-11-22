@@ -1007,38 +1007,73 @@ pub fn width_of(
 }
 
 /// [`width_of`] for a view, which decides layout without a `Renderer`: the
-/// text is measured by shaping it in the weights `look` draws
-/// ([`crate::menu::measured_width`]'s measurement, shaped as the label
-/// widget shapes (basic; rich text in full), so that the whole pixels equal the layout's;
-/// [`crate::segmented::part_width`]'s advanced shaping runs a pixel or two
-/// wider), the widest of `labels` (the label and its
+/// text is measured by shaping it with the settings [`label`] draws it with
+/// (the same [`label_font`], [`LABEL_SIZE`] and [`label_shaping`], no
+/// wrapping), the widest of `labels` (the label and its
 /// [`Button::other_labels`]; a segment's in both of its weights) kept. The
 /// answer is whole pixels and equals [`Button::natural_width`] (`button_tests`
-/// checks every look). `leading` is the width of a leading element, if any
+/// checks every look, in the apps' text environment). `leading` is the width
+/// of a leading element, if any
 pub fn label_width(
     look: ButtonLook,
     labels: &[&str],
     leading: Option<f32>,
     trailing_icon: bool,
 ) -> f32 {
-    use crate::menu::measured_width_shaped;
     let space = theme::active().cosmic().spacing;
     if look == ButtonLook::Icon && leading.is_some() {
         return f32::from(space.space_l);
     }
-    // Rich text (Tertiary's underlined label) is shaped in full, plain text basic
-    let advanced = look.tertiary();
-    let weights = match look {
-        ButtonLook::Segment => vec![cosmic::font::semibold(), cosmic::font::default()],
-        ButtonLook::Plain => vec![cosmic::font::default()],
-        ButtonLook::Tertiary | ButtonLook::TertiaryDestructive => vec![cosmic::font::bold()],
-        _ => vec![cosmic::font::semibold()],
-    };
-    let widest = labels
+    row_width(leading, text_width(look, labels), trailing_icon, &space) + 2.0 * look.inset(&space)
+}
+
+/// The widest of `labels` as `look` draws them, in each weight the look draws
+/// (a segment's chosen and unchosen), unrounded
+pub(crate) fn text_width(look: ButtonLook, labels: &[&str]) -> f32 {
+    let chosen = [true, false];
+    let weights = if look == ButtonLook::Segment { &chosen[..] } else { &chosen[..1] };
+    labels
         .iter()
-        .flat_map(|text| weights.iter().map(move |font| measured_width_shaped(text, LABEL_SIZE, *font, advanced)))
-        .fold(0.0, f32::max);
-    row_width(leading, widest, trailing_icon, &space) + 2.0 * look.inset(&space)
+        .flat_map(|text| {
+            weights.iter().map(move |chosen| {
+                crate::menu::measured_width_shaped(
+                    text,
+                    LABEL_SIZE,
+                    label_font(look, *chosen),
+                    label_shaping(look),
+                )
+            })
+        })
+        .fold(0.0, f32::max)
+}
+
+/// The font a label of `look` is drawn in: semibold for the boxed looks; bold
+/// for Tertiary; a segment's semibold when `chosen` and regular otherwise
+/// (rule 6a's weights); Plain's regular
+fn label_font(look: ButtonLook, chosen: bool) -> cosmic::iced::Font {
+    if look.tertiary() {
+        return cosmic::font::bold();
+    }
+    let regular = match look {
+        ButtonLook::Segment => !chosen,
+        ButtonLook::Plain => true,
+        _ => false,
+    };
+    if regular {
+        cosmic::font::default()
+    } else {
+        cosmic::font::semibold()
+    }
+}
+
+/// How every label is shaped: in full, as the apps' libcosmic shapes text by
+/// default (they build it with `advanced-shaping`) and as Tertiary's rich
+/// text always is. Said here rather than left to the text widget's default,
+/// which depends on a feature the build chooses, so that a label drawn and a
+/// label measured ([`label_width`]) cannot be shaped differently, in an app or
+/// in this crate's tests
+fn label_shaping(_look: ButtonLook) -> cosmic::iced::advanced::text::Shaping {
+    cosmic::iced::advanced::text::Shaping::Advanced
 }
 
 /// A headless renderer, for a doctest or an app's test to measure with
@@ -1121,7 +1156,7 @@ fn label<'a, M: 'a>(look: ButtonLook, chosen: bool, cut: bool, text: String) -> 
         let span: cosmic::iced::widget::text::Span<'a, (), cosmic::iced::Font> =
             cosmic::iced::widget::text::Span::new(text)
                 .underline(true)
-                .font(cosmic::font::bold());
+                .font(label_font(look, chosen));
         let rich = cosmic::iced::widget::rich_text([span])
             .size(LABEL_SIZE)
             .line_height(LineHeight::Absolute(LABEL_LINE.into()))
@@ -1132,19 +1167,11 @@ fn label<'a, M: 'a>(look: ButtonLook, chosen: bool, cut: bool, text: String) -> 
             rich.into()
         };
     }
-    let regular = match look {
-        ButtonLook::Segment => !chosen,
-        ButtonLook::Plain => true,
-        _ => false,
-    };
     let text = widget::text(text)
         .size(LABEL_SIZE)
         .line_height(LineHeight::Absolute(LABEL_LINE.into()))
-        .font(if regular {
-            cosmic::font::default()
-        } else {
-            cosmic::font::semibold()
-        })
+        .font(label_font(look, chosen))
+        .shaping(label_shaping(look))
         .wrapping(Wrapping::None);
     if cut {
         text.ellipsize(ellipsis).width(Length::Fill).into()

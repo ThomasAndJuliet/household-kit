@@ -7,6 +7,7 @@ use cosmic::iced::advanced::widget::Tree;
 use cosmic::iced::{Font, Pixels, Point, Size};
 
 fn renderer() -> cosmic::Renderer {
+    crate::test_fonts::pin();
     cosmic::iced::futures::executor::block_on(<cosmic::Renderer as Headless>::new(
         Font::default(),
         Pixels(14.0),
@@ -591,6 +592,12 @@ fn the_measurement_is_the_laid_out_width_in_whole_pixels_for_every_look() {
             vec!["Copy", "Copied"],
             vec!["Set up in Settings", "Wi", "Quite a long label indeed"],
             vec!["Mmmm WWW iii"],
+            // Labels the apps draw, which measured narrower than drawn when
+            // the measurement was shaped differently from the label
+            vec!["Send"],
+            vec!["Steer"],
+            vec!["Open in Cerea"],
+            vec!["New terminal session"],
         ] {
             let build = || {
                 Button::<()>::new(look, labels[0]).other_labels(labels[1..].iter().copied())
