@@ -199,6 +199,19 @@ pub fn control_height(spacing: &Spacing) -> f32 {
     f32::from(spacing.space_l)
 }
 
+/// The height of every toggle: the segmented control (its bar and each part),
+/// the switch (26 x 52, keeping its 2:1 shape) and any check box or radio
+/// button the kit draws. Buttons stay [`control_height`].
+///
+/// Juliet, 22 Nov 2026: "you seem to have decided that the labelled toggles
+/// now have the spacing on a press button whereas it is a toggle and toggles
+/// are not that high." After comparing 24 and 26 px: "Let's go for 26px for
+/// everything." It is not a spacing step (the steps are 4, 8, 12, 16, 24,
+/// 32), so it is stated once, here, and every toggle asks for it; no toggle
+/// carries the number itself. It does not follow the Density setting, as the
+/// switch's 24 px height never did
+pub const TOGGLE_HEIGHT: f32 = 26.0;
+
 /// What is left above and below a line of `line` pixels centred in a
 /// control's height ([`control_height`]); none if the line is taller. This
 /// is where a menu row's 6 px comes from: `(space_l - 20) / 2`

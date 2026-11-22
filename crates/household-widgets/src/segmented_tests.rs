@@ -52,18 +52,19 @@ fn parts_of(node: &layout::Node) -> (Size, Vec<Rectangle>) {
 const LABELS: [&str; 3] = ["Paper", "Text", "Terminal"];
 
 #[test]
-fn the_bar_is_space_l_tall_and_its_parts_fill_it_with_no_gap() {
+fn the_bar_is_toggle_height_tall_and_its_parts_fill_it_with_no_gap() {
     let renderer = renderer();
     let node = layout_of(bar(&LABELS, Some(1), true).into(), &renderer);
     let (size, parts) = parts_of(&node);
     assert_eq!(parts.len(), 3);
-    let space_l = f32::from(theme::active().cosmic().spacing.space_l);
-    assert_eq!(space_l, crate::button::button_height());
+    // Juliet, 22 Nov 2026: "Let's go for 26px for everything"; buttons stay space_l
+    assert_eq!(crate::spacing::TOGGLE_HEIGHT, 26.0);
+    assert_eq!(crate::button::button_height(), 32.0);
     for part in &parts {
-        assert_eq!(part.height, space_l);
+        assert_eq!(part.height, crate::spacing::TOGGLE_HEIGHT);
         assert_eq!(part.y, 0.0, "the parts fill the bar");
     }
-    assert_eq!(size.height, space_l, "as tall as a button");
+    assert_eq!(size.height, crate::spacing::TOGGLE_HEIGHT, "as tall as every toggle");
     assert_eq!(parts[0].x, 0.0);
     for pair in parts.windows(2) {
         assert!((pair[1].x - (pair[0].x + pair[0].width)).abs() < 0.01, "no gap");
@@ -144,7 +145,7 @@ fn the_chosen_part_is_the_muted_fill_with_square_inner_corners() {
     for (x, y) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
         assert!(is_muted(pixel(&pixels, x, y)), "square corner at ({x}, {y})");
     }
-    assert!(is_muted(pixel(&pixels, middle.x + 3.0, middle.y + 16.0)), "its fill");
+    assert!(is_muted(pixel(&pixels, middle.x + 3.0, middle.y + 13.0)), "its fill");
     // The outline is on the bar's own edge, over the chosen fill, and
     // nothing is drawn beyond it
     let mid = (middle.x + middle.width / 2.0).floor();
@@ -152,8 +153,8 @@ fn the_chosen_part_is_the_muted_fill_with_square_inner_corners() {
     assert!(!is_muted(edge), "the outline lies over the part's top edge");
     assert_ne!(edge, pixel(&pixels, mid, top), "and differs from the fill under it");
     assert_eq!(pixel(&pixels, mid, middle.height), pixel(&pixels, 120.0, 40.0), "nothing below the bar");
-    assert_eq!(pixel(&pixels, mid, 31.0), edge, "the same line at the bottom edge");
-    assert!(!is_muted(pixel(&pixels, parts[0].x + 3.0, parts[0].y + 16.0)), "an unchosen part has none");
+    assert_eq!(pixel(&pixels, mid, middle.height - 1.0), edge, "the same line at the bottom edge");
+    assert!(!is_muted(pixel(&pixels, parts[0].x + 3.0, parts[0].y + 13.0)), "an unchosen part has none");
     // The first part, chosen, is rounded at the bar's end and square inside
     let pixels = drawn(bar(&LABELS, Some(0), true).into());
     let first = parts[0];
@@ -555,4 +556,190 @@ fn a_part_can_lead_with_its_own_element() {
     let columns = content_columns(&node);
     assert_eq!(columns[0][0], columns[1][0] - form.width, "icons' column");
     assert_eq!(columns[0][1], columns[1][1] - form.width, "labels' column");
+}
+
+/// A part's content box, relative to the part: where its content starts
+/// and its width
+fn content_in(node: &layout::Node, n: usize) -> (f32, f32) {
+    let part = &node.children()[n];
+    let content = part.children()[0].bounds();
+    (content.x, content.width)
+}
+
+/// The offset of an end part's area's centre of mass from its box's middle,
+/// by summing a pixel grid of the part's shape (a rectangle, an outer end
+/// rounded with `radius`), 8 samples a pixel each way
+fn sampled_offset(width: f32, height: f32, radius: f32) -> f32 {
+    let r = radius.min(height / 2.0).min(width / 2.0);
+    let n = 8.0;
+    let (mut sum, mut count) = (0.0f64, 0.0f64);
+    let mut y = 0.5 / n;
+    while y < height {
+        let mut x = 0.5 / n;
+        while x < width {
+            // A corner's centre is (r, r) from the top left, (r, height - r) at the bottom
+            let cy = if y < r { r } else if y > height - r { height - r } else { y };
+            let inside = x >= r || (x - r).powi(2) + (y - cy).powi(2) <= r * r;
+            if inside {
+                sum += f64::from(x);
+                count += 1.0;
+            }
+            x += 1.0 / n;
+        }
+        y += 1.0 / n;
+    }
+    (sum / count) as f32 - width / 2.0
+}
+
+#[test]
+fn an_end_parts_centroid_is_towards_its_divider_as_the_geometry_says() {
+    use super::end_centroid_offset;
+    for (width, height) in [(48.0, 26.0), (60.0, 26.0), (100.0, 26.0), (48.0, 32.0), (80.0, 32.0)] {
+        let offset = end_centroid_offset(width, height, height / 2.0);
+        let sampled = sampled_offset(width, height, height / 2.0);
+        assert!((offset - sampled).abs() < 0.02, "{width} x {height}: {offset} against {sampled}");
+        assert!(offset > 0.0);
+    }
+    // A rectangle (half circle) and half disc, by the textbook formula
+    let (w, h) = (60.0f32, 26.0f32);
+    let r = h / 2.0;
+    let (rect, disc) = ((w - r) * h, std::f32::consts::PI * r * r / 2.0);
+    let centroid = (rect * (r + w) / 2.0 + disc * (r - 4.0 * r / (3.0 * std::f32::consts::PI))) / (rect + disc);
+    assert!((end_centroid_offset(w, h, r) - (centroid - w / 2.0)).abs() < 1e-3);
+    // Where a pixel-high figure was measured: about 1.5 at 32, less at 26
+    assert!((1.4..1.7).contains(&end_centroid_offset(48.0, 32.0, 16.0)));
+    assert!((1.2..1.4).contains(&end_centroid_offset(48.0, 26.0, 13.0)));
+    assert_eq!(end_centroid_offset(48.0, 26.0, 0.0), 0.0, "square: no shift");
+}
+
+fn icon_part<'a>(n: u8) -> Part<'a, u8> {
+    let mark: Element<'a, u8> = cosmic::widget::container(cosmic::widget::Space::new().width(16).height(16))
+        .style(|_| cosmic::widget::container::Style {
+            background: Some(Color::from_rgb(1.0, 0.0, 0.0).into()),
+            ..Default::default()
+        })
+        .into();
+    Part::new("").leading(mark).on_press(n)
+}
+
+fn icon_bar<'a>(count: u8) -> Segmented<'a, u8> {
+    Segmented::new((0..count).map(icon_part), Some(1))
+}
+
+#[test]
+fn an_icon_only_bar_has_its_icons_on_each_parts_shape_centroid() {
+    let renderer = renderer();
+    let node = layout_of(icon_bar(3).into(), &renderer);
+    let (size, parts) = parts_of(&node);
+    assert_eq!(size.height, 26.0);
+    for part in &parts {
+        assert_eq!(part.width, 48.0, "an icon and its inset, no gap for a label");
+        assert_eq!(part.x.fract(), 0.0);
+    }
+    let pixels = drawn(icon_bar(3).into());
+    let ink = |part: &Rectangle| {
+        let (mut sum, mut count) = (0.0, 0.0);
+        for y in 0..48 {
+            for x in (part.x as usize)..((part.x + part.width) as usize) {
+                let p = pixels[y * 240 + x];
+                if p[0] > 200 && p[1] < 60 && p[2] < 60 {
+                    sum += x as f32 + 0.5;
+                    count += 1.0;
+                }
+            }
+        }
+        assert!(count > 200.0, "the icon is drawn");
+        sum / count
+    };
+    let offset = super::end_centroid_offset(48.0, 26.0, 13.0);
+    for (part, shift) in parts.iter().zip([offset, 0.0, -offset]) {
+        let target = part.x + part.width / 2.0 + shift;
+        let centre = ink(part);
+        assert!((centre - target).abs() <= 0.5, "ink at {centre}, the shape's centroid at {target}");
+    }
+}
+
+#[test]
+fn equal_parts_do_not_drift_and_middle_parts_are_unchanged() {
+    let renderer = renderer();
+    let node = layout_of(icon_bar(5).into(), &renderer);
+    let (_, parts) = parts_of(&node);
+    let offsets: Vec<f32> = (0..5).map(|n| content_in(&node, n).0).collect();
+    // Middle parts: the content is where centring in the box puts it
+    for n in 1..4 {
+        assert_eq!(offsets[n], 16.0, "part {n}");
+        assert_eq!(parts[n].width, 48.0);
+        assert_eq!(parts[n].x, 48.0 * n as f32, "whole pixels, no accumulating rounding");
+    }
+    // The ends are shifted inwards by the same whole amount, mirrored
+    assert_eq!(offsets[0], 17.0);
+    assert_eq!(offsets[4], 15.0);
+    // Labelled equal parts: the same, whatever their position
+    let node = layout_of(bar(&["Same", "Same", "Same", "Same"], Some(0), true).into(), &renderer);
+    let (_, parts) = parts_of(&node);
+    let (x1, w1) = content_in(&node, 1);
+    let (x2, w2) = content_in(&node, 2);
+    assert_eq!((x1, w1), (x2, w2));
+    assert_eq!(parts[1].width, parts[2].width);
+    for part in &parts {
+        assert_eq!(part.x.fract(), 0.0);
+        assert_eq!(part.width.fract(), 0.0);
+    }
+    let (x0, _) = content_in(&node, 0);
+    let (x3, _) = content_in(&node, 3);
+    assert_eq!(x0 - x1, -(x3 - x1) , "mirrored ends");
+    assert!(x0 > x1);
+}
+
+#[test]
+fn a_form_bar_keeps_its_content_columns() {
+    let renderer = renderer();
+    let part = FormPart { width: 90.0, icons: false };
+    let node = layout_of(bar(&["Alpha", "Beta", "Gamma"], Some(0), true).form(part).into(), &renderer);
+    for n in 0..3 {
+        assert_eq!(content_in(&node, n).0, 16.0, "content starts at the inset, part {n}");
+    }
+}
+
+/// `element` drawn at 1:1 on `ground` in the light theme, cropped to `size`
+fn picture(element: Element<'static, u8>, size: Size<u32>, ground: Color) -> Vec<[u8; 4]> {
+    use cosmic::iced::advanced::renderer::Style;
+    use cosmic::iced::mouse;
+    use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
+    let mut renderer = renderer();
+    let bounds = Size::new(size.width as f32, size.height as f32);
+    let mut ui = UserInterface::build(element, bounds, Cache::default(), &mut renderer);
+    ui.draw(&mut renderer, &cosmic::Theme::light(), &Style::default(), mouse::Cursor::Unavailable);
+    renderer.screenshot(size, 1.0, ground).as_chunks::<4>().0.to_vec()
+}
+
+/// Prints the pictures of `toggles-26-built.png`, one `PIECE:name:width:height:hex`
+/// line each, for the script that lays them out (`--ignored --nocapture`)
+#[test]
+#[ignore = "writes pictures for a person to look at"]
+fn render_the_toggle_sheet() {
+    use crate::button::GEOMETRIC_CENTRING;
+    let ground = Color::from_rgb(0.96, 0.96, 0.96);
+    let piece = |name: &str, element: Element<'static, u8>, size: Size<u32>| {
+        let hex: String = picture(element, size, ground)
+            .iter()
+            .map(|p| format!("{:02x}{:02x}{:02x}", p[0], p[1], p[2]))
+            .collect();
+        println!("PIECE:{name}:{}:{}:{hex}", size.width, size.height);
+    };
+    let labelled = || -> Element<'static, u8> {
+        bar(&["Dark", "Light"], Some(0), true).into()
+    };
+    piece("labelled", labelled(), Size::new(130, 26));
+    piece("switch-on", crate::switch::<u8>(true, |_| 0), Size::new(52, 26));
+    piece("switch-off", crate::switch::<u8>(false, |_| 0), Size::new(52, 26));
+    piece(
+        "button",
+        Button::new(ButtonLook::Secondary, "Secondary").on_press(0u8).into(),
+        Size::new(120, 32),
+    );
+    GEOMETRIC_CENTRING.with(|c| c.set(true));
+    piece("icons-before", icon_bar(3).into(), Size::new(144, 26));
+    GEOMETRIC_CENTRING.with(|c| c.set(false));
+    piece("icons-after", icon_bar(3).into(), Size::new(144, 26));
 }

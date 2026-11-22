@@ -11,6 +11,8 @@
 //! - **Height:** the theme's `space_l` (32 px at standard density), as
 //!   libcosmic's own text button is `space_l` tall. The content is centred
 //!   in it, so nothing below sets a vertical padding.
+//!   A toggle's part ([`ButtonLook::Segment`]) is the exception: toggles
+//!   are [`TOGGLE_HEIGHT`] (26 px) tall, not buttons' height.
 //! - **Width:** its content plus its look's side inset on each side
 //!   ([`ButtonLook::inset`]), *measured in its largest state*. A button's
 //!   size never depends on its state ("the hovered size should be the same
@@ -124,6 +126,7 @@ use cosmic::widget::{self, button};
 use cosmic::{Element, Renderer, Theme, theme};
 use household_tones::Srgb;
 
+use crate::spacing::TOGGLE_HEIGHT;
 use crate::tooltip::{Tip, tooltip_when_cut, tooltip_with};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -870,6 +873,8 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
     ) {
         let space = theme::active().cosmic().spacing;
         let square = f32::from(space.space_l);
+        // A toggle's part is not as tall as a button (Juliet, 22 Nov 2026)
+        let tall = if self.look == ButtonLook::Segment { TOGGLE_HEIGHT } else { square };
         let compact = self.is_compact();
         #[cfg(feature = "a11y")]
         let name = self.label.clone();
@@ -880,7 +885,10 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         } else {
             let mut parts: Vec<Element<'a, M>> = Vec::with_capacity(3);
             parts.extend(self.leading.take());
-            let labelled = self.content.is_none();
+            // An icon alone (a segmented part with no label): no label to
+            // make a gap for, so the icon is all the content
+            let icon_only = self.content.is_none() && self.label.is_empty() && !parts.is_empty();
+            let labelled = self.content.is_none() && !icon_only;
             let shown = if labelled {
                 Some(label(look, self.selected, true, self.label.clone()))
             } else {
@@ -895,13 +903,15 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             } else {
                 0.0
             };
-            let forms = self.forms(false);
-            parts.push(Element::new(Widest {
-                labels: forms,
-                cut: shown,
-                reserve,
-                is_cut: flag,
-            }));
+            if !icon_only {
+                let forms = self.forms(false);
+                parts.push(Element::new(Widest {
+                    labels: forms,
+                    cut: shown,
+                    reserve,
+                    is_cut: flag,
+                }));
+            }
             parts.extend(
                 self.trailing
                     .take()
@@ -924,7 +934,7 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         let button = button::custom(content)
             .class(class(look, self.selected, self.fill, self.corners, self.joined, self.shown))
             .padding(padding)
-            .height(Length::Fixed(square))
+            .height(Length::Fixed(tall))
             .width(width)
             .align_x(if self.start { Alignment::Start } else { Alignment::Center })
             .align_y(Alignment::Center)
@@ -940,6 +950,16 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             class: class(look, self.selected, self.fill, self.corners, self.joined, self.shown),
             enabled,
         });
+        // A toggle's part with one rounded end has its centred content on
+        // the centroid of its shape, not the middle of its box
+        let button = match (look, self.start, self.corners) {
+            (ButtonLook::Segment, false, Some(radii)) => Element::new(ShapeCentred {
+                content: button,
+                radii,
+                height: tall,
+            }),
+            _ => button,
+        };
         (button, self.tip, cut_flag)
     }
 }
@@ -1041,7 +1061,8 @@ fn row_width(
     trailing: bool,
     space: &cosmic::cosmic_theme::Spacing,
 ) -> f32 {
-    let mut parts = vec![widest.ceil()];
+    // No label: an icon alone has no gap for one
+    let mut parts: Vec<f32> = if widest > 0.0 || leading.is_none() { vec![widest.ceil()] } else { Vec::new() };
     parts.extend(leading);
     if trailing {
         parts.push(f32::from(ACTION_ICON));
@@ -1148,6 +1169,63 @@ impl<M> Widget<M, Theme, Renderer> for Whole<'_, M> {
             .layout(&mut tree.children[0], renderer, limits);
         let size = node.size();
         layout::Node::with_children(Size::new(size.width.ceil(), size.height), node.children().to_vec())
+    }
+}
+
+// Test only: lay content out centred in the part's box, as it was before
+// it was centred on the part's shape (for a picture of before and after)
+#[cfg(test)]
+thread_local! {
+    pub(crate) static GEOMETRIC_CENTRING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A toggle's part with the content of the part laid out as centred in its
+/// box, moved to be centred on the centroid of the part's shape
+/// ([`crate::segmented::end_centroid_offset`]): an end part (one side
+/// rounded) is nearer its divider than its box's middle. The content's x is
+/// a whole pixel, so the same part is always the same and the parts of a bar
+/// do not drift from one another. A part rounded at both ends or neither is
+/// symmetric and its content is only put on a whole pixel. Layout only: the
+/// tree, drawing, events and operations are the button's
+struct ShapeCentred<'a, M> {
+    content: Element<'a, M>,
+    /// The part's corner radii: top left, top right, bottom right, bottom left
+    radii: [f32; 4],
+    height: f32,
+}
+
+impl<M> Widget<M, Theme, Renderer> for ShapeCentred<'_, M> {
+    forward_widget!(M, Theme, Renderer; children, diff, size, operate, update, draw, mouse_interaction, overlay, drag_destinations, a11y_nodes);
+
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+        let node = self
+            .content
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits);
+        #[cfg(test)]
+        if GEOMETRIC_CENTRING.with(Cell::get) {
+            return node;
+        }
+        let width = node.size().width;
+        let [top_left, top_right, bottom_right, bottom_left] = self.radii;
+        let left = top_left.max(bottom_left);
+        let right = top_right.max(bottom_right);
+        // Towards the divider: right for a part rounded only at its left
+        let shift = if left > 0.0 && right <= 0.0 {
+            crate::segmented::end_centroid_offset(width, self.height, left)
+        } else if right > 0.0 && left <= 0.0 {
+            -crate::segmented::end_centroid_offset(width, self.height, right)
+        } else {
+            0.0
+        };
+        let mut children = node.children().to_vec();
+        if let Some(content) = children.first_mut() {
+            let at = content.bounds();
+            *content = content
+                .clone()
+                .move_to(cosmic::iced::Point::new((at.x + shift).round(), at.y));
+        }
+        layout::Node::with_children(node.size(), children)
     }
 }
 

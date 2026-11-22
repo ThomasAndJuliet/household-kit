@@ -9,7 +9,8 @@
 //!
 //! # What the parent does, and what the parts do
 //!
-//! - **The parts** are buttons: `space_l` tall, the label in the button's
+//! - **The parts** are buttons, but toggles are not as tall as buttons:
+//!   [`TOGGLE_HEIGHT`](crate::spacing::TOGGLE_HEIGHT) (26 px) tall, the label in the button's
 //!   type (14 px on a 20 px line), `space_s` at each side, hover and
 //!   pressed washes inside each part's own box, the keyboard-target
 //!   outline as every button's (on the part's own edge, inside it). Each
@@ -23,13 +24,23 @@
 //! - **The bar** is drawn by the parent, not by the parts: one background
 //!   under the row and one [`OUTLINE`] stroke over its outer edge, drawn
 //!   inside the bar's box as Secondary's border is, the parts filling the
-//!   bar with no gap. The bar is `space_l` tall, as every button is, so it
-//!   lines up with buttons in its row, and a chosen end part's fill meets
+//!   bar with no gap. The bar is [`TOGGLE_HEIGHT`](crate::spacing::TOGGLE_HEIGHT) tall, as every toggle is
+//!   (Juliet, 22 Nov 2026: "Let's go for 26px for everything"), and a chosen end part's fill meets
 //!   the outline; the bar draws the focused part's outline again over its
 //!   outline, so the outline never covers focus at the ends. The first
 //!   part is rounded on its left and the last on its right (the theme's `radius_xl`, as buttons are rounded, rule
 //!   25d); every inner corner is square, so the parts touch. A bar of one
 //!   part is rounded on both sides.
+//! - **Content is centred on the part's shape.** An end part is a rectangle
+//!   with a half circle for its outer end, so its area leans towards the
+//!   divider and content centred in its box looks too far out ("the icons
+//!   don't seem correctly centred in their toggle space", Juliet, 22 Nov
+//!   2026). The content of a centred part stands on the centroid of the
+//!   part's shape ([`end_centroid_offset`], about 1.3 px at 26 px high), on a whole
+//!   pixel; a middle part's shape is symmetric and is as it was. Content
+//!   starting at the inset ([`Segmented::form`]) keeps its column. A part
+//!   with an icon and no label is icon-only: the icon alone, with no gap
+//!   for a label ([`Part::new`] with `""`).
 //! - **A part with no message is disabled** (rule 6a: faded, no wash),
 //!   and may carry its own tooltip saying why ([`Part::tip`], rule 17).
 //!
@@ -231,6 +242,33 @@ impl<'a, M: Clone + 'a> Segmented<'a, M> {
     }
 }
 
+/// How far the area of an end part lies from the middle of its box, towards
+/// its divider (the inner side), in pixels. An end part is a rectangle
+/// `width` x `height` whose two outer corners are rounded with `radius`
+/// (clamped to what fits, as the painter clamps it); with a radius of half the
+/// height it is a rectangle `width - r` wide and a half disc of radius `r`
+/// at its outer end. Rounding takes more away at the outer side, so the
+/// centroid of what is left is nearer the divider than the box's middle.
+///
+/// Each rounded corner removes the square `r` x `r` less its quarter disc:
+/// area `r^2 (1 - pi/4)`, moment about the outer edge `r^3 (5/6 - pi/4)`
+/// (the quarter disc, centred `r` in from the edge, has its centroid
+/// `4r/3pi` short of its centre). With the outer edge at 0 the shape's
+/// centroid is `(w h / 2 w - 2 moment) / (w h - 2 area)` and its offset from
+/// the middle `w / 2` is `(w area - 2 moment) / (w h - 2 area)`. At `height`
+/// 32 and a pill's radius it is about 1.6 px, at 26 about 1.3
+pub fn end_centroid_offset(width: f32, height: f32, radius: f32) -> f32 {
+    use std::f32::consts::PI;
+    let r = radius.min(height / 2.0).min(width / 2.0).max(0.0);
+    let corner = r * r * (1.0 - PI / 4.0);
+    let moment = r * r * r * (5.0 / 6.0 - PI / 4.0);
+    let area = width * height - 2.0 * corner;
+    if area <= 0.0 {
+        return 0.0;
+    }
+    (width * corner - 2.0 * moment) / area
+}
+
 /// The corner radii of part `n` of `count` (top left, top right, bottom
 /// right, bottom left): the theme's `radius_xl` where it is an end of the
 /// bar, square where it touches a neighbour
@@ -299,7 +337,7 @@ impl<'a, M: Clone + 'a> From<Segmented<'a, M>> for Element<'a, M> {
 /// The bar's paint round its row of parts: the background beneath them and
 /// the [`OUTLINE`] stroke over them, drawn inside the bar's edge as
 /// Secondary's border is drawn inside its box. The bar is the row's size,
-/// `space_l` tall like every button, so it lines up with buttons beside it;
+/// [`TOGGLE_HEIGHT`](crate::spacing::TOGGLE_HEIGHT) tall like every toggle;
 /// the chosen part's fill meets the outline. Every event, size and
 /// operation is the row's.
 ///
