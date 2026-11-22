@@ -597,18 +597,29 @@ fn f10_opens_the_first_menu_from_the_keyboard_and_closes_it() {
     assert_eq!(narrow.open(), Some(Root::All));
 }
 
-/// Pin (Standard density): a title is the shared button's box: its text in
-/// `space_s` (16) at the sides and `space_l` (32) tall
+/// Pin (Standard density): a title is its text in 12 px at the sides and
+/// `space_l` (32) tall (was 27.6: 4 above and below its 19.6 line)
 #[test]
 fn pin_standard_density_title_geometry() {
     let app = App::new(900.0);
     let title = app.title(0);
     let text = crate::menu::measured_width("File", 14.0, cosmic::font::default());
-    assert!(
-        (title.width - (text.ceil() + 32.0)).abs() < 0.01,
-        "{title:?}"
-    );
+    assert!((title.width - (text + 24.0)).abs() < 0.01, "{title:?}");
     assert!((title.height - 32.0).abs() < 0.01, "{title:?}");
+}
+
+/// At Compact density a title is padded by the Compact steps: 8 at the sides,
+/// and it is `space_l` (24) tall
+#[test]
+fn a_title_follows_the_density() {
+    let compact = cosmic::cosmic_theme::Spacing::from(cosmic::cosmic_theme::Density::Compact);
+    let padding = title_padding(&compact);
+    assert_eq!((padding.top, padding.left), (0.0, 8.0));
+    assert_eq!(crate::spacing::control_height(&compact), 24.0);
+    assert_eq!(
+        title_padding(&cosmic::cosmic_theme::Spacing::default()).left,
+        12.0
+    );
 }
 
 /// What text colour a probe was drawn with
@@ -635,47 +646,62 @@ impl Widget<(), Theme, Renderer> for Probe {
     }
 }
 
-/// A title's text is in the header's colour (the renderer's icon colour),
-/// as libcosmic's `MenuRoot` class drew it, at rest and under the pointer;
-/// a Plain button without the hook has the body text colour
+/// Bug A (Terminal's UI pass): a title's text was drawn in the body-text
+/// colour once its class was made unringed. It is the colour the plain
+/// `MenuRoot` class gives it: the header's (the renderer's icon colour)
 #[test]
-fn a_title_keeps_the_header_colour() {
-    use crate::button::{Button, ButtonLook};
+fn a_title_keeps_the_header_colour_of_the_plain_menu_root_class() {
     use cosmic::iced::Color;
     use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-    let header = Color::from_rgb(0.9, 0.1, 0.2);
-    let body = Color::from_rgb(0.1, 0.1, 0.1);
-    let drawn = |tinted: bool, at: Point| {
+    let drawn = |class: cosmic::theme::Button, tint: bool| {
         let seen = std::rc::Rc::new(std::cell::Cell::new(None));
         let probe: Element<'static, ()> = Element::new(Probe(seen.clone()));
-        let button: Element<'static, ()> = Button::with_content(ButtonLook::Plain, probe, "T")
-            .label_in_icon_colour(tinted)
+        let probe = if tint { header_coloured(probe) } else { probe };
+        let button: Element<'static, ()> = cosmic::widget::button::custom(probe)
+            .class(class)
             .on_press(())
             .into();
         let mut renderer = crate::test_fonts::renderer().expect("native renderer");
         let mut ui = UserInterface::build(
             button,
-            Size::new(80.0, 40.0),
+            Size::new(60.0, 40.0),
             Cache::default(),
             &mut renderer,
         );
-        let style = renderer::Style {
-            icon_color: header,
-            text_color: body,
+        let header = renderer::Style {
+            icon_color: Color::from_rgb(0.9, 0.1, 0.2),
+            text_color: Color::from_rgb(0.1, 0.1, 0.1),
             ..Default::default()
         };
         ui.draw(
             &mut renderer,
             &Theme::default(),
-            &style,
-            mouse::Cursor::Available(at),
+            &header,
+            mouse::Cursor::Unavailable,
         );
         seen.get()
     };
-    for at in [Point::new(70.0, 38.0), Point::new(40.0, 16.0)] {
-        assert_eq!(drawn(true, at), Some(header), "{at:?}");
-        assert_eq!(drawn(false, at), Some(body), "{at:?}");
-    }
+    let plain = drawn(cosmic::theme::Button::MenuRoot, false);
+    assert_eq!(
+        plain,
+        Some(Color::from_rgb(0.9, 0.1, 0.2)),
+        "libcosmic's own"
+    );
+    assert_eq!(
+        drawn(
+            crate::button::unringed(cosmic::theme::Button::MenuRoot),
+            true
+        ),
+        plain
+    );
+    // And without the tint the unringed class would lose it
+    assert_ne!(
+        drawn(
+            crate::button::unringed(cosmic::theme::Button::MenuRoot),
+            false
+        ),
+        plain
+    );
 }
 
 /// The window narrowed past the bar's threshold while a menu and its

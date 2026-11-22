@@ -614,7 +614,6 @@ pub struct Button<'a, M> {
     corners: Option<[f32; 4]>,
     joined: bool,
     shown: Option<State>,
-    icon_coloured: bool,
 }
 
 impl<'a, M: Clone + 'a> Button<'a, M> {
@@ -640,7 +639,6 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             corners: None,
             joined: false,
             shown: None,
-            icon_coloured: false,
         }
     }
 
@@ -818,19 +816,6 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         self
     }
 
-    /// Draw the label in the colour the button's host gives *icons* instead
-    /// of the one it gives text. A window's header gives its controls the
-    /// accent (faded while the window is behind others) as the icon colour, and
-    /// a menu bar's titles are text in that colour: with this a Plain
-    /// button there takes it as its label colour, at rest and hovered; where
-    /// the look sets a colour of its own (disabled, selected) that colour is
-    /// used, as it is for every label. It draws nothing, and the box is the
-    /// same
-    pub fn label_in_icon_colour(mut self, on: bool) -> Self {
-        self.icon_coloured = on;
-        self
-    }
-
     /// The button's tooltip, on `position`'s side
     pub fn tooltip(mut self, tip: Tip<'a, M>, position: Position) -> Self {
         self.tip = Some((tip, position));
@@ -968,10 +953,8 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             if labelled {
                 cut_flag = Some((flag.clone(), self.label.clone()));
             }
-            // The row has already set aside the gap before the icon, so only
-            // the icon's own width is kept
             let reserve = if self.trailing.is_some() {
-                f32::from(ACTION_ICON)
+                f32::from(ACTION_ICON) + f32::from(space.space_xxs)
             } else {
                 0.0
             };
@@ -995,11 +978,6 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
                     .align_y(Alignment::Center)
                     .into(),
             })
-        };
-        let content = if self.icon_coloured {
-            icon_coloured(content)
-        } else {
-            content
         };
         let (width, padding) = if compact {
             (Length::Fixed(square), Padding::ZERO)
@@ -1115,27 +1093,11 @@ pub fn label_width(
     leading: Option<f32>,
     trailing_icon: bool,
 ) -> f32 {
-    label_width_in(
-        look,
-        labels,
-        leading,
-        trailing_icon,
-        &theme::active().cosmic().spacing,
-    )
-}
-
-/// [`label_width`] at the given spacing steps
-pub fn label_width_in(
-    look: ButtonLook,
-    labels: &[&str],
-    leading: Option<f32>,
-    trailing_icon: bool,
-    space: &cosmic::cosmic_theme::Spacing,
-) -> f32 {
+    let space = theme::active().cosmic().spacing;
     if look == ButtonLook::Icon && leading.is_some() {
         return f32::from(space.space_l);
     }
-    row_width(leading, text_width(look, labels), trailing_icon, space) + 2.0 * look.inset(space)
+    row_width(leading, text_width(look, labels), trailing_icon, &space) + 2.0 * look.inset(&space)
 }
 
 /// The widest of `labels` as `look` draws them, in each weight the look draws
@@ -1297,50 +1259,6 @@ fn label<'a, M: 'a>(look: ButtonLook, chosen: bool, cut: bool, text: String) -> 
         text.ellipsize(ellipsis).width(Length::Fill).into()
     } else {
         text.into()
-    }
-}
-
-/// `content` with its text in the colour the host gives icons, which a
-/// header gives its controls ([`Button::label_in_icon_colour`]).
-///
-/// libcosmic's button hands its content the colour its style names, else
-/// the host's: for the text colour the body text's, for the icon colour the
-/// header's controls'. A label is text, so without this it takes the first.
-/// This hands the content the icon colour as its text colour and changes
-/// nothing else
-fn icon_coloured<'a, M: 'a>(content: Element<'a, M>) -> Element<'a, M> {
-    Element::new(IconColoured { content })
-}
-
-struct IconColoured<'a, M> {
-    content: Element<'a, M>,
-}
-
-impl<M> Widget<M, Theme, Renderer> for IconColoured<'_, M> {
-    forward_widget!(M, Theme, Renderer; children, diff, size, layout, operate, update, mouse_interaction, overlay, drag_destinations, a11y_nodes);
-    fn draw(
-        &self,
-        tree: &Tree,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        let style = renderer::Style {
-            text_color: style.icon_color,
-            ..*style
-        };
-        self.content.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            &style,
-            layout,
-            cursor,
-            viewport,
-        );
     }
 }
 
