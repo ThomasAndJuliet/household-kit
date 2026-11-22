@@ -267,6 +267,7 @@ pub mod part;
 pub mod plan;
 pub mod size;
 pub mod stage;
+pub mod walk;
 
 pub use allocation::{
     AllocationError, FIT_EPSILON, WidthCapacity, allocate_one, allocate_width, allocate_with_growth,
@@ -288,3 +289,4 @@ pub use size::{
     Measured, Point, Rectangle, Size, finite_size, valid_available, validate_measurement,
 };
 pub use stage::{AsStage, NoFit, Stage, StagePlan, choose_stage, choose_stage_blaming};
+pub use walk::Visit;
