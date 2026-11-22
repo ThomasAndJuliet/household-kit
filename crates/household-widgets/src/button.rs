@@ -849,7 +849,7 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
     /// ```
     /// use household_widgets::button::{Button, width_of, ButtonLook};
     /// # fn main() {
-    /// # let renderer = household_widgets::button::headless_renderer();
+    /// # let renderer = household_widgets::button::headless_renderer().expect("native renderer");
     /// let mut button = Button::<()>::tertiary("Set up in Settings");
     /// let wide = button.natural_width(&renderer);
     /// assert_eq!(wide.fract(), 0.0);
@@ -1153,16 +1153,17 @@ fn label_shaping(_look: ButtonLook) -> cosmic::iced::advanced::text::Shaping {
     cosmic::iced::advanced::text::Shaping::Advanced
 }
 
-/// A headless renderer, for a doctest or an app's test to measure with
+/// A headless renderer, for a doctest or an app's test to measure with;
+/// `None` where the native tiny-skia renderer cannot be made. It does not pin
+/// fonts: this crate's own tests build theirs with `test_fonts::renderer`
 #[doc(hidden)]
-pub fn headless_renderer() -> Renderer {
+pub fn headless_renderer() -> Option<Renderer> {
     use cosmic::iced::advanced::renderer::Headless;
     cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
         cosmic::iced::Font::default(),
         cosmic::iced::Pixels(14.0),
         Some("tiny-skia"),
     ))
-    .expect("native renderer")
 }
 
 /// The content row's width in whole pixels: its parts and the spacing
@@ -1425,21 +1426,20 @@ impl<M> Widget<M, Theme, Renderer> for Widest<'_, M> {
         if let (Some(cut), true) = (
             self.cut.as_mut(),
             size.width > room + 0.01 && room.is_finite(),
-        ) {
-            if let Some(cut_tree) = tree.children.get_mut(n) {
-                let room = room.max(0.0);
-                let fitted = cut.as_widget_mut().layout(
-                    cut_tree,
-                    renderer,
-                    &layout::Limits::new(Size::ZERO, Size::new(room, limits.max().height)),
-                );
-                self.is_cut.set(true);
-                let whole = Size::new(room, size.height);
-                return layout::Node::with_children(
-                    whole,
-                    vec![fitted.align(Alignment::Start, Alignment::Center, whole)],
-                );
-            }
+        ) && let Some(cut_tree) = tree.children.get_mut(n)
+        {
+            let room = room.max(0.0);
+            let fitted = cut.as_widget_mut().layout(
+                cut_tree,
+                renderer,
+                &layout::Limits::new(Size::ZERO, Size::new(room, limits.max().height)),
+            );
+            self.is_cut.set(true);
+            let whole = Size::new(room, size.height);
+            return layout::Node::with_children(
+                whole,
+                vec![fitted.align(Alignment::Start, Alignment::Center, whole)],
+            );
         }
         self.is_cut.set(false);
         let shown = shown.align(Alignment::Center, Alignment::Center, size);

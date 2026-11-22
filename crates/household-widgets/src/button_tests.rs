@@ -78,7 +78,7 @@ fn the_icon_look_is_the_square_with_a_sixteen_pixel_icon() {
     let icon = widget::icon::from_name("edit-copy-symbolic").icon();
     let (button, tip) = Button::icon(icon, "Copy", tip()).on_press(()).into_native();
     assert!(tip.is_some(), "an icon button carries its tooltip");
-    let node = layout_of(button.into(), &renderer);
+    let node = layout_of(button, &renderer);
     assert_eq!(node.size(), Size::new(32.0, 32.0));
     let icon = &node.children()[0];
     assert_eq!(icon.size(), Size::new(16.0, 16.0));
@@ -173,7 +173,7 @@ fn size_never_depends_on_selection_enablement_or_which_label_is_shown() {
             .selected(selected)
             .on_press_maybe(enabled.then_some(()))
             .into_native();
-        layout_of(button.into(), &renderer).size()
+        layout_of(button, &renderer).size()
     };
     for (selected, enabled) in [(true, true), (false, false), (true, false)] {
         assert_eq!(icon(false, true), icon(selected, enabled));

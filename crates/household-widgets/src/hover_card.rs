@@ -184,10 +184,12 @@ pub(crate) fn hover_with_report_owned<'a, Message: 'a>(
         Ident::new(source),
         None,
         target,
-        Vec::new(),
-        Some(prepare),
-        candidates,
-        None,
+        Parts {
+            stages: Vec::new(),
+            prepare: Some(prepare),
+            candidates,
+            claims: None,
+        },
     )
 }
 
@@ -225,10 +227,12 @@ pub(crate) fn hover_owned<'a, Message: 'a>(
         Ident::new(source),
         None,
         target,
-        stages,
-        None,
-        candidates,
-        None,
+        Parts {
+            stages,
+            prepare: None,
+            candidates,
+            claims: None,
+        },
     )
 }
 
@@ -254,14 +258,26 @@ pub(crate) fn retained_hover_box<'a, Message: 'a>(
         Ident::new(Id::unique()),
         Some((content_key, at)),
         target,
-        vec![Stage::new(
-            crate::layout::Level::Preferred,
-            surface_box(content),
-        )],
-        None,
-        candidates,
-        claims,
+        Parts {
+            stages: vec![Stage::new(
+                crate::layout::Level::Preferred,
+                surface_box(content),
+            )],
+            prepare: None,
+            candidates,
+            claims,
+        },
     )
+}
+
+/// What a hover box shows and when: the stages it can take, how it is
+/// prepared from the source's report, where it may open, and whether it
+/// claims the hover
+struct Parts<'a, Message> {
+    stages: Vec<Stage<'a, Message>>,
+    prepare: Option<Box<ReportPreparation<'a, Message>>>,
+    candidates: Vec<AnchorCandidate>,
+    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
 }
 
 fn hover_with_preparation<'a, Message: 'a>(
@@ -269,11 +285,14 @@ fn hover_with_preparation<'a, Message: 'a>(
     source: Ident,
     retained: Option<(u64, Option<f32>)>,
     target: Element<'a, Message>,
-    stages: Vec<Stage<'a, Message>>,
-    prepare: Option<Box<ReportPreparation<'a, Message>>>,
-    candidates: Vec<AnchorCandidate>,
-    claims: Option<Rc<dyn Fn() -> bool + 'a>>,
+    parts: Parts<'a, Message>,
 ) -> Element<'a, Message> {
+    let Parts {
+        stages,
+        prepare,
+        candidates,
+        claims,
+    } = parts;
     let card = Hover {
         claims,
         content: target,
@@ -586,13 +605,15 @@ mod tests {
                 Ident::new(id.clone()),
                 None,
                 cosmic::iced::widget::button(cosmic::iced::widget::text("Label")).into(),
-                vec![Stage::new(
-                    Level::Preferred,
-                    child(|_| widget::text("Whole label").into()),
-                )],
-                None,
-                vec![AnchorCandidate::new(Side::Below, Alignment::Start)],
-                Some(claims),
+                Parts {
+                    stages: vec![Stage::new(
+                        Level::Preferred,
+                        child(|_| widget::text("Whole label").into()),
+                    )],
+                    prepare: None,
+                    candidates: vec![AnchorCandidate::new(Side::Below, Alignment::Start)],
+                    claims: Some(claims),
+                },
             );
             let mut ui = UserInterface::build(
                 crate::popup::host(card).anchors(anchors.clone()),

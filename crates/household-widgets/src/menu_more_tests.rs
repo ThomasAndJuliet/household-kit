@@ -57,7 +57,7 @@ fn surface(menu: Menu<Message>, anchors: &Anchors, expanded: &[usize]) -> MenuSu
     )
     .disclosures(
         expanded.iter().copied().collect::<BTreeSet<_>>(),
-        |row, open| Message::Expand(row, open),
+        Message::Expand,
     )
 }
 fn view(
