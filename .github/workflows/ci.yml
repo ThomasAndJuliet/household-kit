@@ -66,6 +66,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config libxkbcommon-dev libfontconfig1-dev libfreetype6-dev libwayland-dev libinput-dev libudev-dev libdbus-1-dev
+      # COSMIC's icon theme, which libcosmic looks icons up in ("Cosmic", then
+      # hicolor): the widgets' pixel tests draw named icons such as the split
+      # button's chevron. Ubuntu has no package for it, so it is installed from
+      # pop-os/cosmic-icons at a pinned commit into the runner's own icons, as
+      # that repository's justfile installs it
+      - name: Install COSMIC's icon theme
+        run: |
+          set -eu
+          rev=f1a282a0822aed1f0083dd2ab2e6c65bd5b401eb
+          src=$(mktemp -d)
+          curl -fsSL --retry 5 "https://github.com/pop-os/cosmic-icons/archive/$rev.tar.gz" | tar -xz -C "$src" --strip-components=1
+          icons="$HOME/.local/share/icons/Cosmic"
+          rm -rf "$icons"
+          for set in freedesktop extra; do
+            (cd "$src/$set" && find ./scalable -type f -exec install -Dm0644 {} "$icons/{}" \;)
+          done
+          install -Dm0644 "$src/index.theme" "$icons/index.theme"
+          rm -rf "$src"
       - name: Clippy
         run: cargo clippy -p household-widgets --all-targets --all-features --locked -- -D warnings
       - name: Default tests
