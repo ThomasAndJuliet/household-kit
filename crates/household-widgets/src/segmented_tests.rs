@@ -21,9 +21,10 @@ fn layout_of(mut element: Element<'_, u8>, renderer: &cosmic::Renderer) -> layou
 
 fn bar<'a>(labels: &[&str], chosen: Option<usize>, enabled: bool) -> Segmented<'a, u8> {
     Segmented::new(
-        labels.iter().enumerate().map(|(n, label)| {
-            Part::new(*label).on_press_maybe(enabled.then_some(n as u8))
-        }),
+        labels
+            .iter()
+            .enumerate()
+            .map(|(n, label)| Part::new(*label).on_press_maybe(enabled.then_some(n as u8))),
         chosen,
     )
 }
@@ -34,12 +35,7 @@ fn parts_of(node: &layout::Node) -> (Size, Vec<Rectangle>) {
     let parts = node
         .children()
         .iter()
-        .map(|part| {
-            Rectangle::new(
-                part.bounds().position(),
-                part.size(),
-            )
-        })
+        .map(|part| Rectangle::new(part.bounds().position(), part.size()))
         .collect();
     (node.size(), parts)
 }
@@ -59,10 +55,17 @@ fn the_bar_is_toggle_height_tall_and_its_parts_fill_it_with_no_gap() {
         assert_eq!(part.height, crate::spacing::TOGGLE_HEIGHT);
         assert_eq!(part.y, 0.0, "the parts fill the bar");
     }
-    assert_eq!(size.height, crate::spacing::TOGGLE_HEIGHT, "as tall as every toggle");
+    assert_eq!(
+        size.height,
+        crate::spacing::TOGGLE_HEIGHT,
+        "as tall as every toggle"
+    );
     assert_eq!(parts[0].x, 0.0);
     for pair in parts.windows(2) {
-        assert!((pair[1].x - (pair[0].x + pair[0].width)).abs() < 0.01, "no gap");
+        assert!(
+            (pair[1].x - (pair[0].x + pair[0].width)).abs() < 0.01,
+            "no gap"
+        );
     }
     let end = parts[2].x + parts[2].width;
     assert!((size.width - end).abs() < 0.01, "only as wide as its parts");
@@ -73,7 +76,11 @@ fn a_parts_width_is_its_widest_weight_and_never_changes_with_the_choice() {
     let renderer = renderer();
     let widths = |chosen, enabled| {
         let node = layout_of(bar(&LABELS, chosen, enabled).into(), &renderer);
-        parts_of(&node).1.iter().map(|p| p.width).collect::<Vec<_>>()
+        parts_of(&node)
+            .1
+            .iter()
+            .map(|p| p.width)
+            .collect::<Vec<_>>()
     };
     let base = widths(None, true);
     for chosen in [Some(0), Some(1), Some(2)] {
@@ -92,7 +99,11 @@ fn only_the_bars_ends_are_rounded() {
     assert_eq!(part_corners(0, 3, radius), [16.0, 0.0, 0.0, 19.0]);
     assert_eq!(part_corners(1, 3, radius), [0.0; 4]);
     assert_eq!(part_corners(2, 3, radius), [0.0, 17.0, 18.0, 0.0]);
-    assert_eq!(part_corners(0, 1, radius), radius, "a bar of one is rounded both sides");
+    assert_eq!(
+        part_corners(0, 1, radius),
+        radius,
+        "a bar of one is rounded both sides"
+    );
 }
 
 /// `element` drawn in a 240 × 48 canvas at its top left, on a mid grey
@@ -101,9 +112,19 @@ fn drawn(element: Element<'static, u8>) -> Vec<[u8; 4]> {
     use cosmic::iced::mouse;
     use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
     let mut renderer = renderer();
-    let mut ui = UserInterface::build(element, Size::new(240.0, 48.0), Cache::default(), &mut renderer);
+    let mut ui = UserInterface::build(
+        element,
+        Size::new(240.0, 48.0),
+        Cache::default(),
+        &mut renderer,
+    );
     let cursor = mouse::Cursor::Available(Point::new(239.0, 47.0));
-    ui.draw(&mut renderer, &cosmic::Theme::default(), &Style::default(), cursor);
+    ui.draw(
+        &mut renderer,
+        &cosmic::Theme::default(),
+        &Style::default(),
+        cursor,
+    );
     renderer
         .screenshot(Size::new(240, 48), 1.0, Color::from_rgb(0.5, 0.5, 0.5))
         .as_chunks::<4>()
@@ -131,29 +152,65 @@ fn the_chosen_part_is_the_muted_fill_with_square_inner_corners() {
     // The middle part's own corners are square: the fill reaches them
     let (left, right) = (middle.x.ceil(), (middle.x + middle.width).floor() - 1.0);
     // One pixel in from the bar's edge, which the outline is painted over
-    let (top, bottom) = (middle.y.ceil() + OUTLINE, (middle.y + middle.height).floor() - 1.0 - OUTLINE);
+    let (top, bottom) = (
+        middle.y.ceil() + OUTLINE,
+        (middle.y + middle.height).floor() - 1.0 - OUTLINE,
+    );
     for (x, y) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
-        assert!(is_muted(pixel(&pixels, x, y)), "square corner at ({x}, {y})");
+        assert!(
+            is_muted(pixel(&pixels, x, y)),
+            "square corner at ({x}, {y})"
+        );
     }
-    assert!(is_muted(pixel(&pixels, middle.x + 3.0, middle.y + 13.0)), "its fill");
+    assert!(
+        is_muted(pixel(&pixels, middle.x + 3.0, middle.y + 13.0)),
+        "its fill"
+    );
     // The outline is on the bar's own edge, over the chosen fill, and
     // nothing is drawn beyond it
     let mid = (middle.x + middle.width / 2.0).floor();
     let edge = pixel(&pixels, mid, 0.0);
     assert!(!is_muted(edge), "the outline lies over the part's top edge");
-    assert_ne!(edge, pixel(&pixels, mid, top), "and differs from the fill under it");
-    assert_eq!(pixel(&pixels, mid, middle.height), pixel(&pixels, 120.0, 40.0), "nothing below the bar");
-    assert_eq!(pixel(&pixels, mid, middle.height - 1.0), edge, "the same line at the bottom edge");
-    assert!(!is_muted(pixel(&pixels, parts[0].x + 3.0, parts[0].y + 13.0)), "an unchosen part has none");
+    assert_ne!(
+        edge,
+        pixel(&pixels, mid, top),
+        "and differs from the fill under it"
+    );
+    assert_eq!(
+        pixel(&pixels, mid, middle.height),
+        pixel(&pixels, 120.0, 40.0),
+        "nothing below the bar"
+    );
+    assert_eq!(
+        pixel(&pixels, mid, middle.height - 1.0),
+        edge,
+        "the same line at the bottom edge"
+    );
+    assert!(
+        !is_muted(pixel(&pixels, parts[0].x + 3.0, parts[0].y + 13.0)),
+        "an unchosen part has none"
+    );
     // The first part, chosen, is rounded at the bar's end and square inside
     let pixels = drawn(bar(&LABELS, Some(0), true).into());
     let first = parts[0];
-    assert!(!is_muted(pixel(&pixels, first.x.ceil(), top)), "rounded outer corner");
-    assert!(is_muted(pixel(&pixels, (first.x + first.width).floor() - 1.0, top)), "square inner corner");
+    assert!(
+        !is_muted(pixel(&pixels, first.x.ceil(), top)),
+        "rounded outer corner"
+    );
+    assert!(
+        is_muted(pixel(&pixels, (first.x + first.width).floor() - 1.0, top)),
+        "square inner corner"
+    );
     let pixels = drawn(bar(&LABELS, Some(2), true).into());
     let last = parts[2];
-    assert!(!is_muted(pixel(&pixels, (last.x + last.width).floor() - 1.0, top)), "rounded outer corner");
-    assert!(is_muted(pixel(&pixels, last.x.ceil(), top)), "square inner corner");
+    assert!(
+        !is_muted(pixel(&pixels, (last.x + last.width).floor() - 1.0, top)),
+        "rounded outer corner"
+    );
+    assert!(
+        is_muted(pixel(&pixels, last.x.ceil(), top)),
+        "square inner corner"
+    );
 }
 
 #[test]
@@ -210,7 +267,10 @@ fn hover_and_press_wash_inside_one_part_and_choosing_follows_a_click() {
 struct Count(usize);
 
 impl cosmic::iced::advanced::widget::Operation for Count {
-    fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn cosmic::iced::advanced::widget::Operation)) {
+    fn traverse(
+        &mut self,
+        visit: &mut dyn FnMut(&mut dyn cosmic::iced::advanced::widget::Operation),
+    ) {
         visit(self);
     }
 
@@ -299,7 +359,10 @@ fn a_form_with_room_shares_it_and_with_icons_keeps_an_icons_room() {
     let part = form_part([("Text", true), ("Paper", false)], 2, None);
     let node = layout_of(
         Segmented::new(
-            [Part::new("Text").on_press(0u8), Part::new("Paper").on_press(1u8)],
+            [
+                Part::new("Text").on_press(0u8),
+                Part::new("Paper").on_press(1u8),
+            ],
             None,
         )
         .form(part)
@@ -313,8 +376,16 @@ fn a_form_with_room_shares_it_and_with_icons_keeps_an_icons_room() {
 #[test]
 fn the_bar_in_a_form_cuts_a_long_label_short_to_its_part() {
     let renderer = renderer();
-    let part = FormPart { width: 60.0, icons: false };
-    let node = layout_of(bar(&["A very long label indeed"], Some(0), true).form(part).into(), &renderer);
+    let part = FormPart {
+        width: 60.0,
+        icons: false,
+    };
+    let node = layout_of(
+        bar(&["A very long label indeed"], Some(0), true)
+            .form(part)
+            .into(),
+        &renderer,
+    );
     let (size, parts) = parts_of(&node);
     assert_eq!(parts[0].width, 60.0);
     assert_eq!(size.width, 60.0);
@@ -347,10 +418,20 @@ fn drawn_focused(element: Element<'static, u8>, nth: usize) -> Vec<[u8; 4]> {
         }
     }
     let mut renderer = renderer();
-    let mut ui = UserInterface::build(element, Size::new(240.0, 48.0), Cache::default(), &mut renderer);
+    let mut ui = UserInterface::build(
+        element,
+        Size::new(240.0, 48.0),
+        Cache::default(),
+        &mut renderer,
+    );
     ui.operate(&renderer, &mut Nth(nth, 0));
     let cursor = mouse::Cursor::Available(Point::new(239.0, 47.0));
-    ui.draw(&mut renderer, &cosmic::Theme::default(), &Style::default(), cursor);
+    ui.draw(
+        &mut renderer,
+        &cosmic::Theme::default(),
+        &Style::default(),
+        cursor,
+    );
     renderer
         .screenshot(Size::new(240, 48), 1.0, Color::from_rgb(0.5, 0.5, 0.5))
         .as_chunks::<4>()
@@ -374,7 +455,9 @@ fn a_focused_end_part_shows_its_outline_over_the_bars_outline() {
     let node = layout_of(bar(&LABELS, Some(1), true).into(), &renderer);
     let (size, parts) = parts_of(&node);
     let theme = cosmic::Theme::default();
-    let dark: Color = crate::menu_parts::RowContour::Rounded.target_border(&theme).color;
+    let dark: Color = crate::menu_parts::RowContour::Rounded
+        .target_border(&theme)
+        .color;
     let (first, last) = (parts[0], parts[2]);
     for (nth, part, end_x) in [
         (0, first, first.x.floor()),
@@ -382,10 +465,19 @@ fn a_focused_end_part_shows_its_outline_over_the_bars_outline() {
     ] {
         let pixels = drawn_focused(bar(&LABELS, Some(1), true).into(), nth);
         let mid_y = (part.y + part.height / 2.0).floor();
-        assert!(is_colour(pixel(&pixels, end_x, mid_y), dark), "part {nth}: the outline at the bar's end");
+        assert!(
+            is_colour(pixel(&pixels, end_x, mid_y), dark),
+            "part {nth}: the outline at the bar's end"
+        );
         let mid_x = (part.x + part.width / 2.0).floor();
-        assert!(is_colour(pixel(&pixels, mid_x, 0.0), dark), "part {nth}: the outline at the top");
-        assert!(is_colour(pixel(&pixels, mid_x, size.height.floor() - 1.0), dark), "part {nth}: the outline at the bottom");
+        assert!(
+            is_colour(pixel(&pixels, mid_x, 0.0), dark),
+            "part {nth}: the outline at the top"
+        );
+        assert!(
+            is_colour(pixel(&pixels, mid_x, size.height.floor() - 1.0), dark),
+            "part {nth}: the outline at the bottom"
+        );
         let ground = pixel(&pixels, 239.0, 47.0);
         for y in 0..48 {
             for x in 0..240 {
@@ -398,7 +490,10 @@ fn a_focused_end_part_shows_its_outline_over_the_bars_outline() {
     }
     // The unfocused bar has no such stroke there
     let pixels = drawn(bar(&LABELS, Some(1), true).into());
-    assert!(!is_colour(pixel(&pixels, first.x.floor(), (first.height / 2.0).floor()), dark));
+    assert!(!is_colour(
+        pixel(&pixels, first.x.floor(), (first.height / 2.0).floor()),
+        dark
+    ));
 }
 
 /// A chosen end part has a solid muted fill: whether its outline is the
@@ -412,11 +507,22 @@ fn a_focused_chosen_part_follows_the_shared_fill_rule() {
     let first = parts[0];
     let pixels = drawn_focused(bar(&LABELS, Some(0), true).into(), 0);
     let mid_y = (first.height / 2.0).floor();
-    let dark: Color = crate::menu_parts::RowContour::Rounded.target_border(&theme).color;
+    let dark: Color = crate::menu_parts::RowContour::Rounded
+        .target_border(&theme)
+        .color;
     assert!(is_colour(pixel(&pixels, first.x.floor(), mid_y), dark));
-    let double = crate::button::displayed_fill(ButtonLook::Segment, true, crate::button::State::Rest, None, &theme)
-        .is_some_and(|f| household_tones::lighter_on(household_tones::Srgb::new(f.r, f.g, f.b)));
-    assert_eq!(is_colour(pixel(&pixels, first.x.floor() + 1.0, mid_y), Color::WHITE), double);
+    let double = crate::button::displayed_fill(
+        ButtonLook::Segment,
+        true,
+        crate::button::State::Rest,
+        None,
+        &theme,
+    )
+    .is_some_and(|f| household_tones::lighter_on(household_tones::Srgb::new(f.r, f.g, f.b)));
+    assert_eq!(
+        is_colour(pixel(&pixels, first.x.floor() + 1.0, mid_y), Color::WHITE),
+        double
+    );
 }
 
 /// The parts' size is the same whichever has the focus
@@ -427,10 +533,15 @@ fn the_bars_size_is_the_same_with_any_part_focused() {
     let mut element: Element<'_, u8> = bar(&LABELS, Some(1), true).into();
     let mut tree = Tree::new(element.as_widget());
     let limits = layout::Limits::new(Size::ZERO, Size::new(900.0, 200.0));
-    let node = element.as_widget_mut().layout(&mut tree, &renderer, &limits);
+    let node = element
+        .as_widget_mut()
+        .layout(&mut tree, &renderer, &limits);
     struct Focus;
     impl cosmic::iced::advanced::widget::Operation for Focus {
-        fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn cosmic::iced::advanced::widget::Operation)) {
+        fn traverse(
+            &mut self,
+            visit: &mut dyn FnMut(&mut dyn cosmic::iced::advanced::widget::Operation),
+        ) {
             visit(self);
         }
         fn focusable(
@@ -442,8 +553,15 @@ fn the_bars_size_is_the_same_with_any_part_focused() {
             focus.focus();
         }
     }
-    element.as_widget_mut().operate(&mut tree, cosmic::iced::advanced::Layout::new(&node), &renderer, &mut Focus);
-    let after = element.as_widget_mut().layout(&mut tree, &renderer, &limits);
+    element.as_widget_mut().operate(
+        &mut tree,
+        cosmic::iced::advanced::Layout::new(&node),
+        &renderer,
+        &mut Focus,
+    );
+    let after = element
+        .as_widget_mut()
+        .layout(&mut tree, &renderer, &limits);
     assert_eq!(before.size(), after.size());
     assert_eq!(parts_of(&before).1, parts_of(&after).1);
 }
@@ -460,7 +578,10 @@ fn content_columns(node: &layout::Node) -> Vec<Vec<f32>> {
             many => many.iter().map(|child| x + child.bounds().x).collect(),
         }
     }
-    node.children().iter().map(|part| row(part, node.bounds().x)).collect()
+    node.children()
+        .iter()
+        .map(|part| row(part, node.bounds().x))
+        .collect()
 }
 
 /// Bug B (Terminal's UI pass): a part given a form width starts its content
@@ -469,7 +590,8 @@ fn content_columns(node: &layout::Node) -> Vec<Vec<f32>> {
 #[test]
 fn stacked_form_bars_keep_icons_in_one_column_and_labels_in_another() {
     let renderer = renderer();
-    let icon = || cosmic::widget::icon::from_svg_bytes(&b"<svg xmlns='http://www.w3.org/2000/svg'/>"[..]);
+    let icon =
+        || cosmic::widget::icon::from_svg_bytes(&b"<svg xmlns='http://www.w3.org/2000/svg'/>"[..]);
     let first: Vec<(&str, bool)> = vec![("Session", true), ("Codex", true), ("Text", true)];
     let second: Vec<(&str, bool)> = vec![("Conversation", false), ("Terminal", true)];
     let part = form_part(first.iter().chain(second.iter()).copied(), 3, None);
@@ -505,12 +627,18 @@ fn stacked_form_bars_keep_icons_in_one_column_and_labels_in_another() {
     }
     for column in [&icons, &labels] {
         assert!(
-            column.windows(2).all(|pair| (pair[0] - pair[1]).abs() < 0.01),
+            column
+                .windows(2)
+                .all(|pair| (pair[0] - pair[1]).abs() < 0.01),
             "{column:?}"
         );
     }
     let inset = ButtonLook::Segment.inset(&theme::active().cosmic().spacing);
-    assert!((icons[0] - inset).abs() < 0.01, "from the inset: {}", icons[0]);
+    assert!(
+        (icons[0] - inset).abs() < 0.01,
+        "from the inset: {}",
+        icons[0]
+    );
 }
 
 /// A part may carry a coloured element in place of an icon handle; it is
@@ -520,23 +648,38 @@ fn stacked_form_bars_keep_icons_in_one_column_and_labels_in_another() {
 fn a_part_can_lead_with_its_own_element() {
     let renderer = renderer();
     let dot = || -> Element<'static, u8> {
-        widget::Space::new().width(Length::Fixed(16.0)).height(Length::Fixed(16.0)).into()
+        widget::Space::new()
+            .width(Length::Fixed(16.0))
+            .height(Length::Fixed(16.0))
+            .into()
     };
     let inset = ButtonLook::Segment.inset(&theme::active().cosmic().spacing);
     let with = layout_of(
         Segmented::new([Part::new("Mac").leading(dot()).on_press(0)], None).into(),
         &renderer,
     );
-    let without = layout_of(Segmented::new([Part::new("Mac").on_press(0)], None).into(), &renderer);
+    let without = layout_of(
+        Segmented::new([Part::new("Mac").on_press(0)], None).into(),
+        &renderer,
+    );
     let gap = f32::from(theme::active().cosmic().spacing.space_xxs);
-    assert_eq!(with.size().width, (without.size().width - 2.0 * inset + 16.0 + gap + 2.0 * inset).ceil());
+    assert_eq!(
+        with.size().width,
+        (without.size().width - 2.0 * inset + 16.0 + gap + 2.0 * inset).ceil()
+    );
     assert_eq!(content_columns(&with)[0][0], inset, "from the inset");
     // Measured as an icon's room, so a form lines it up with icon parts
-    assert_eq!(Part::<u8>::new("Mac").leading(dot()).measure(), ("Mac", true));
+    assert_eq!(
+        Part::<u8>::new("Mac").leading(dot()).measure(),
+        ("Mac", true)
+    );
     let form = form_part([("Mac", true), ("Windows", false)], 2, None);
     let node = layout_of(
         Segmented::new(
-            [Part::new("Mac").leading(dot()).on_press(0), Part::new("Windows").on_press(1)],
+            [
+                Part::new("Mac").leading(dot()).on_press(0),
+                Part::new("Windows").on_press(1),
+            ],
             None,
         )
         .form(form)
@@ -568,7 +711,13 @@ fn sampled_offset(width: f32, height: f32, radius: f32) -> f32 {
         let mut x = 0.5 / n;
         while x < width {
             // A corner's centre is (r, r) from the top left, (r, height - r) at the bottom
-            let cy = if y < r { r } else if y > height - r { height - r } else { y };
+            let cy = if y < r {
+                r
+            } else if y > height - r {
+                height - r
+            } else {
+                y
+            };
             let inside = x >= r || (x - r).powi(2) + (y - cy).powi(2) <= r * r;
             if inside {
                 sum += f64::from(x);
@@ -584,31 +733,46 @@ fn sampled_offset(width: f32, height: f32, radius: f32) -> f32 {
 #[test]
 fn an_end_parts_centroid_is_towards_its_divider_as_the_geometry_says() {
     use super::end_centroid_offset;
-    for (width, height) in [(48.0, 26.0), (60.0, 26.0), (100.0, 26.0), (48.0, 32.0), (80.0, 32.0)] {
+    for (width, height) in [
+        (48.0, 26.0),
+        (60.0, 26.0),
+        (100.0, 26.0),
+        (48.0, 32.0),
+        (80.0, 32.0),
+    ] {
         let offset = end_centroid_offset(width, height, height / 2.0);
         let sampled = sampled_offset(width, height, height / 2.0);
-        assert!((offset - sampled).abs() < 0.02, "{width} x {height}: {offset} against {sampled}");
+        assert!(
+            (offset - sampled).abs() < 0.02,
+            "{width} x {height}: {offset} against {sampled}"
+        );
         assert!(offset > 0.0);
     }
     // A rectangle (half circle) and half disc, by the textbook formula
     let (w, h) = (60.0f32, 26.0f32);
     let r = h / 2.0;
     let (rect, disc) = ((w - r) * h, std::f32::consts::PI * r * r / 2.0);
-    let centroid = (rect * (r + w) / 2.0 + disc * (r - 4.0 * r / (3.0 * std::f32::consts::PI))) / (rect + disc);
+    let centroid = (rect * (r + w) / 2.0 + disc * (r - 4.0 * r / (3.0 * std::f32::consts::PI)))
+        / (rect + disc);
     assert!((end_centroid_offset(w, h, r) - (centroid - w / 2.0)).abs() < 1e-3);
     // Where a pixel-high figure was measured: about 1.5 at 32, less at 26
     assert!((1.4..1.7).contains(&end_centroid_offset(48.0, 32.0, 16.0)));
     assert!((1.2..1.4).contains(&end_centroid_offset(48.0, 26.0, 13.0)));
-    assert_eq!(end_centroid_offset(48.0, 26.0, 0.0), 0.0, "square: no shift");
+    assert_eq!(
+        end_centroid_offset(48.0, 26.0, 0.0),
+        0.0,
+        "square: no shift"
+    );
 }
 
 fn icon_part<'a>(n: u8) -> Part<'a, u8> {
-    let mark: Element<'a, u8> = cosmic::widget::container(cosmic::widget::Space::new().width(16).height(16))
-        .style(|_| cosmic::widget::container::Style {
-            background: Some(Color::from_rgb(1.0, 0.0, 0.0).into()),
-            ..Default::default()
-        })
-        .into();
+    let mark: Element<'a, u8> =
+        cosmic::widget::container(cosmic::widget::Space::new().width(16).height(16))
+            .style(|_| cosmic::widget::container::Style {
+                background: Some(Color::from_rgb(1.0, 0.0, 0.0).into()),
+                ..Default::default()
+            })
+            .into();
     Part::new("").leading(mark).on_press(n)
 }
 
@@ -623,7 +787,10 @@ fn an_icon_only_bar_has_its_icons_on_each_parts_shape_centroid() {
     let (size, parts) = parts_of(&node);
     assert_eq!(size.height, 26.0);
     for part in &parts {
-        assert_eq!(part.width, 48.0, "an icon and its inset, no gap for a label");
+        assert_eq!(
+            part.width, 48.0,
+            "an icon and its inset, no gap for a label"
+        );
         assert_eq!(part.x.fract(), 0.0);
     }
     let pixels = drawn(icon_bar(3).into());
@@ -645,7 +812,10 @@ fn an_icon_only_bar_has_its_icons_on_each_parts_shape_centroid() {
     for (part, shift) in parts.iter().zip([offset, 0.0, -offset]) {
         let target = part.x + part.width / 2.0 + shift;
         let centre = ink(part);
-        assert!((centre - target).abs() <= 0.5, "ink at {centre}, the shape's centroid at {target}");
+        assert!(
+            (centre - target).abs() <= 0.5,
+            "ink at {centre}, the shape's centroid at {target}"
+        );
     }
 }
 
@@ -659,13 +829,20 @@ fn equal_parts_do_not_drift_and_middle_parts_are_unchanged() {
     for n in 1..4 {
         assert_eq!(offsets[n], 16.0, "part {n}");
         assert_eq!(parts[n].width, 48.0);
-        assert_eq!(parts[n].x, 48.0 * n as f32, "whole pixels, no accumulating rounding");
+        assert_eq!(
+            parts[n].x,
+            48.0 * n as f32,
+            "whole pixels, no accumulating rounding"
+        );
     }
     // The ends are shifted inwards by the same whole amount, mirrored
     assert_eq!(offsets[0], 17.0);
     assert_eq!(offsets[4], 15.0);
     // Labelled equal parts: the same, whatever their position
-    let node = layout_of(bar(&["Same", "Same", "Same", "Same"], Some(0), true).into(), &renderer);
+    let node = layout_of(
+        bar(&["Same", "Same", "Same", "Same"], Some(0), true).into(),
+        &renderer,
+    );
     let (_, parts) = parts_of(&node);
     let (x1, w1) = content_in(&node, 1);
     let (x2, w2) = content_in(&node, 2);
@@ -677,17 +854,29 @@ fn equal_parts_do_not_drift_and_middle_parts_are_unchanged() {
     }
     let (x0, _) = content_in(&node, 0);
     let (x3, _) = content_in(&node, 3);
-    assert_eq!(x0 - x1, -(x3 - x1) , "mirrored ends");
+    assert_eq!(x0 - x1, -(x3 - x1), "mirrored ends");
     assert!(x0 > x1);
 }
 
 #[test]
 fn a_form_bar_keeps_its_content_columns() {
     let renderer = renderer();
-    let part = FormPart { width: 90.0, icons: false };
-    let node = layout_of(bar(&["Alpha", "Beta", "Gamma"], Some(0), true).form(part).into(), &renderer);
+    let part = FormPart {
+        width: 90.0,
+        icons: false,
+    };
+    let node = layout_of(
+        bar(&["Alpha", "Beta", "Gamma"], Some(0), true)
+            .form(part)
+            .into(),
+        &renderer,
+    );
     for n in 0..3 {
-        assert_eq!(content_in(&node, n).0, 16.0, "content starts at the inset, part {n}");
+        assert_eq!(
+            content_in(&node, n).0,
+            16.0,
+            "content starts at the inset, part {n}"
+        );
     }
 }
 
@@ -699,8 +888,17 @@ fn picture(element: Element<'static, u8>, size: Size<u32>, ground: Color) -> Vec
     let mut renderer = renderer();
     let bounds = Size::new(size.width as f32, size.height as f32);
     let mut ui = UserInterface::build(element, bounds, Cache::default(), &mut renderer);
-    ui.draw(&mut renderer, &cosmic::Theme::light(), &Style::default(), mouse::Cursor::Unavailable);
-    renderer.screenshot(size, 1.0, ground).as_chunks::<4>().0.to_vec()
+    ui.draw(
+        &mut renderer,
+        &cosmic::Theme::light(),
+        &Style::default(),
+        mouse::Cursor::Unavailable,
+    );
+    renderer
+        .screenshot(size, 1.0, ground)
+        .as_chunks::<4>()
+        .0
+        .to_vec()
 }
 
 /// Prints the pictures of `toggles-26-built.png`, one `PIECE:name:width:height:hex`
@@ -717,15 +915,23 @@ fn render_the_toggle_sheet() {
             .collect();
         println!("PIECE:{name}:{}:{}:{hex}", size.width, size.height);
     };
-    let labelled = || -> Element<'static, u8> {
-        bar(&["Dark", "Light"], Some(0), true).into()
-    };
+    let labelled = || -> Element<'static, u8> { bar(&["Dark", "Light"], Some(0), true).into() };
     piece("labelled", labelled(), Size::new(130, 26));
-    piece("switch-on", crate::switch::<u8>(true, |_| 0), Size::new(52, 26));
-    piece("switch-off", crate::switch::<u8>(false, |_| 0), Size::new(52, 26));
+    piece(
+        "switch-on",
+        crate::switch::<u8>(true, |_| 0),
+        Size::new(52, 26),
+    );
+    piece(
+        "switch-off",
+        crate::switch::<u8>(false, |_| 0),
+        Size::new(52, 26),
+    );
     piece(
         "button",
-        Button::new(ButtonLook::Secondary, "Secondary").on_press(0u8).into(),
+        Button::new(ButtonLook::Secondary, "Secondary")
+            .on_press(0u8)
+            .into(),
         Size::new(120, 32),
     );
     GEOMETRIC_CENTRING.with(|c| c.set(true));

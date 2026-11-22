@@ -169,8 +169,8 @@ mod tests {
     use cosmic::iced::advanced::widget::{Operation, Tree, operation};
     use cosmic::iced::advanced::{Layout, layout, mouse, renderer};
     use cosmic::iced::{Length, Rectangle, Size};
-    use cosmic::{Element, Theme};
     use cosmic::widget::button::Catalog;
+    use cosmic::{Element, Theme};
 
     #[test]
     fn native_hover_replaces_the_current_wash_and_keeps_prominent_fill() {
@@ -254,9 +254,9 @@ mod tests {
     /// single and in the double outline
     #[test]
     fn the_keyboard_target_is_drawn_inside_the_entry() {
+        use cosmic::iced::Point;
         use cosmic::iced::advanced::renderer::Headless;
         use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
-        use cosmic::iced::Point;
         struct Focus;
         impl Operation for Focus {
             fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation)) {

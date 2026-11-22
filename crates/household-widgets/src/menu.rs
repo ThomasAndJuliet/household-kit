@@ -414,7 +414,12 @@ type Widths = HashMap<(u32, Font, String, cosmic::iced::advanced::text::Shaping)
 static WIDTHS: LazyLock<Mutex<Widths>> = LazyLock::new(Default::default);
 /// Shapes text at the requested size and font, retaining at most 4096 widths.
 pub fn measured_width(content: &str, size: f32, font: Font) -> f32 {
-    measured_width_shaped(content, size, font, cosmic::iced::advanced::text::Shaping::Advanced)
+    measured_width_shaped(
+        content,
+        size,
+        font,
+        cosmic::iced::advanced::text::Shaping::Advanced,
+    )
 }
 
 /// [`measured_width`] shaped as `shaping`. The shaping decides the width
@@ -458,7 +463,9 @@ pub(crate) fn measured_width_shaped(
         },
     );
     let result = paragraph.min_bounds().width;
-    let mut widths = WIDTHS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut widths = WIDTHS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if widths.len() >= 4096 {
         widths.clear();
     }
@@ -773,8 +780,8 @@ mod tests {
 
     #[test]
     fn native_menu_row_reserves_sixteen_pixel_icon_canvases() {
-        use cosmic::iced::advanced::{Widget, layout, widget::Tree};
         use cosmic::iced::Size;
+        use cosmic::iced::advanced::{Widget, layout, widget::Tree};
         fn icon(name: &'static str) -> icon::Handle {
             widget::icon::from_name(name).handle()
         }
@@ -842,8 +849,7 @@ mod tests {
                 widget::container(widget::menu::menu_button(row.contents(icon)))
                     .width(Length::Fixed(width))
                     .into();
-            let mut renderer =
-                crate::test_fonts::renderer().expect("a headless renderer");
+            let mut renderer = crate::test_fonts::renderer().expect("a headless renderer");
             let mut ui = UserInterface::build(
                 element,
                 Size::new(width, 60.0),
@@ -949,8 +955,7 @@ mod tests {
             item.mark = Some(MenuMark::Check(checked));
             item.disabled_reason = disabled.then(|| "Not now".into());
             let element = item_element(item, true, &MenuStyle { icon, body });
-            let mut renderer =
-                crate::test_fonts::renderer().expect("a headless renderer");
+            let mut renderer = crate::test_fonts::renderer().expect("a headless renderer");
             let size = Size::new(240.0, 48.0);
             let mut ui = UserInterface::build(element, size, Cache::default(), &mut renderer);
             let cursor = mouse::Cursor::Available(Point::new(80.0, 16.0));

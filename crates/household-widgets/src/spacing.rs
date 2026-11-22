@@ -294,8 +294,16 @@ mod tests {
         assert_eq!(Look::prominent().thickest_border(&theme), 4.0);
         // The menu's inline frame draws that border inside an inset of its size
         assert_eq!(crate::menu_parts::frame_inset(), 2.0);
-        for kind in [Kind::Card, Kind::InformationCard, Kind::Toolbar, Kind::Header] {
-            assert!(least(kind.inset(&s)) >= Look::normal().thickest_border(&theme), "{kind:?}");
+        for kind in [
+            Kind::Card,
+            Kind::InformationCard,
+            Kind::Toolbar,
+            Kind::Header,
+        ] {
+            assert!(
+                least(kind.inset(&s)) >= Look::normal().thickest_border(&theme),
+                "{kind:?}"
+            );
         }
     }
 

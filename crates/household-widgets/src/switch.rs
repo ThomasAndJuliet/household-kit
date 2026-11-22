@@ -145,7 +145,9 @@ impl<'a, M> Toggler<'a, M> {
 
 impl<'a, M: 'static> From<Toggler<'a, M>> for Element<'a, M> {
     fn from(toggler: Toggler<'a, M>) -> Self {
-        Element::new(Sized { content: toggler.inner.into() })
+        Element::new(Sized {
+            content: toggler.inner.into(),
+        })
     }
 }
 

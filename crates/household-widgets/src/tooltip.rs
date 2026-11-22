@@ -117,7 +117,14 @@ pub fn tooltip_when_cut<'a, M: 'a>(
         let cut = cut.clone();
         move || cut.get()
     });
-    adapt(content.into(), tip, position, None, move || !cut.get(), Some(claims))
+    adapt(
+        content.into(),
+        tip,
+        position,
+        None,
+        move || !cut.get(),
+        Some(claims),
+    )
 }
 
 /// [`tooltip_unless`] about the one place `x` pixels from `content`'s left

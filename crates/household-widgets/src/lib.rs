@@ -34,9 +34,9 @@
 
 #[macro_use]
 mod forward;
+pub mod button;
 #[cfg(feature = "content")]
 pub mod content;
-pub mod button;
 pub mod dropdown;
 pub mod focus_regions;
 #[doc(hidden)]
@@ -52,8 +52,6 @@ pub mod menu;
 pub mod menu_bar;
 pub mod menu_parts;
 pub mod menu_surface;
-pub mod segmented;
-pub mod split_button;
 pub mod navigation_style;
 pub mod panel_divider;
 pub mod panel_header;
@@ -64,8 +62,10 @@ pub mod popup;
 mod scroll;
 pub mod scroll_intent;
 pub mod scroll_list;
+pub mod segmented;
 pub mod short_text_box;
 pub mod spacing;
+pub mod split_button;
 mod switch;
 pub mod tab_strip;
 pub mod tabs;
@@ -75,20 +75,21 @@ pub mod text_menu;
 mod tooltip;
 pub mod window;
 
+pub use button::{Button, ButtonLook, button_height};
 pub use history::{Turn, Undoable};
 pub use level::{LEVEL_CAP, Level};
 pub use look::Look;
 pub use scroll::horizontal_scroll;
+pub use segmented::{Part, Segmented};
 pub use short_text_box::{PasswordBox, ShortTextBox};
+pub use split_button::SplitButton;
 pub use switch::{SwitchItem, Toggler, muted_colours, switch, switch_maybe, toggler};
 pub use text_box::TextBox;
-pub use button::{Button, ButtonLook, button_height};
-pub use segmented::{Part, Segmented};
-pub use split_button::SplitButton;
 pub use text_menu::{TextMenu, TextMenuHistory, TextMenuWords, text_menu};
 pub(crate) use tooltip::native_tooltip;
 pub use tooltip::{
-    TIP_WIDTH, Tip, link_tooltip, tip_bubble, tip_padding, tooltip_at, tooltip_unless, tooltip_when_cut, tooltip_with,
+    TIP_WIDTH, Tip, link_tooltip, tip_bubble, tip_padding, tooltip_at, tooltip_unless,
+    tooltip_when_cut, tooltip_with,
 };
 
 #[cfg(test)]

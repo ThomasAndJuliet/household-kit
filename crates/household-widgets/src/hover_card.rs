@@ -5,11 +5,11 @@ use crate::layout::{AnchorCandidate, Attachment, HoverRetained, Stage, commit_ho
 use crate::popup::Anchors;
 use crate::popup::Ident;
 use crate::window::Owner;
-use std::rc::Rc;
 use cosmic::iced::advanced::widget::{Id, Operation, Tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Event, Length, Rectangle, Size, Vector};
 use cosmic::{Element, Renderer, Theme, widget};
+use std::rc::Rc;
 
 type ReportPreparation<'a, Message> =
     dyn Fn(Option<crate::layout::SourceReport>) -> crate::layout::Child<'a, Message> + 'a;
@@ -609,7 +609,13 @@ mod tests {
                     position: Point::new(5.0, 5.0),
                 }),
             ] {
-                ui.update(&[event], cursor, &mut renderer, &mut clipboard, &mut messages);
+                ui.update(
+                    &[event],
+                    cursor,
+                    &mut renderer,
+                    &mut clipboard,
+                    &mut messages,
+                );
             }
             (anchors.hovered(), id)
         };
@@ -804,10 +810,8 @@ mod text_presentation_tests {
     }
     #[test]
     fn wrapping_text_resolves_and_commits_the_same_narrow_geometry() {
-        use cosmic::iced::advanced::{
-            Widget, layout as native_layout, widget::Tree,
-        };
         use cosmic::iced::Size;
+        use cosmic::iced::advanced::{Widget, layout as native_layout, widget::Tree};
         let renderer = crate::test_fonts::renderer().expect("headless renderer");
         let content: crate::layout::Child<'_, ()> = text_box(
             "A full explanation with enough words to wrap into several lines at a narrow width."
@@ -853,10 +857,8 @@ mod text_presentation_tests {
     }
     #[test]
     fn surface_preserves_nested_minimum_and_reserves_padding_and_shadow() {
-        use cosmic::iced::advanced::{
-            Widget, layout as native_layout, widget::Tree,
-        };
         use cosmic::iced::Size;
+        use cosmic::iced::advanced::{Widget, layout as native_layout, widget::Tree};
         let mut renderer = crate::test_fonts::renderer().expect("headless renderer");
         let content: crate::layout::Child<'_, ()> = crate::layout::row_child(
             vec![

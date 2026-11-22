@@ -188,7 +188,13 @@ impl ButtonLook {
     pub fn inset(self, spacing: &cosmic::cosmic_theme::Spacing) -> f32 {
         f32::from(match self {
             Self::Icon => 0,
-            Self::Primary | Self::Secondary | Self::Destructive | Self::Segment | Self::Plain | Self::Tertiary | Self::TertiaryDestructive => spacing.space_s,
+            Self::Primary
+            | Self::Secondary
+            | Self::Destructive
+            | Self::Segment
+            | Self::Plain
+            | Self::Tertiary
+            | Self::TertiaryDestructive => spacing.space_s,
         })
     }
 
@@ -433,7 +439,10 @@ fn style(
             } else {
                 0.0
             },
-            border_color: paint.border.filter(|_| !joined).unwrap_or(Color::TRANSPARENT),
+            border_color: paint
+                .border
+                .filter(|_| !joined)
+                .unwrap_or(Color::TRANSPARENT),
             outline_width: 0.0,
             outline_color: Color::TRANSPARENT,
             icon_color: paint.text,
@@ -451,7 +460,9 @@ pub(crate) fn displayed_fill(
     corners: Option<[f32; 4]>,
     theme: &Theme,
 ) -> Option<Color> {
-    crate::keyboard_target::displayed_solid(&style(look, selected, None, state, corners, false, theme))
+    crate::keyboard_target::displayed_solid(&style(
+        look, selected, None, state, corners, false, theme,
+    ))
 }
 
 /// libcosmic's own button `class` with its focus ring left off. libcosmic
@@ -490,16 +501,48 @@ fn class(
 ) -> theme::Button {
     theme::Button::Custom {
         active: Box::new(move |_, theme| {
-            style(look, selected, fill, shown.unwrap_or(State::Rest), corners, joined, theme)
+            style(
+                look,
+                selected,
+                fill,
+                shown.unwrap_or(State::Rest),
+                corners,
+                joined,
+                theme,
+            )
         }),
         disabled: Box::new(move |theme| {
-            style(look, selected, fill, State::Disabled, corners, joined, theme)
+            style(
+                look,
+                selected,
+                fill,
+                State::Disabled,
+                corners,
+                joined,
+                theme,
+            )
         }),
         hovered: Box::new(move |_, theme| {
-            style(look, selected, fill, shown.unwrap_or(State::Hovered), corners, joined, theme)
+            style(
+                look,
+                selected,
+                fill,
+                shown.unwrap_or(State::Hovered),
+                corners,
+                joined,
+                theme,
+            )
         }),
         pressed: Box::new(move |_, theme| {
-            style(look, selected, fill, shown.unwrap_or(State::Pressed), corners, joined, theme)
+            style(
+                look,
+                selected,
+                fill,
+                shown.unwrap_or(State::Pressed),
+                corners,
+                joined,
+                theme,
+            )
         }),
     }
 }
@@ -847,7 +890,13 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             forms.append(&mut self.other_contents);
             return forms;
         }
-        label_forms(self.look, self.selected, cut, &self.label, &self.other_labels)
+        label_forms(
+            self.look,
+            self.selected,
+            cut,
+            &self.label,
+            &self.other_labels,
+        )
     }
 
     /// The libcosmic button itself, wearing the household's keyboard-target
@@ -874,14 +923,20 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         let space = theme::active().cosmic().spacing;
         let square = f32::from(space.space_l);
         // A toggle's part is not as tall as a button (Juliet, 22 Nov 2026)
-        let tall = if self.look == ButtonLook::Segment { TOGGLE_HEIGHT } else { square };
+        let tall = if self.look == ButtonLook::Segment {
+            TOGGLE_HEIGHT
+        } else {
+            square
+        };
         let compact = self.is_compact();
         #[cfg(feature = "a11y")]
         let name = self.label.clone();
         let look = self.look;
         let mut cut_flag = None;
         let content: Element<'a, M> = if compact {
-            self.leading.take().unwrap_or_else(|| widget::Space::new().into())
+            self.leading
+                .take()
+                .unwrap_or_else(|| widget::Space::new().into())
         } else {
             let mut parts: Vec<Element<'a, M>> = Vec::with_capacity(3);
             parts.extend(self.leading.take());
@@ -932,11 +987,22 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         };
         let enabled = self.on_press.is_some();
         let button = button::custom(content)
-            .class(class(look, self.selected, self.fill, self.corners, self.joined, self.shown))
+            .class(class(
+                look,
+                self.selected,
+                self.fill,
+                self.corners,
+                self.joined,
+                self.shown,
+            ))
             .padding(padding)
             .height(Length::Fixed(tall))
             .width(width)
-            .align_x(if self.start { Alignment::Start } else { Alignment::Center })
+            .align_x(if self.start {
+                Alignment::Start
+            } else {
+                Alignment::Center
+            })
             .align_y(Alignment::Center)
             .on_press_maybe(self.on_press);
         let button = match self.id {
@@ -947,7 +1013,14 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
         let button = button.name(name);
         let button = Element::new(crate::keyboard_target::Target {
             content: button.into(),
-            class: class(look, self.selected, self.fill, self.corners, self.joined, self.shown),
+            class: class(
+                look,
+                self.selected,
+                self.fill,
+                self.corners,
+                self.joined,
+                self.shown,
+            ),
             enabled,
         });
         // A toggle's part with one rounded end has its centred content on
@@ -1031,7 +1104,11 @@ pub fn label_width(
 /// (a segment's chosen and unchosen), unrounded
 pub(crate) fn text_width(look: ButtonLook, labels: &[&str]) -> f32 {
     let chosen = [true, false];
-    let weights = if look == ButtonLook::Segment { &chosen[..] } else { &chosen[..1] };
+    let weights = if look == ButtonLook::Segment {
+        &chosen[..]
+    } else {
+        &chosen[..1]
+    };
     labels
         .iter()
         .flat_map(|text| {
@@ -1097,7 +1174,11 @@ fn row_width(
     space: &cosmic::cosmic_theme::Spacing,
 ) -> f32 {
     // No label: an icon alone has no gap for one
-    let mut parts: Vec<f32> = if widest > 0.0 || leading.is_none() { vec![widest.ceil()] } else { Vec::new() };
+    let mut parts: Vec<f32> = if widest > 0.0 || leading.is_none() {
+        vec![widest.ceil()]
+    } else {
+        Vec::new()
+    };
     parts.extend(leading);
     if trailing {
         parts.push(f32::from(ACTION_ICON));
@@ -1189,13 +1270,21 @@ struct Whole<'a, M> {
 impl<M> Widget<M, Theme, Renderer> for Whole<'_, M> {
     forward_widget!(M, Theme, Renderer; children, diff, size, operate, update, draw, mouse_interaction, overlay, drag_destinations, a11y_nodes);
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         let node = self
             .content
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits);
         let size = node.size();
-        layout::Node::with_children(Size::new(size.width.ceil(), size.height), node.children().to_vec())
+        layout::Node::with_children(
+            Size::new(size.width.ceil(), size.height),
+            node.children().to_vec(),
+        )
     }
 }
 
@@ -1224,7 +1313,12 @@ struct ShapeCentred<'a, M> {
 impl<M> Widget<M, Theme, Renderer> for ShapeCentred<'_, M> {
     forward_widget!(M, Theme, Renderer; children, diff, size, operate, update, draw, mouse_interaction, overlay, drag_destinations, a11y_nodes);
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         let node = self
             .content
             .as_widget_mut()
@@ -1311,10 +1405,7 @@ impl<M> Widget<M, Theme, Renderer> for Widest<'_, M> {
         limits: &layout::Limits,
     ) -> layout::Node {
         let n = self.labels.len();
-        let open = layout::Limits::new(
-            Size::ZERO,
-            Size::new(f32::INFINITY, limits.max().height),
-        );
+        let open = layout::Limits::new(Size::ZERO, Size::new(f32::INFINITY, limits.max().height));
         let mut nodes = self
             .labels
             .iter_mut()
@@ -1331,7 +1422,10 @@ impl<M> Widget<M, Theme, Renderer> for Widest<'_, M> {
         });
         let size = Size::new(size.width.ceil(), size.height);
         let room = limits.max().width - self.reserve;
-        if let (Some(cut), true) = (self.cut.as_mut(), size.width > room + 0.01 && room.is_finite()) {
+        if let (Some(cut), true) = (
+            self.cut.as_mut(),
+            size.width > room + 0.01 && room.is_finite(),
+        ) {
             if let Some(cut_tree) = tree.children.get_mut(n) {
                 let room = room.max(0.0);
                 let fitted = cut.as_widget_mut().layout(

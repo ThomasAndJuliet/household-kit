@@ -450,8 +450,14 @@ fn every_looks_borders_are_inside_and_within_its_inset() {
         for selected in [false, true] {
             for state in [State::Rest, State::Hovered, State::Pressed, State::Disabled] {
                 let style = style(look, selected, None, state, None, false, &theme);
-                assert_eq!(style.outline_width, 0.0, "{look:?} {state:?}: no outline outside");
-                assert!(style.border_width <= look.thickest_border(), "{look:?} {state:?}");
+                assert_eq!(
+                    style.outline_width, 0.0,
+                    "{look:?} {state:?}: no outline outside"
+                );
+                assert!(
+                    style.border_width <= look.thickest_border(),
+                    "{look:?} {state:?}"
+                );
             }
         }
     }
@@ -473,8 +479,14 @@ fn every_looks_borders_are_inside_and_within_its_inset() {
 
 /// The household's keyboard-target colours, as 8-bit pixels
 fn target_colours(theme: &cosmic::Theme) -> [u8; 3] {
-    let dark = crate::menu_parts::RowContour::Rounded.target_border(theme).color;
-    [(dark.r * 255.0).round() as u8, (dark.g * 255.0).round() as u8, (dark.b * 255.0).round() as u8]
+    let dark = crate::menu_parts::RowContour::Rounded
+        .target_border(theme)
+        .color;
+    [
+        (dark.r * 255.0).round() as u8,
+        (dark.g * 255.0).round() as u8,
+        (dark.b * 255.0).round() as u8,
+    ]
 }
 
 fn is_rgb(pixel: [u8; 4], rgb: [u8; 3]) -> bool {
@@ -515,17 +527,32 @@ fn a_focused_button_is_the_shared_outline_inside_its_box() {
         let away = Point::new(1.0, 1.0);
         let rest = drawn(build(), away, false);
         let focused = drawn_with(build(), away, false, true);
-        assert_eq!(outside(&focused, bounds), 0, "{look:?}: nothing outside the box");
+        assert_eq!(
+            outside(&focused, bounds),
+            0,
+            "{look:?}: nothing outside the box"
+        );
         assert_ne!(rest, focused, "{look:?}: focus shows");
         let (x, y) = (bounds.x as usize, bounds.center_y() as usize);
-        assert!(is_rgb(focused[y * 96 + x], dark), "{look:?}: the dark stroke is on the edge: {:?} {:?} {:?} want {dark:?}", focused[y * 96 + x - 1], focused[y * 96 + x], focused[y * 96 + x + 1]);
-        let double = displayed_fill(look, false, State::Rest, None, &theme).is_some_and(|fill| {
-            household_tones::lighter_on(Srgb::new(fill.r, fill.g, fill.b))
-        });
+        assert!(
+            is_rgb(focused[y * 96 + x], dark),
+            "{look:?}: the dark stroke is on the edge: {:?} {:?} {:?} want {dark:?}",
+            focused[y * 96 + x - 1],
+            focused[y * 96 + x],
+            focused[y * 96 + x + 1]
+        );
+        let double = displayed_fill(look, false, State::Rest, None, &theme)
+            .is_some_and(|fill| household_tones::lighter_on(Srgb::new(fill.r, fill.g, fill.b)));
         if double {
-            assert!(is_rgb(focused[y * 96 + x + 1], [255, 255, 255]), "{look:?}: white inside it");
+            assert!(
+                is_rgb(focused[y * 96 + x + 1], [255, 255, 255]),
+                "{look:?}: white inside it"
+            );
         } else {
-            assert!(!is_rgb(focused[y * 96 + x + 1], [255, 255, 255]), "{look:?}: a single stroke");
+            assert!(
+                !is_rgb(focused[y * 96 + x + 1], [255, 255, 255]),
+                "{look:?}: a single stroke"
+            );
         }
         // The same box focused or not
         assert_eq!(layout_of(build(), &renderer).size(), size);
@@ -559,10 +586,20 @@ fn a_focused_icon_button_wears_the_shared_outline_inside_its_square() {
         assert_eq!(outside(&focused, bounds), 0, "selected {selected}");
         assert_ne!(rest, focused, "selected {selected}: focus shows");
         let (x, y) = (bounds.x as usize, bounds.center_y() as usize);
-        assert!(is_near(focused[y * 96 + x], dark, 20), "selected {selected}: dark on the edge: {:?} {:?} {:?}", focused[y * 96 + x - 1], focused[y * 96 + x], focused[y * 96 + x + 1]);
+        assert!(
+            is_near(focused[y * 96 + x], dark, 20),
+            "selected {selected}: dark on the edge: {:?} {:?} {:?}",
+            focused[y * 96 + x - 1],
+            focused[y * 96 + x],
+            focused[y * 96 + x + 1]
+        );
         let double = displayed_fill(ButtonLook::Icon, selected, State::Rest, None, &theme)
             .is_some_and(|fill| household_tones::lighter_on(Srgb::new(fill.r, fill.g, fill.b)));
-        assert_eq!(is_rgb(focused[y * 96 + x + 1], [255, 255, 255]), double, "selected {selected}");
+        assert_eq!(
+            is_rgb(focused[y * 96 + x + 1], [255, 255, 255]),
+            double,
+            "selected {selected}"
+        );
     }
 }
 
@@ -593,12 +630,15 @@ fn the_measurement_is_the_laid_out_width_in_whole_pixels_for_every_look() {
             vec!["Open in Cerea"],
             vec!["New terminal session"],
         ] {
-            let build = || {
-                Button::<()>::new(look, labels[0]).other_labels(labels[1..].iter().copied())
-            };
+            let build =
+                || Button::<()>::new(look, labels[0]).other_labels(labels[1..].iter().copied());
             let laid = layout_of(build().into(), &renderer).size().width;
             assert_eq!(laid.fract(), 0.0, "{look:?} {labels:?}: whole pixels");
-            assert_eq!(build().natural_width(&renderer), laid, "{look:?} {labels:?}");
+            assert_eq!(
+                build().natural_width(&renderer),
+                laid,
+                "{look:?} {labels:?}"
+            );
             assert_eq!(
                 width_of(&renderer, look, &labels, None, false),
                 laid,
@@ -610,9 +650,17 @@ fn the_measurement_is_the_laid_out_width_in_whole_pixels_for_every_look() {
                 "{look:?} {labels:?}: measured without a renderer"
             );
             // With a leading icon and a trailing one
-            let rich = || build().leading_icon(widget::icon::from_name("go-next-symbolic")).trailing_icon(widget::icon::from_name("go-next-symbolic").handle());
+            let rich = || {
+                build()
+                    .leading_icon(widget::icon::from_name("go-next-symbolic"))
+                    .trailing_icon(widget::icon::from_name("go-next-symbolic").handle())
+            };
             let laid = layout_of(rich().into(), &renderer).size().width;
-            assert_eq!(rich().natural_width(&renderer), laid, "{look:?} {labels:?} with icons");
+            assert_eq!(
+                rich().natural_width(&renderer),
+                laid,
+                "{look:?} {labels:?} with icons"
+            );
             assert_eq!(
                 width_of(&renderer, look, &labels, Some(16.0), true),
                 laid,
@@ -640,7 +688,11 @@ fn the_measurement_is_the_laid_out_width_in_whole_pixels_for_every_look() {
 fn a_label_wider_than_its_room_is_cut_and_says_so_only_then() {
     let renderer = renderer();
     let long = "Set up in Settings \u{2192} Profiles";
-    for look in [ButtonLook::Tertiary, ButtonLook::Secondary, ButtonLook::Plain] {
+    for look in [
+        ButtonLook::Tertiary,
+        ButtonLook::Secondary,
+        ButtonLook::Plain,
+    ] {
         let natural = Button::<()>::new(look, long).natural_width(&renderer);
         let laid = |room: f32| {
             let (element, _, cut) = Button::<()>::new(look, long).assemble();
@@ -656,17 +708,27 @@ fn a_label_wider_than_its_room_is_cut_and_says_so_only_then() {
             (node.size(), flag.get())
         };
         assert_eq!(laid(500.0), (Size::new(natural, 32.0), false), "{look:?}");
-        assert_eq!(laid(natural), (Size::new(natural, 32.0), false), "{look:?}: exactly enough");
+        assert_eq!(
+            laid(natural),
+            (Size::new(natural, 32.0), false),
+            "{look:?}: exactly enough"
+        );
         let (size, cut) = laid(120.0);
         assert!(cut, "{look:?}: cut in 120 px");
-        assert_eq!(size, Size::new(120.0, 32.0), "{look:?}: takes the room it is given");
+        assert_eq!(
+            size,
+            Size::new(120.0, 32.0),
+            "{look:?}: takes the room it is given"
+        );
         // And the cut state is not sticky: the same button with room again
         let (_, cut) = laid(natural + 40.0);
         assert!(!cut, "{look:?}");
     }
     // A button with a tooltip of its own keeps it and is given no other;
     // an icon button's name is never cut
-    let (_, tip, cut) = Button::<()>::tertiary(long).tooltip(tip(), Position::Top).assemble();
+    let (_, tip, cut) = Button::<()>::tertiary(long)
+        .tooltip(tip(), Position::Top)
+        .assemble();
     assert!(tip.is_some());
     assert!(cut.is_some());
     let (_, _, cut) = Button::<()>::with_content(ButtonLook::Secondary, mark(), "Chip").assemble();
@@ -678,9 +740,17 @@ fn a_cut_label_is_drawn_inside_its_box() {
     // Cut to 80 px, the label ends in an ellipsis inside the box; uncut it
     // would run past it
     let long = "Set up in Settings \u{2192} Profiles";
-    for look in [ButtonLook::Tertiary, ButtonLook::Secondary, ButtonLook::Plain, ButtonLook::Primary] {
+    for look in [
+        ButtonLook::Tertiary,
+        ButtonLook::Secondary,
+        ButtonLook::Plain,
+        ButtonLook::Primary,
+    ] {
         let build = || -> Element<'static, ()> {
-            Button::new(look, long).width(Length::Fixed(80.0)).on_press(()).into()
+            Button::new(look, long)
+                .width(Length::Fixed(80.0))
+                .on_press(())
+                .into()
         };
         let size = layout_of(build(), &renderer()).size();
         assert_eq!(size.width, 80.0);
@@ -708,9 +778,14 @@ fn a_selected_labelled_look_is_the_muted_accent_and_the_same_size() {
             "{look:?}: only Secondary keeps its border"
         );
         let build = |chosen: bool| {
-            Button::<()>::new(look, "Recommended").selected(chosen).on_press(())
+            Button::<()>::new(look, "Recommended")
+                .selected(chosen)
+                .on_press(())
         };
-        let (a, b) = (layout_of(build(false).into(), &renderer), layout_of(build(true).into(), &renderer));
+        let (a, b) = (
+            layout_of(build(false).into(), &renderer),
+            layout_of(build(true).into(), &renderer),
+        );
         assert_eq!(a.size(), b.size(), "{look:?}");
         if look == ButtonLook::Icon {
             continue;
@@ -786,11 +861,25 @@ fn plain_is_the_icon_looks_paint_with_a_body_text_label_in_the_same_box() {
     // Not the accent
     assert_ne!(rest.text, Some(theme.cosmic().accent_text_color().into()));
     // The same box: `space_l` tall, `space_s` at each side of the content
-    let node = layout_of(Button::<()>::new(ButtonLook::Plain, "\u{00d7}4").leading_icon(widget::icon::from_name("go-next-symbolic")).into(), &renderer);
+    let node = layout_of(
+        Button::<()>::new(ButtonLook::Plain, "\u{00d7}4")
+            .leading_icon(widget::icon::from_name("go-next-symbolic"))
+            .into(),
+        &renderer,
+    );
     assert_eq!(node.size().height, 32.0);
     assert_eq!(sides(&node), (16.0, 16.0));
     // Its label is regular: narrower than the semibold boxed looks'
     let plain = width_of(&renderer, ButtonLook::Plain, &["Recommended"], None, false);
-    let primary = width_of(&renderer, ButtonLook::Primary, &["Recommended"], None, false);
-    assert!(plain <= primary, "regular is never wider: {plain} <= {primary}");
+    let primary = width_of(
+        &renderer,
+        ButtonLook::Primary,
+        &["Recommended"],
+        None,
+        false,
+    );
+    assert!(
+        plain <= primary,
+        "regular is never wider: {plain} <= {primary}"
+    );
 }

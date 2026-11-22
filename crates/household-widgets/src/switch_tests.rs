@@ -96,7 +96,9 @@ fn draw(
 /// as the switch is: the references differ from the switch only by what the
 /// switch changes, its colour. The size itself is checked on its own
 fn at_toggle_size(toggler: widget::Toggler<'static, Message>) -> Element<'static, Message> {
-    Element::new(crate::switch::Sized { content: toggler.into() })
+    Element::new(crate::switch::Sized {
+        content: toggler.into(),
+    })
 }
 
 fn plain(on: bool) -> Element<'static, Message> {
@@ -453,18 +455,50 @@ fn the_switch_is_toggle_height_and_twice_as_wide() {
     let bare = size(switch(true, |on| on));
     assert_eq!(bare.size(), Size::new(52.0, 26.0));
     let gap = f32::from(cosmic::theme::spacing().space_xs);
-    let node = size(toggler(false).label("Pointer".to_string()).on_toggle(|on| on).into());
-    let [label, switch] = node.children() else { panic!("a label and a switch") };
+    let node = size(
+        toggler(false)
+            .label("Pointer".to_string())
+            .on_toggle(|on| on)
+            .into(),
+    );
+    let [label, switch] = node.children() else {
+        panic!("a label and a switch")
+    };
     assert_eq!(switch.size(), Size::new(52.0, 26.0));
     assert_eq!(switch.bounds().x, label.size().width + gap);
-    assert_eq!(node.size().height, 26.0, "the label is centred against the switch");
+    assert_eq!(
+        node.size().height,
+        26.0,
+        "the label is centred against the switch"
+    );
     assert_eq!(label.bounds().y, (26.0 - label.size().height) / 2.0);
     // The knob is 22 px and drawn 2 px in, whole pixels
-    let on = draw(|| switch_of(true), &theme_with(false, [0x00, 0x66, 0xcc]), None, &[]);
-    let off = draw(|| switch_of(false), &theme_with(false, [0x00, 0x66, 0xcc]), None, &[]);
-    assert_ne!(on.at(Point::new(51.0 - 3.0, 13.0)), off.at(Point::new(51.0 - 3.0, 13.0)));
-    assert_eq!(on.at(Point::new(60.0, 13.0)), [0, 0, 0], "nothing beyond 52 px");
-    assert_eq!(on.at(Point::new(26.0, 26.0)), [0, 0, 0], "nothing below 26 px");
+    let on = draw(
+        || switch_of(true),
+        &theme_with(false, [0x00, 0x66, 0xcc]),
+        None,
+        &[],
+    );
+    let off = draw(
+        || switch_of(false),
+        &theme_with(false, [0x00, 0x66, 0xcc]),
+        None,
+        &[],
+    );
+    assert_ne!(
+        on.at(Point::new(51.0 - 3.0, 13.0)),
+        off.at(Point::new(51.0 - 3.0, 13.0))
+    );
+    assert_eq!(
+        on.at(Point::new(60.0, 13.0)),
+        [0, 0, 0],
+        "nothing beyond 52 px"
+    );
+    assert_eq!(
+        on.at(Point::new(26.0, 26.0)),
+        [0, 0, 0],
+        "nothing below 26 px"
+    );
 }
 
 fn switch_of(on: bool) -> Element<'static, Message> {

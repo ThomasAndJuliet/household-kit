@@ -225,9 +225,15 @@ impl<M> Widget<M, Theme, Renderer> for HeaderColoured<'_, M> {
             text_color: style.icon_color,
             ..*style
         };
-        self.content
-            .as_widget()
-            .draw(&tree.children[0], renderer, theme, &style, layout, cursor, viewport);
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            &style,
+            layout,
+            cursor,
+            viewport,
+        );
     }
 }
 

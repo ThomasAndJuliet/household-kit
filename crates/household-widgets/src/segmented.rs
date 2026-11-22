@@ -461,9 +461,15 @@ impl<M> Widget<M, Theme, Renderer> for Outlined<'_, M> {
             },
             Background::Color(cosmic.background(theme.transparent).component.base.into()),
         );
-        self.content
-            .as_widget()
-            .draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
         renderer.fill_quad(
             renderer::Quad {
                 bounds,
@@ -497,7 +503,13 @@ impl<M> Widget<M, Theme, Renderer> for Outlined<'_, M> {
             renderer,
             part.bounds(),
             corners.into(),
-            displayed_fill(ButtonLook::Segment, self.chosen == Some(n), state, Some(corners), theme),
+            displayed_fill(
+                ButtonLook::Segment,
+                self.chosen == Some(n),
+                state,
+                Some(corners),
+                theme,
+            ),
             theme,
         );
     }

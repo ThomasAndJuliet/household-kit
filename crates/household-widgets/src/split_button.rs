@@ -242,11 +242,16 @@ impl Operation for Probe {
 impl<M> Split<'_, M> {
     fn probe(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer) {
         let mut found = None;
-        for (n, ((part, state), part_layout)) in
-            self.parts.iter_mut().zip(&mut tree.children).zip(layout.children()).enumerate()
+        for (n, ((part, state), part_layout)) in self
+            .parts
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(layout.children())
+            .enumerate()
         {
             let mut probe = Probe::default();
-            part.as_widget_mut().operate(state, part_layout, renderer, &mut probe);
+            part.as_widget_mut()
+                .operate(state, part_layout, renderer, &mut probe);
             if probe.0 {
                 found = Some(n);
             }
@@ -294,7 +299,12 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
         )
     }
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         let square = crate::button::button_height();
         let menu = self.parts[1].as_widget_mut().layout(
             &mut tree.children[1],
@@ -313,11 +323,23 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
         )
     }
 
-    fn operate(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation) {
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
         operation.container(None, layout.bounds());
         operation.traverse(&mut |operation| {
-            for ((part, state), part_layout) in self.parts.iter_mut().zip(&mut tree.children).zip(layout.children()) {
-                part.as_widget_mut().operate(state, part_layout, renderer, operation);
+            for ((part, state), part_layout) in self
+                .parts
+                .iter_mut()
+                .zip(&mut tree.children)
+                .zip(layout.children())
+            {
+                part.as_widget_mut()
+                    .operate(state, part_layout, renderer, operation);
             }
         });
         self.probe(tree, layout, renderer);
@@ -334,9 +356,22 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
-        for ((part, state), part_layout) in self.parts.iter_mut().zip(&mut tree.children).zip(layout.children()) {
-            part.as_widget_mut()
-                .update(state, event, part_layout, cursor, renderer, clipboard, shell, viewport);
+        for ((part, state), part_layout) in self
+            .parts
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(layout.children())
+        {
+            part.as_widget_mut().update(
+                state,
+                event,
+                part_layout,
+                cursor,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
         }
         self.probe(tree, layout, renderer);
     }
@@ -354,7 +389,8 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
             .zip(&tree.children)
             .zip(layout.children())
             .map(|((part, state), part_layout)| {
-                part.as_widget().mouse_interaction(state, part_layout, cursor, viewport, renderer)
+                part.as_widget()
+                    .mouse_interaction(state, part_layout, cursor, viewport, renderer)
             })
             .max()
             .unwrap_or_default()
@@ -368,7 +404,14 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, M, Theme, Renderer>> {
-        overlay::from_children(&mut self.parts, tree, layout, renderer, viewport, translation)
+        overlay::from_children(
+            &mut self.parts,
+            tree,
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
     }
 
     fn drag_destinations(
@@ -378,12 +421,11 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
         renderer: &Renderer,
         dnd_rectangles: &mut cosmic::iced::advanced::clipboard::DndDestinationRectangles,
     ) {
-        for ((part, state), part_layout) in self.parts
-            .iter()
-            .zip(&tree.children)
-            .zip(layout.children())
+        for ((part, state), part_layout) in
+            self.parts.iter().zip(&tree.children).zip(layout.children())
         {
-            part.as_widget().drag_destinations(state, part_layout, renderer, dnd_rectangles);
+            part.as_widget()
+                .drag_destinations(state, part_layout, renderer, dnd_rectangles);
         }
     }
 
@@ -399,7 +441,9 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
                 .iter()
                 .zip(layout.children())
                 .zip(&tree.children)
-                .map(|((part, part_layout), state)| part.as_widget().a11y_nodes(part_layout, state, cursor)),
+                .map(|((part, part_layout), state)| {
+                    part.as_widget().a11y_nodes(part_layout, state, cursor)
+                }),
         )
     }
 
@@ -439,20 +483,33 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
                 return;
             };
             let at = if n == 0 { action_cursor } else { cursor };
-            part.as_widget().draw(state, renderer, theme, style, part_layout, at, viewport);
+            part.as_widget()
+                .draw(state, renderer, theme, style, part_layout, at, viewport);
         }
         let bounds = layout.bounds();
         let radius = theme.cosmic().corner_radii.radius_xl;
         let look = self.look;
-        let secondary = crate::button::paint(look, false, None, State::Rest, theme).border.is_some();
+        let secondary = crate::button::paint(look, false, None, State::Rest, theme)
+            .border
+            .is_some();
         let space = theme.cosmic().spacing;
         // Secondary's outline, each part's in its own state's colour (a
         // disabled action fades as a button's border does)
         if secondary {
             for (n, part) in [action, menu].into_iter().enumerate() {
-                let colour = crate::button::paint(look, false, None, if n == 0 && !self.enabled { State::Disabled } else { State::Rest }, theme)
-                    .border
-                    .unwrap_or(Color::TRANSPARENT);
+                let colour = crate::button::paint(
+                    look,
+                    false,
+                    None,
+                    if n == 0 && !self.enabled {
+                        State::Disabled
+                    } else {
+                        State::Rest
+                    },
+                    theme,
+                )
+                .border
+                .unwrap_or(Color::TRANSPARENT);
                 renderer.with_layer(part, |renderer| {
                     renderer.fill_quad(
                         renderer::Quad {
@@ -477,7 +534,10 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
             let colour = if let Some(on) = rest.text.filter(|_| look.filled()) {
                 on
             } else {
-                crate::button::fade(theme.cosmic().on_bg_color().into(), crate::look::page(theme))
+                crate::button::fade(
+                    theme.cosmic().on_bg_color().into(),
+                    crate::look::page(theme),
+                )
             };
             (colour, 1.0, f32::from(space.space_xs) / 2.0)
         };
@@ -504,7 +564,13 @@ impl<M> Widget<M, Theme, Renderer> for Split<'_, M> {
             renderer,
             part,
             corners.into(),
-            crate::button::displayed_fill(look, false, self.state_of(n, over), Some(corners), theme),
+            crate::button::displayed_fill(
+                look,
+                false,
+                self.state_of(n, over),
+                Some(corners),
+                theme,
+            ),
             theme,
         );
     }

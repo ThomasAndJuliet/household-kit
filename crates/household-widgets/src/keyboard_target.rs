@@ -24,8 +24,8 @@
 use cosmic::iced::advanced::widget::{Operation, Tree, operation, tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Background, Color, Event, Length, Rectangle, Size, Vector};
-use cosmic::widget::button;
 use cosmic::theme;
+use cosmic::widget::button;
 use cosmic::{Element, Renderer, Theme};
 
 // Contrast is resolved from what the native class actually draws. A translucent
@@ -187,7 +187,9 @@ pub(crate) fn draw_outline(
     theme: &Theme,
 ) {
     use cosmic::iced::advanced::Renderer as _;
-    let dark = crate::menu_parts::RowContour::Rounded.target_border(theme).color;
+    let dark = crate::menu_parts::RowContour::Rounded
+        .target_border(theme)
+        .color;
     let double = fill.is_some_and(|fill| {
         household_tones::lighter_on(household_tones::Srgb::new(fill.r, fill.g, fill.b))
     });

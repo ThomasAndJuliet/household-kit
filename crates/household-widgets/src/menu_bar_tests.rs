@@ -651,8 +651,8 @@ impl Widget<(), Theme, Renderer> for Probe {
 /// `MenuRoot` class gives it: the header's (the renderer's icon colour)
 #[test]
 fn a_title_keeps_the_header_colour_of_the_plain_menu_root_class() {
-    use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
     use cosmic::iced::Color;
+    use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
     let drawn = |class: cosmic::theme::Button, tint: bool| {
         let seen = std::rc::Rc::new(std::cell::Cell::new(None));
         let probe: Element<'static, ()> = Element::new(Probe(seen.clone()));
@@ -662,24 +662,44 @@ fn a_title_keeps_the_header_colour_of_the_plain_menu_root_class() {
             .on_press(())
             .into();
         let mut renderer = crate::test_fonts::renderer().expect("native renderer");
-        let mut ui = UserInterface::build(button, Size::new(60.0, 40.0), Cache::default(), &mut renderer);
+        let mut ui = UserInterface::build(
+            button,
+            Size::new(60.0, 40.0),
+            Cache::default(),
+            &mut renderer,
+        );
         let header = renderer::Style {
             icon_color: Color::from_rgb(0.9, 0.1, 0.2),
             text_color: Color::from_rgb(0.1, 0.1, 0.1),
             ..Default::default()
         };
-        ui.draw(&mut renderer, &Theme::default(), &header, mouse::Cursor::Unavailable);
+        ui.draw(
+            &mut renderer,
+            &Theme::default(),
+            &header,
+            mouse::Cursor::Unavailable,
+        );
         seen.get()
     };
     let plain = drawn(cosmic::theme::Button::MenuRoot, false);
-    assert_eq!(plain, Some(Color::from_rgb(0.9, 0.1, 0.2)), "libcosmic's own");
     assert_eq!(
-        drawn(crate::button::unringed(cosmic::theme::Button::MenuRoot), true),
+        plain,
+        Some(Color::from_rgb(0.9, 0.1, 0.2)),
+        "libcosmic's own"
+    );
+    assert_eq!(
+        drawn(
+            crate::button::unringed(cosmic::theme::Button::MenuRoot),
+            true
+        ),
         plain
     );
     // And without the tint the unringed class would lose it
     assert_ne!(
-        drawn(crate::button::unringed(cosmic::theme::Button::MenuRoot), false),
+        drawn(
+            crate::button::unringed(cosmic::theme::Button::MenuRoot),
+            false
+        ),
         plain
     );
 }
@@ -697,7 +717,11 @@ fn the_bar_changing_form_under_an_open_menu_closes_it() {
     app.named(keyboard::key::Named::ArrowRight);
     assert_eq!(app.surfaces().len(), 2, "File and Recent are open");
     app.resize(110.0);
-    assert_eq!(app.open(), None, "File's title is gone, and its menu with it");
+    assert_eq!(
+        app.open(),
+        None,
+        "File's title is gone, and its menu with it"
+    );
     assert!(app.surfaces().is_empty());
     assert!(app.visible(&Id::new("bar-all")).is_some());
     assert!(app.visible(&MenuBar::<Root>::title_id(NS, 0)).is_none());
@@ -707,7 +731,9 @@ fn the_bar_changing_form_under_an_open_menu_closes_it() {
     assert_eq!(app.open(), Some(Root::File), "the titles work again");
 
     let mut narrow = App::new(110.0);
-    let all = narrow.visible(&Id::new("bar-all")).expect("the three-bar button");
+    let all = narrow
+        .visible(&Id::new("bar-all"))
+        .expect("the three-bar button");
     narrow.click_at(all.center());
     let file = narrow
         .visible(&crate::menu_surface::row_id(
