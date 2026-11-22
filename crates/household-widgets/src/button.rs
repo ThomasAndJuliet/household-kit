@@ -953,8 +953,10 @@ impl<'a, M: Clone + 'a> Button<'a, M> {
             if labelled {
                 cut_flag = Some((flag.clone(), self.label.clone()));
             }
+            // The row has already set aside the gap before the icon, so only
+            // the icon's own width is kept
             let reserve = if self.trailing.is_some() {
-                f32::from(ACTION_ICON) + f32::from(space.space_xxs)
+                f32::from(ACTION_ICON)
             } else {
                 0.0
             };
