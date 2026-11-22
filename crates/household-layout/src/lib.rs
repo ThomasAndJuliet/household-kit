@@ -287,4 +287,4 @@ pub use plan::{Failure, Placed, Plan};
 pub use size::{
     Measured, Point, Rectangle, Size, finite_size, valid_available, validate_measurement,
 };
-pub use stage::{AsStage, NoFit, Stage, StagePlan, choose_stage};
+pub use stage::{AsStage, NoFit, Stage, StagePlan, choose_stage, choose_stage_blaming};
