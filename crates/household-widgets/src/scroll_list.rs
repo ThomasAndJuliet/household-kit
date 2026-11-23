@@ -235,7 +235,9 @@ impl<K: Copy + Eq + Hash> ListState<K> {
     }
 
     /// Bring the list's state up to date with what its scrollable reported.
-    /// The task returned pins a deliberate scroll to the end there
+    /// A deliberate scroll to the end follows it again: the list goes on
+    /// following it at its next layout, so the task returned has nothing to
+    /// pin
     pub fn apply<T: Send + 'static>(&mut self, action: ListAction) -> Task<T> {
         match action {
             ListAction::Scrolled(viewport) => self.scrolled(&viewport),
@@ -260,7 +262,20 @@ impl<K: Copy + Eq + Hash> ListState<K> {
             Axis::Vertical => viewport.is_pinned_to_end(),
             Axis::Horizontal => self.follow && at_end,
         };
-        self.follow = pinned || (viewport.is_user_scroll() && at_end);
+        // Only the user, or a move away from the end, decides whether the
+        // list follows it: a layout that changed the content or the view
+        // under an unchanged offset does not, as the next layout pins a
+        // list that follows to its new end
+        let unmoved = self.offset.is_some_and(|last| (last - offset).abs() < 0.5);
+        self.follow = if pinned {
+            true
+        } else if viewport.is_user_scroll() {
+            at_end
+        } else if at_end || unmoved {
+            self.follow
+        } else {
+            false
+        };
         self.position = if self.follow {
             axis.end()
         } else {
@@ -269,13 +284,11 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         self.page = bounds;
         self.content = content;
         self.offset = Some(offset);
+        self.geometry.borrow_mut().scrolling_up = false;
         if !self.follow
             && let Some(place) = self.geometry.borrow().place_at(offset)
         {
             self.place = Some(place);
-        }
-        if viewport.is_user_scroll() && at_end && !pinned {
-            return self.pin_to_end();
         }
         Task::none()
     }
@@ -330,51 +343,34 @@ impl<K: Copy + Eq + Hash> ListState<K> {
         scrollable::snap_to(self.id.clone(), self.axis.fraction(1.0))
     }
 
-    /// Pin a deliberate return to the end, only if the user has not
-    /// scrolled away again by the time this reaches the scrollable
-    fn pin_to_end<T: Send + 'static>(&self) -> Task<T> {
-        struct Pin(Id, Axis);
-        impl<T> Operation<T> for Pin {
-            fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
-                operate(self);
-            }
-            fn scrollable(
-                &mut self,
-                id: Option<&Id>,
-                bounds: Rectangle,
-                content: Rectangle,
-                translation: Vector,
-                state: &mut dyn Scrollable,
-            ) {
-                let axis = self.1;
-                if id == Some(&self.0)
-                    && axis.of(translation) + axis.main(bounds.size())
-                        >= axis.main(content.size()) - 0.5
-                {
-                    state.snap_to(axis.fraction(1.0));
-                }
-            }
-        }
-        cosmic::iced::runtime::task::widget(Pin(self.id.clone(), self.axis))
-    }
-
     /// Scroll by `pages` of the view, keeping a little of the last page in
     /// sight to read on from; forward to the end follows it again
     pub fn scroll_pages<T: Send + 'static>(&mut self, pages: f32) -> Task<T> {
-        if pages < 0.0 {
-            self.follow = false;
-        }
         let page = if self.page > 0.0 {
             self.page * 0.9
         } else {
             400.0
         };
-        let scroll = scrollable::scroll_by(self.id.clone(), self.axis.by(pages * page));
-        if pages > 0.0 {
-            scroll.chain(self.pin_to_end())
-        } else {
-            scroll
+        if pages < 0.0 {
+            self.follow = false;
         }
+        let by = pages * page;
+        let (start, content, view) = self.stands();
+        if pages > 0.0 && start + by >= content - view - 0.5 {
+            // The page lands at the end, as the view last stood. One
+            // operation decides when it reaches the scrollable, against
+            // what it shows then: output laid out before it cannot leave
+            // the page short of the end, a scroll since is not undone, and
+            // nothing changes if it never runs. The list follows the end
+            // once told it is pinned there
+            return cosmic::iced::runtime::task::widget(PageToEnd {
+                id: self.id.clone(),
+                axis: self.axis,
+                from: start,
+                by,
+            });
+        }
+        scrollable::scroll_by(self.id.clone(), self.axis.by(by))
     }
 
     /// Bring item `key` into view, built or not, and keep it there as the
@@ -1525,13 +1521,55 @@ impl<K: Copy + Eq + Hash + 'static, Message> Column<'_, K, Message> {
     }
 }
 
+/// A page forward that landed at the end of the view it was asked from:
+/// if the scrollable `id` still stands at `from`, it goes to its end and
+/// is pinned there; else it scrolls `by`, and is pinned if that meets the
+/// end. Nothing inside it is visited
+struct PageToEnd {
+    id: Id,
+    axis: Axis,
+    from: f32,
+    by: f32,
+}
+
+impl<T> Operation<T> for PageToEnd {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
+        operate(self);
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        content: Rectangle,
+        translation: Vector,
+        state: &mut dyn Scrollable,
+    ) {
+        if id != Some(&self.id) {
+            return;
+        }
+        let axis = self.axis;
+        let at = axis.of(translation);
+        let end = (axis.main(content.size()) - axis.main(bounds.size())).max(0.0);
+        // The translation is rounded, where it stood may not be
+        if (at - self.from).abs() > 0.75 {
+            state.scroll_by(axis.by(self.by), bounds, content);
+            if at + self.by < end - 0.5 {
+                return;
+            }
+        }
+        state.snap_to(axis.fraction(1.0));
+    }
+}
+
 /// The scrollable `id`'s offset, bounds and content, and a new offset to
-/// give it along `axis`; nothing inside it is visited
+/// give it along `axis`, or its end; nothing inside it is visited
 struct Probe {
     id: Id,
     axis: Axis,
     found: Option<(Rectangle, Rectangle, Vector)>,
     scroll_to: Option<f32>,
+    snap_end: bool,
 }
 
 impl Operation for Probe {
@@ -1550,12 +1588,15 @@ impl Operation for Probe {
             if let Some(offset) = self.scroll_to {
                 state.scroll_to(self.axis.to(offset));
             }
+            if self.snap_end {
+                state.snap_to(self.axis.fraction(1.0));
+            }
         }
     }
 }
 
 /// The list's scrollable, keeping the reader's place in its items across
-/// layouts unless it follows the end
+/// layouts, or its end if it follows the end
 struct Anchored<'a, K, Message> {
     content: Element<'a, Message>,
     id: Id,
@@ -1571,12 +1612,14 @@ impl<K: Copy + Eq + Hash, Message> Anchored<'_, K, Message> {
         renderer: &Renderer,
         node: &layout::Node,
         scroll_to: Option<f32>,
+        snap_end: bool,
     ) -> Option<(Rectangle, Rectangle, Vector)> {
         let mut probe = Probe {
             id: self.id.clone(),
             axis: self.axis,
             found: None,
             scroll_to,
+            snap_end,
         };
         self.content
             .as_widget_mut()
@@ -1586,7 +1629,47 @@ impl<K: Copy + Eq + Hash, Message> Anchored<'_, K, Message> {
 }
 
 impl<K: Copy + Eq + Hash, Message> Widget<Message, Theme, Renderer> for Anchored<'_, K, Message> {
-    forward_widget!(Message, Theme, Renderer; children, diff, size, size_hint, draw, update, operate, a11y_nodes, mouse_interaction, overlay, drag_destinations);
+    forward_widget!(Message, Theme, Renderer; children, diff, size, size_hint, draw, operate, a11y_nodes, mouse_interaction, overlay, drag_destinations);
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        // The wheel toward the start over the list: by however little, a
+        // layout before the list hears of it must not pin it to its end
+        // again (the scrollable's offset is rounded, so it cannot tell)
+        if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
+            && cursor.is_over(layout.bounds())
+        {
+            let (x, y) = match *delta {
+                mouse::ScrollDelta::Lines { x, y } | mouse::ScrollDelta::Pixels { x, y } => (x, y),
+            };
+            let toward_start = match self.axis {
+                Axis::Vertical => y > 0.0,
+                Axis::Horizontal => x > 0.0,
+            };
+            if toward_start {
+                self.geometry.borrow_mut().scrolling_up = true;
+            }
+        }
+        self.content.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
 
     fn layout(
         &mut self,
@@ -1609,20 +1692,36 @@ impl<K: Copy + Eq + Hash, Message> Widget<Message, Theme, Renderer> for Anchored
                 Size::new(last.bounds.0, last.bounds.1),
                 vec![layout::Node::new(Size::new(last.content.0, last.content.1))],
             );
-            self.probe(&mut tree.children[0], renderer, &node, None)
+            self.probe(&mut tree.children[0], renderer, &node, None, false)
                 .map(|(_, _, translation)| axis.of(translation))
         });
+        // Whether the view stood at its end, decided against the layout it
+        // had: content that grew or shrank since, a view that changed size
+        // and a scroll that met the end leave it there; a scroll up does not
+        let main = |(width, height): (f32, f32)| axis.main(Size::new(width, height));
+        let was_at_end = match (last, before) {
+            (None, _) => true,
+            (Some(last), Some(before)) => before + main(last.bounds) >= main(last.content) - 0.5,
+            (Some(_), None) => false,
+        };
         self.geometry.borrow_mut().begin_layout(before);
         let node = self
             .content
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits);
+        // A list that follows its end is pinned to its new end in this same
+        // layout, rather than by a task that may find it moved by then
+        let snap_end = self.follow && was_at_end && !self.geometry.borrow().scrolling_up;
         let Some((bounds, content, translation)) =
-            self.probe(&mut tree.children[0], renderer, &node, None)
+            self.probe(&mut tree.children[0], renderer, &node, None, snap_end)
         else {
             return node;
         };
-        let mut offset = axis.of(translation);
+        let mut offset = if snap_end {
+            (axis.main(content.size()) - axis.main(bounds.size())).max(0.0)
+        } else {
+            axis.of(translation)
+        };
         let target = self.geometry.borrow().target();
         if !self.follow
             && let Some(target) = target
@@ -1630,7 +1729,7 @@ impl<K: Copy + Eq + Hash, Message> Widget<Message, Theme, Renderer> for Anchored
             let most = (axis.main(content.size()) - axis.main(bounds.size())).max(0.0);
             let target = target.clamp(0.0, most);
             if (target - offset).abs() > 0.5 {
-                self.probe(&mut tree.children[0], renderer, &node, Some(target));
+                self.probe(&mut tree.children[0], renderer, &node, Some(target), false);
                 self.geometry.borrow_mut().counts.kept += 1;
                 offset = target;
             }

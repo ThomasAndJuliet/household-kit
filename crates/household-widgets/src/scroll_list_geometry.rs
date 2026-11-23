@@ -210,6 +210,10 @@ pub(crate) struct Geometry<K> {
     /// A place being revealed, until a layout has shown it: the list builds
     /// the items around it, not around where the view last stood
     pub revealing: Option<Place<K>>,
+    /// The wheel moved the view toward its start since the list last
+    /// heard where it stands: until then a layout does not pin it to its
+    /// end, though the view it was built from still followed it
+    pub scrolling_up: bool,
 }
 
 impl<K> Default for Geometry<K> {
@@ -232,6 +236,7 @@ impl<K> Default for Geometry<K> {
             target: None,
             focus_pending: false,
             revealing: None,
+            scrolling_up: false,
         }
     }
 }
