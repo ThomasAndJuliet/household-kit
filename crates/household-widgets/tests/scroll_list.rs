@@ -10,7 +10,7 @@ use cosmic::iced::advanced::{clipboard, renderer::Headless};
 use cosmic::iced::keyboard;
 use cosmic::iced::runtime::user_interface::{Cache, UserInterface};
 use cosmic::iced::widget::scrollable::AbsoluteOffset;
-use cosmic::iced::{Font, Length, Pixels, Point, Rectangle, Size, Vector, mouse};
+use cosmic::iced::{Font, Length, Pixels, Point, Rectangle, Size, Task, Vector, mouse};
 use cosmic::{Element, Renderer, widget};
 use household_widgets::layout;
 use household_widgets::scroll_list::{
@@ -131,6 +131,29 @@ impl Window {
             self.cache = ui.into_cache();
         }
         messages
+    }
+
+    /// Run the widget operations `task` asks for, one at a time, each in a
+    /// frame of its own, as the runtime does once it has rebuilt the view;
+    /// how many there were
+    fn run(
+        &mut self,
+        state: &mut ListState<u64>,
+        content: impl Fn(&ListState<u64>) -> Element<'_, Message>,
+        task: Task<()>,
+    ) -> usize {
+        use cosmic::iced::futures::StreamExt;
+        let Some(mut stream) = cosmic::iced::runtime::task::into_stream(task) else {
+            return 0;
+        };
+        let mut ran = 0;
+        while let Some(action) = cosmic::iced::futures::executor::block_on(stream.next()) {
+            if let cosmic::iced::runtime::Action::Widget(mut operation) = action {
+                self.show(state, &content, Some(operation.as_mut()));
+                ran += 1;
+            }
+        }
+        ran
     }
 }
 
@@ -717,7 +740,6 @@ struct Look {
     axis: Axis,
     found: Option<(f32, f32)>,
     scroll_to: Option<f32>,
-    scroll_by: Option<f32>,
 }
 
 impl Look {
@@ -727,20 +749,12 @@ impl Look {
             axis: state.axis(),
             found: None,
             scroll_to: None,
-            scroll_by: None,
         }
     }
 
     fn scroll_to(state: &ListState<u64>, offset: f32) -> Self {
         Self {
             scroll_to: Some(offset),
-            ..Self::at(state)
-        }
-    }
-
-    fn scroll_by(state: &ListState<u64>, by: f32) -> Self {
-        Self {
-            scroll_by: Some(by),
             ..Self::at(state)
         }
     }
@@ -777,17 +791,6 @@ impl Operation for Look {
         if let Some(offset) = self.scroll_to {
             let (x, y) = main(offset);
             state.scroll_to(AbsoluteOffset { x, y });
-        }
-        if let Some(by) = self.scroll_by {
-            let (x, y) = main(by);
-            state.scroll_by(
-                AbsoluteOffset {
-                    x: x.unwrap_or_default(),
-                    y: y.unwrap_or_default(),
-                },
-                bounds,
-                content,
-            );
         }
     }
 }
@@ -953,24 +956,89 @@ fn a_wheel_tick_up_is_not_undone_by_a_layout_that_still_follows() {
     assert_stays(&state, &look, end - 50.0, "once told of the tick");
 }
 
-#[test]
-fn a_page_forward_to_the_end_follows_it_through_growth() {
-    let mut window = Window::new();
+/// A list at 2100, not following: a page forward from there (450) passes
+/// the end at 2524
+fn reading_at_2100(window: &mut Window) -> ListState<u64> {
     let mut state = ListState::new();
     window.show(&mut state, |state| convo(state, 50), None);
-    // 2100 + 450 passes the end at 2524
     let mut to = Look::scroll_to(&state, 2100.0);
     window.show(&mut state, |state| convo(state, 50), Some(&mut to));
     window.show(&mut state, |state| convo(state, 50), None);
     assert!(!state.follows_end());
-    // What ListState::scroll_pages does, and then the operation its task
-    // runs; items arrive before the next layout
-    drop(state.scroll_pages::<()>(1.0));
-    let mut by = Look::scroll_by(&state, PAGE * 0.9);
-    window.show(&mut state, |state| convo(state, 50), Some(&mut by));
+    state
+}
+
+#[test]
+fn a_page_forward_to_the_end_follows_it_through_growth() {
+    let mut window = Window::new();
+    let mut state = reading_at_2100(&mut window);
+    let task = state.scroll_pages::<()>(1.0);
+    assert_eq!(
+        window.run(&mut state, |state| convo(state, 50), task),
+        1,
+        "one operation"
+    );
     let mut look = Look::at(&state);
     window.show(&mut state, |state| convo(state, 60), Some(&mut look));
     assert_pinned(&state, &look, "paged to the end, then ten items arrived");
+}
+
+/// The runtime lays the view out again before it runs the page's
+/// operation: output that arrives with the key is laid out first
+#[test]
+fn a_page_forward_to_the_end_follows_output_laid_out_before_its_scroll() {
+    let mut window = Window::new();
+    let mut state = reading_at_2100(&mut window);
+    let task = state.scroll_pages::<()>(1.0);
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_stays(&state, &look, 2100.0, "ten items laid out before the page");
+    window.run(&mut state, |state| convo(state, 60), task);
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_pinned(&state, &look, "then the page reached the scrollable");
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 70), Some(&mut look));
+    assert_pinned(&state, &look, "and ten more items arrived");
+}
+
+/// A page whose operation never runs leaves the list as it was, restored
+/// where it stood in a new widget tree (a tab switched away and back)
+#[test]
+fn a_lost_page_forward_changes_nothing() {
+    let mut window = Window::new();
+    let mut state = reading_at_2100(&mut window);
+    drop(state.scroll_pages::<()>(1.0));
+    assert!(
+        !state.follows_end(),
+        "not following before the page arrives"
+    );
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_stays(&state, &look, 2100.0, "ten items arrived");
+    let mut elsewhere = Window::new();
+    let mut look = Look::at(&state);
+    elsewhere.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_stays(&state, &look, 2100.0, "restored in a new widget tree");
+}
+
+/// A scroll up between the key and its operation is not undone: the page
+/// then scrolls by a page from there, short of the end
+#[test]
+fn a_page_forward_after_a_scroll_up_scrolls_by_a_page() {
+    let mut window = Window::new();
+    let mut state = reading_at_2100(&mut window);
+    let task = state.scroll_pages::<()>(1.0);
+    drop(window.send(
+        &mut state,
+        |state| convo(state, 50),
+        None,
+        &[wheel(0.0, 50.0)],
+    ));
+    window.run(&mut state, |state| convo(state, 50), task);
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_stays(&state, &look, 2050.0 + 450.0, "a page on from 2050");
 }
 
 #[test]
@@ -981,10 +1049,9 @@ fn a_page_forward_short_of_the_end_does_not_follow_it() {
     let mut to = Look::scroll_to(&state, 1000.0);
     window.show(&mut state, |state| convo(state, 50), Some(&mut to));
     window.show(&mut state, |state| convo(state, 50), None);
-    drop(state.scroll_pages::<()>(1.0));
+    let task = state.scroll_pages::<()>(1.0);
     assert!(!state.follows_end(), "1450 is short of the end at 2524");
-    let mut by = Look::scroll_by(&state, PAGE * 0.9);
-    window.show(&mut state, |state| convo(state, 50), Some(&mut by));
+    window.run(&mut state, |state| convo(state, 50), task);
     let mut look = Look::at(&state);
     window.show(&mut state, |state| convo(state, 60), Some(&mut look));
     assert_stays(&state, &look, 1450.0, "ten items arrived below the view");
@@ -993,14 +1060,10 @@ fn a_page_forward_short_of_the_end_does_not_follow_it() {
 #[test]
 fn only_a_move_away_from_the_end_stops_following() {
     let mut window = Window::new();
-    let mut state = ListState::new();
-    window.show(&mut state, |state| convo(state, 50), None);
-    let mut to = Look::scroll_to(&state, 2100.0);
-    window.show(&mut state, |state| convo(state, 50), Some(&mut to));
-    window.show(&mut state, |state| convo(state, 50), None);
-    // A page forward that lands at the end follows it from now on, though
-    // its scroll has not reached the scrollable yet
-    drop(state.scroll_pages::<()>(1.0));
+    let mut state = reading_at_2100(&mut window);
+    // Asked to follow the end again: it follows from now on, though the
+    // snap has not reached the scrollable yet
+    let task = state.follow_end::<()>();
     assert!(state.follows_end());
     // Items arrive first: the layout reports new content under the same
     // offset, which is not a move
@@ -1015,12 +1078,44 @@ fn only_a_move_away_from_the_end_stops_following() {
         state.follows_end(),
         "a layout alone does not stop following"
     );
+    window.run(&mut state, |state| convo(state, 51), task);
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 51), Some(&mut look));
+    assert_pinned(&state, &look, "once the snap arrived");
     // A move away from the end, not by the user, does
     let mut to = Look::scroll_to(&state, 1000.0);
     window.show(&mut state, |state| convo(state, 51), Some(&mut to));
     assert!(!state.follows_end(), "moved away from the end");
 }
 
+/// Items 50.25 px tall: the content is 3036.5 px, and its end at 2536.5
+/// is between whole pixels, where the scrollable's offset is rounded
+fn fractional(state: &ListState<u64>) -> Element<'_, Message> {
+    list(state, 50, 2, false, |_| 50.25)
+}
+
+#[test]
+fn a_wheel_tick_up_of_less_than_a_pixel_is_not_undone_by_a_layout_that_still_follows() {
+    let mut window = Window::new();
+    let mut state = ListState::following_end();
+    window.show(&mut state, fractional, None);
+    let mut look = Look::at(&state);
+    window.show(&mut state, fractional, Some(&mut look));
+    assert_pinned(&state, &look, "to begin with");
+    // 0.8 px up: rounded, the offset still looks as if at the end
+    let reports = window.messages(&state, fractional, None, &[wheel(0.0, 0.8)]);
+    let later = window.messages(&state, fractional, None, &[]);
+    for message in reports.into_iter().chain(later) {
+        if let Message::List(action) = message {
+            drop(state.apply::<()>(action));
+        }
+    }
+    let mut look = Look::at(&state);
+    window.show(&mut state, fractional, Some(&mut look));
+    let (offset, end) = look.stood();
+    assert!(!state.follows_end(), "scrolled up, by however little");
+    assert!(offset < end, "not pinned again: {offset} of {end}");
+}
 #[test]
 fn a_horizontal_list_follows_its_end_along_its_width() {
     let mut window = Window::new();
