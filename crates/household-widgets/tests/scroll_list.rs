@@ -36,6 +36,8 @@ const PAGE: f32 = 500.0;
 struct Window {
     renderer: Renderer,
     cache: Cache,
+    /// The window's size, `PAGE` tall unless a test changes it
+    size: Size,
 }
 
 impl Window {
@@ -49,10 +51,11 @@ impl Window {
         Self {
             renderer,
             cache: Cache::default(),
+            size: Size::new(600.0, PAGE),
         }
     }
 
-    /// Lay `content` out in a window `PAGE` tall, run `operation` on it,
+    /// Lay `content` out in the window, run `operation` on it,
     /// and deliver what it sends to `state`
     fn show(
         &mut self,
@@ -73,14 +76,36 @@ impl Window {
         operation: Option<&mut dyn Operation>,
         events: &[cosmic::iced::Event],
     ) -> Vec<ListAction> {
+        let messages = self.messages(state, content, operation, events);
+        let mut reported = Vec::new();
+        for message in messages {
+            match message {
+                Message::List(ListAction::Scrolled(viewport)) => {
+                    drop(state.apply::<()>(ListAction::Scrolled(viewport)))
+                }
+                Message::List(action) => reported.push(action),
+                Message::Pressed => {}
+            }
+        }
+        reported
+    }
+
+    /// As [`Window::send`], but return every message without applying
+    /// any, as the runtime does before it updates the app
+    fn messages(
+        &mut self,
+        state: &ListState<u64>,
+        content: impl FnOnce(&ListState<u64>) -> Element<'_, Message>,
+        operation: Option<&mut dyn Operation>,
+        events: &[cosmic::iced::Event],
+    ) -> Vec<Message> {
         let mut messages = Vec::new();
         {
             let root = widget::container(content(state))
                 .width(Length::Fill)
                 .height(Length::Fill);
             let cache = std::mem::take(&mut self.cache);
-            let mut ui =
-                UserInterface::build(root, Size::new(600.0, PAGE), cache, &mut self.renderer);
+            let mut ui = UserInterface::build(root, self.size, cache, &mut self.renderer);
             if let Some(operation) = operation {
                 ui.operate(&self.renderer, operation);
             }
@@ -105,17 +130,7 @@ impl Window {
             );
             self.cache = ui.into_cache();
         }
-        let mut reported = Vec::new();
-        for message in messages {
-            match message {
-                Message::List(ListAction::Scrolled(viewport)) => {
-                    drop(state.apply::<()>(ListAction::Scrolled(viewport)))
-                }
-                Message::List(action) => reported.push(action),
-                Message::Pressed => {}
-            }
-        }
-        reported
+        messages
     }
 }
 
@@ -666,4 +681,420 @@ fn a_list_without_targets_leaves_the_keys_to_its_items() {
     );
     assert!(reported.is_empty(), "nothing taken: {reported:?}");
     assert_eq!(state.target(), None, "no target in a list of none");
+}
+
+// Following the end. A list that follows its end stays there as its content
+// and view change, in the layout where they change, whatever the order in
+// which its scroll reports and tasks arrive. The harness drops every task
+// `ListState::apply` returns, so nothing here can rely on one.
+
+/// A wheel tick: `y` below zero scrolls down, `x` below zero to the right
+fn wheel(x: f32, y: f32) -> cosmic::iced::Event {
+    cosmic::iced::Event::Mouse(mouse::Event::WheelScrolled {
+        delta: mouse::ScrollDelta::Pixels { x, y },
+    })
+}
+
+fn along(axis: Axis, v: Vector) -> f32 {
+    match axis {
+        Axis::Vertical => v.y,
+        Axis::Horizontal => v.x,
+    }
+}
+
+fn extent(axis: Axis, size: Size) -> f32 {
+    match axis {
+        Axis::Vertical => size.height,
+        Axis::Horizontal => size.width,
+    }
+}
+
+/// Where the scrollable `id` stands along `axis` and where its end is,
+/// after the layout it runs in; optionally moving it first, as the
+/// scrollable operations do
+struct Look {
+    id: Id,
+    axis: Axis,
+    found: Option<(f32, f32)>,
+    scroll_to: Option<f32>,
+    scroll_by: Option<f32>,
+}
+
+impl Look {
+    fn at(state: &ListState<u64>) -> Self {
+        Self {
+            id: state.id().clone(),
+            axis: state.axis(),
+            found: None,
+            scroll_to: None,
+            scroll_by: None,
+        }
+    }
+
+    fn scroll_to(state: &ListState<u64>, offset: f32) -> Self {
+        Self {
+            scroll_to: Some(offset),
+            ..Self::at(state)
+        }
+    }
+
+    fn scroll_by(state: &ListState<u64>, by: f32) -> Self {
+        Self {
+            scroll_by: Some(by),
+            ..Self::at(state)
+        }
+    }
+
+    /// The offset and the end it was found at
+    fn stood(&self) -> (f32, f32) {
+        self.found.expect("the list's scrollable")
+    }
+}
+
+impl Operation for Look {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self);
+    }
+    fn container(&mut self, _id: Option<&Id>, _bounds: Rectangle) {}
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        content: Rectangle,
+        translation: Vector,
+        state: &mut dyn Scrollable,
+    ) {
+        if id != Some(&self.id) {
+            return;
+        }
+        let axis = self.axis;
+        let end = (extent(axis, content.size()) - extent(axis, bounds.size())).max(0.0);
+        self.found = Some((along(axis, translation), end));
+        let main = |main: f32| match axis {
+            Axis::Vertical => (None, Some(main)),
+            Axis::Horizontal => (Some(main), None),
+        };
+        if let Some(offset) = self.scroll_to {
+            let (x, y) = main(offset);
+            state.scroll_to(AbsoluteOffset { x, y });
+        }
+        if let Some(by) = self.scroll_by {
+            let (x, y) = main(by);
+            state.scroll_by(
+                AbsoluteOffset {
+                    x: x.unwrap_or_default(),
+                    y: y.unwrap_or_default(),
+                },
+                bounds,
+                content,
+            );
+        }
+    }
+}
+
+/// The list stands at its end and follows it
+#[track_caller]
+fn assert_pinned(state: &ListState<u64>, look: &Look, why: &str) {
+    let (offset, end) = look.stood();
+    assert!(
+        (offset - end).abs() <= 1.0,
+        "{why}: the view stands at {offset}, its end is at {end}"
+    );
+    assert!(state.follows_end(), "{why}: the list follows its end");
+}
+
+/// The list stands at `at` and does not follow its end
+#[track_caller]
+fn assert_stays(state: &ListState<u64>, look: &Look, at: f32, why: &str) {
+    let (offset, end) = look.stood();
+    assert!(
+        (offset - at).abs() <= 1.0,
+        "{why}: the view stands at {offset}, not {at} (end {end})"
+    );
+    assert!(
+        !state.follows_end(),
+        "{why}: the list does not follow its end"
+    );
+}
+
+/// `count` items of 50 px a gap of 10 apart behind a leading line of 24:
+/// 50 of them are 3024 px, so the end of a view `PAGE` tall is at 2524
+fn convo(state: &ListState<u64>, count: usize) -> Element<'_, Message> {
+    list(state, count, 1, false, |_| 50.0)
+}
+
+/// A list that follows its end, laid out with `count` items and standing
+/// there
+fn following(window: &mut Window, count: usize) -> ListState<u64> {
+    let mut state = ListState::following_end();
+    window.show(&mut state, |state| convo(state, count), None);
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, count), Some(&mut look));
+    assert_pinned(&state, &look, "to begin with");
+    state
+}
+
+#[test]
+fn a_wheel_tick_at_the_end_then_growth_stays_at_the_new_end() {
+    let mut window = Window::new();
+    let mut state = following(&mut window, 50);
+    // The tick unpins the scrollable to an absolute offset at its end, and
+    // reports a user scroll there; whatever task that returns never runs
+    drop(window.send(
+        &mut state,
+        |state| convo(state, 50),
+        None,
+        &[wheel(0.0, -50.0)],
+    ));
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_pinned(&state, &look, "ten items arrived");
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 70), Some(&mut look));
+    assert_pinned(&state, &look, "and ten more");
+}
+
+#[test]
+fn a_wheel_tick_at_the_end_then_a_shorter_view_stays_at_the_end() {
+    let mut window = Window::new();
+    let mut state = following(&mut window, 50);
+    drop(window.send(
+        &mut state,
+        |state| convo(state, 50),
+        None,
+        &[wheel(0.0, -50.0)],
+    ));
+    // Something below the list, a composer, took 100 px of its view
+    window.size.height = PAGE - 100.0;
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 50), Some(&mut look));
+    assert_pinned(&state, &look, "the view got shorter");
+}
+
+#[test]
+fn a_wheel_tick_at_the_end_then_shrinking_stays_at_the_end() {
+    let mut window = Window::new();
+    let mut state = following(&mut window, 50);
+    drop(window.send(
+        &mut state,
+        |state| convo(state, 50),
+        None,
+        &[wheel(0.0, -50.0)],
+    ));
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 40), Some(&mut look));
+    assert_pinned(&state, &look, "ten items went");
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 50), Some(&mut look));
+    assert_pinned(&state, &look, "and came back");
+}
+
+#[test]
+fn a_move_to_the_middle_is_kept_as_items_arrive() {
+    let mut window = Window::new();
+    let mut state = following(&mut window, 50);
+    // What ListState::scroll_to does, and then the operation its task runs
+    drop(state.scroll_to::<()>(1000.0));
+    let mut to = Look::scroll_to(&state, 1000.0);
+    window.show(&mut state, |state| convo(state, 50), Some(&mut to));
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_stays(&state, &look, 1000.0, "ten items arrived below the view");
+    let place = state.place().expect("a place once moved");
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 70), Some(&mut look));
+    assert_stays(&state, &look, 1000.0, "and ten more");
+    assert_eq!(
+        state.place(),
+        Some(place),
+        "the same item at the view's start"
+    );
+}
+
+#[test]
+fn a_raw_move_to_the_middle_while_following_stops_following() {
+    let mut window = Window::new();
+    let mut state = following(&mut window, 50);
+    // The operation alone, the list's state not told
+    let mut to = Look::scroll_to(&state, 1000.0);
+    window.show(&mut state, |state| convo(state, 50), Some(&mut to));
+    assert!(
+        !state.follows_end(),
+        "a move away from the end, not by the user"
+    );
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_stays(&state, &look, 1000.0, "ten items arrived below the view");
+}
+
+#[test]
+fn a_wheel_tick_up_is_not_undone_by_a_layout_that_still_follows() {
+    let mut window = Window::new();
+    let mut state = following(&mut window, 50);
+    let end = 24.0 + 50.0 * 60.0 - PAGE;
+    // The tick's report is not applied yet, so the next view is built from
+    // a state that still follows, as the runtime may build it
+    let reports = window.messages(&state, |state| convo(state, 50), None, &[wheel(0.0, 50.0)]);
+    assert!(state.follows_end(), "not told of the tick yet");
+    let mut look = Look::at(&state);
+    let later = window.messages(&state, |state| convo(state, 60), Some(&mut look), &[]);
+    let (offset, _) = look.stood();
+    assert!(
+        (offset - (end - 50.0)).abs() <= 1.0,
+        "the view stays 50 px up from where its end was: {offset}"
+    );
+    for message in reports.into_iter().chain(later) {
+        if let Message::List(action) = message {
+            drop(state.apply::<()>(action));
+        }
+    }
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 70), Some(&mut look));
+    assert_stays(&state, &look, end - 50.0, "once told of the tick");
+}
+
+#[test]
+fn a_page_forward_to_the_end_follows_it_through_growth() {
+    let mut window = Window::new();
+    let mut state = ListState::new();
+    window.show(&mut state, |state| convo(state, 50), None);
+    // 2100 + 450 passes the end at 2524
+    let mut to = Look::scroll_to(&state, 2100.0);
+    window.show(&mut state, |state| convo(state, 50), Some(&mut to));
+    window.show(&mut state, |state| convo(state, 50), None);
+    assert!(!state.follows_end());
+    // What ListState::scroll_pages does, and then the operation its task
+    // runs; items arrive before the next layout
+    drop(state.scroll_pages::<()>(1.0));
+    let mut by = Look::scroll_by(&state, PAGE * 0.9);
+    window.show(&mut state, |state| convo(state, 50), Some(&mut by));
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_pinned(&state, &look, "paged to the end, then ten items arrived");
+}
+
+#[test]
+fn a_page_forward_short_of_the_end_does_not_follow_it() {
+    let mut window = Window::new();
+    let mut state = ListState::new();
+    window.show(&mut state, |state| convo(state, 50), None);
+    let mut to = Look::scroll_to(&state, 1000.0);
+    window.show(&mut state, |state| convo(state, 50), Some(&mut to));
+    window.show(&mut state, |state| convo(state, 50), None);
+    drop(state.scroll_pages::<()>(1.0));
+    assert!(!state.follows_end(), "1450 is short of the end at 2524");
+    let mut by = Look::scroll_by(&state, PAGE * 0.9);
+    window.show(&mut state, |state| convo(state, 50), Some(&mut by));
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 60), Some(&mut look));
+    assert_stays(&state, &look, 1450.0, "ten items arrived below the view");
+}
+
+#[test]
+fn only_a_move_away_from_the_end_stops_following() {
+    let mut window = Window::new();
+    let mut state = ListState::new();
+    window.show(&mut state, |state| convo(state, 50), None);
+    let mut to = Look::scroll_to(&state, 2100.0);
+    window.show(&mut state, |state| convo(state, 50), Some(&mut to));
+    window.show(&mut state, |state| convo(state, 50), None);
+    // A page forward that lands at the end follows it from now on, though
+    // its scroll has not reached the scrollable yet
+    drop(state.scroll_pages::<()>(1.0));
+    assert!(state.follows_end());
+    // Items arrive first: the layout reports new content under the same
+    // offset, which is not a move
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| convo(state, 51), Some(&mut look));
+    assert!(
+        (look.stood().0 - 2100.0).abs() <= 1.0,
+        "the offset is unchanged: {:?}",
+        look.stood()
+    );
+    assert!(
+        state.follows_end(),
+        "a layout alone does not stop following"
+    );
+    // A move away from the end, not by the user, does
+    let mut to = Look::scroll_to(&state, 1000.0);
+    window.show(&mut state, |state| convo(state, 51), Some(&mut to));
+    assert!(!state.follows_end(), "moved away from the end");
+}
+
+#[test]
+fn a_horizontal_list_follows_its_end_along_its_width() {
+    let mut window = Window::new();
+    let mut state = ListState::along(Axis::Horizontal);
+    drop(state.follow_end::<()>());
+    window.show(&mut state, |state| row(state, 50, |_| 80.0), None);
+    let mut look = Look::at(&state);
+    window.show(
+        &mut state,
+        |state| row(state, 50, |_| 80.0),
+        Some(&mut look),
+    );
+    assert_pinned(&state, &look, "to begin with");
+    drop(window.send(
+        &mut state,
+        |state| row(state, 50, |_| 80.0),
+        None,
+        &[wheel(-50.0, 0.0)],
+    ));
+    let mut look = Look::at(&state);
+    window.show(
+        &mut state,
+        |state| row(state, 60, |_| 80.0),
+        Some(&mut look),
+    );
+    assert_pinned(&state, &look, "a tick at the end, then ten items arrived");
+    // A move to the middle is kept
+    drop(state.scroll_to::<()>(1000.0));
+    let mut to = Look::scroll_to(&state, 1000.0);
+    window.show(&mut state, |state| row(state, 60, |_| 80.0), Some(&mut to));
+    let mut look = Look::at(&state);
+    window.show(
+        &mut state,
+        |state| row(state, 70, |_| 80.0),
+        Some(&mut look),
+    );
+    assert_stays(&state, &look, 1000.0, "ten items arrived past the view");
+}
+
+#[test]
+fn a_virtualised_list_follows_its_end_as_new_items_are_measured() {
+    let mut window = Window::new();
+    let mut state = ListState::following_end();
+    // Items from 200 on are 120 px, not the 50 their estimate says
+    fn view(state: &ListState<u64>, count: usize) -> Element<'_, Message> {
+        list(
+            state,
+            count,
+            2,
+            true,
+            |i| if i >= 200 { 120.0 } else { 50.0 },
+        )
+    }
+    window.show(&mut state, |state| view(state, 200), None);
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| view(state, 200), Some(&mut look));
+    assert_pinned(&state, &look, "to begin with");
+    drop(window.send(
+        &mut state,
+        |state| view(state, 200),
+        None,
+        &[wheel(0.0, -50.0)],
+    ));
+    let mut look = Look::at(&state);
+    window.show(&mut state, |state| view(state, 210), Some(&mut look));
+    assert_pinned(&state, &look, "ten taller items arrived");
+    assert!(
+        state.measured_keys().contains(&209),
+        "the last item is built and measured"
+    );
+    let exact = 24.0 + 200.0 * 60.0 + 10.0 * 130.0;
+    assert!(
+        (state.content_extent() - exact).abs() < 0.5,
+        "its exact extent counts: {}",
+        state.content_extent()
+    );
 }
