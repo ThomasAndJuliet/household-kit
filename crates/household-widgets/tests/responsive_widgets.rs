@@ -2,7 +2,7 @@
 
 use cosmic::iced::advanced::renderer::{Headless, Style};
 use cosmic::iced::advanced::widget::Tree;
-use cosmic::iced::advanced::{Layout, Widget, layout as native_layout, mouse};
+use cosmic::iced::advanced::{Layout, Renderer as _, Widget, layout as native_layout, mouse};
 use cosmic::iced::widget::text::Wrapping;
 use cosmic::iced::{Font, Length, Pixels, Rectangle, Size};
 use cosmic::{Renderer, Theme, widget};
@@ -70,6 +70,8 @@ fn a_form_can_present_the_same_choices_and_editable_path_at_wide_and_narrow_widt
         if let Ok(directory) = std::env::var("HOUSEHOLD_RESPONSIVE_FIXTURE_OUT") {
             let crop = Size::new(width as u32, node.size().height.ceil() as u32);
             let colour = theme.cosmic().on_bg_color().into();
+            let viewport = Rectangle::with_size(size);
+            renderer.reset(viewport);
             form.draw(
                 &tree,
                 &mut renderer,
@@ -81,7 +83,7 @@ fn a_form_can_present_the_same_choices_and_editable_path_at_wide_and_narrow_widt
                 },
                 Layout::new(&node),
                 mouse::Cursor::Unavailable,
-                &Rectangle::with_size(size),
+                &viewport,
             );
             let rgba = renderer.screenshot(crop, 1.0, theme.cosmic().bg_color().into());
             std::fs::write(
