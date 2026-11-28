@@ -2,7 +2,7 @@
 //! A dropdown under a window root, through the native runtime: its list is
 //! the window's one chain, replaces another open menu, sets the value once
 //! when an option is chosen, works from the keyboard, and a disabled option
-//! explains itself.
+//! explains itself. The same list can reveal additional choices in place.
 
 use super::*;
 use crate::menu::MenuStyle;
@@ -87,7 +87,7 @@ fn panels<'a>(window: &'a WindowUi<Root>) -> Vec<Panel<'a, Ev>> {
                 return Vec::new();
             };
             crate::window::menu_surface(
-                decl.0.menu.clone().map(UiEvent::Application),
+                decl.0.rendered(&request, |message| message),
                 MenuStyle { icon, body },
                 NS.into(),
             )
@@ -123,7 +123,15 @@ fn panels<'a>(window: &'a WindowUi<Root>) -> Vec<Panel<'a, Ev>> {
     }
 }
 
-fn view<'w>(window: &'w WindowUi<Root>, selected: usize) -> Element<'w, Ev> {
+#[derive(Default)]
+struct Picker {
+    icons: bool,
+    reveal: Option<usize>,
+    locked: bool,
+    width: Option<f32>,
+}
+
+fn view<'w>(window: &'w WindowUi<Root>, selected: usize, picker: &Picker) -> Element<'w, Ev> {
     let menu = crate::window::trigger(
         "other",
         Root::Menu,
@@ -135,16 +143,27 @@ fn view<'w>(window: &'w WindowUi<Root>, selected: usize) -> Element<'w, Ev> {
         )
         .on_activate(Toggle),
     );
-    let sizes: Element<'w, Message> = dropdown::<Message, Root, Decl>(
+    let mut sizes = dropdown::<Message, Root, Decl>(
         ["Small", "Medium", "Large"],
         Some(selected),
         Message::Size,
     )
     .id("sizes")
     .disabled(2, "Not available on this screen")
-    .into();
+    .locked(picker.locked);
+    if picker.icons {
+        for index in 0..3 {
+            sizes = sizes.option_icon(index, icon("view-list-symbolic"));
+        }
+    }
+    if let Some(visible) = picker.reveal {
+        sizes = sizes.reveal_after(visible, "More sizes");
+    }
+    if let Some(width) = picker.width {
+        sizes = sizes.width(width);
+    }
     let content: Element<'w, Message> = native::column(vec![
-        native::row(vec![menu, native::space().width(300).into(), sizes])
+        native::row(vec![menu, native::space().width(300).into(), sizes.into()])
             .align_y(cosmic::iced::Alignment::Center)
             .into(),
         native::space().height(300).into(),
@@ -156,6 +175,7 @@ fn view<'w>(window: &'w WindowUi<Root>, selected: usize) -> Element<'w, Ev> {
 struct App {
     window: WindowUi<Root>,
     selected: usize,
+    picker: Picker,
     renderer: Renderer,
     cache: Option<user_interface::Cache>,
     cursor: mouse::Cursor,
@@ -175,6 +195,7 @@ impl App {
         let mut app = Self {
             window: WindowUi::new(),
             selected: 0,
+            picker: Picker::default(),
             renderer,
             cache: None,
             cursor: mouse::Cursor::Unavailable,
@@ -187,7 +208,7 @@ impl App {
     fn send(&mut self, events: &[Event]) {
         let mut published = Vec::new();
         {
-            let root = view(&self.window, self.selected);
+            let root = view(&self.window, self.selected, &self.picker);
             let cache = self.cache.take().unwrap_or_default();
             let mut ui = UserInterface::build(root, SIZE, cache, &mut self.renderer);
             for event in events {
@@ -265,7 +286,7 @@ impl App {
     }
 
     fn operate(&mut self, operation: &mut dyn Operation) {
-        let root = view(&self.window, self.selected);
+        let root = view(&self.window, self.selected, &self.picker);
         let cache = self.cache.take().unwrap_or_default();
         let mut ui = UserInterface::build(root, SIZE, cache, &mut self.renderer);
         ui.operate(&self.renderer, operation);
@@ -288,8 +309,12 @@ impl App {
     }
 
     fn option(&self, label: &str) -> Rectangle {
-        self.visible(&row_id(NS, &[], row_key(label, false, 0)))
+        self.visible_option(label)
             .unwrap_or_else(|| panic!("{label} is listed"))
+    }
+
+    fn visible_option(&self, label: &str) -> Option<Rectangle> {
+        self.visible(&row_id(NS, &[], row_key(label, false, 0)))
     }
 
     /// The dropdown's trigger, in the row after the other trigger and a gap
@@ -421,4 +446,135 @@ fn a_disabled_option_explains_itself_and_cannot_be_chosen() {
     );
     app.named(Named::Enter);
     assert!(app.app.is_empty(), "it does nothing: {:?}", app.app);
+}
+
+#[test]
+fn preferred_width_includes_hidden_icons_and_ignores_width_overrides() {
+    let sizes = dropdown::<Message, Root, Decl>(["Small", "Extra large"], Some(0), Message::Size);
+    let text_width = sizes.preferred_width();
+    let decorated = sizes
+        .option_icon(1, icon("view-list-symbolic"))
+        .reveal_after(1, "More sizes")
+        .width(100.0);
+    let icon_width = ICON_SIZE + f32::from(cosmic::theme::spacing().space_xxs);
+    assert_eq!(decorated.preferred_width(), text_width + icon_width);
+}
+
+#[test]
+fn icon_choices_measure_the_theme_gap_and_keep_the_width_across_selections() {
+    let mut app = App::new();
+    let source = Id::new("sizes");
+    let text = app.visible(&source).unwrap();
+    app.picker.icons = true;
+    app.frame();
+    let with_icon = app.visible(&source).unwrap();
+    let expected_increase = ICON_SIZE + f32::from(cosmic::theme::spacing().space_xxs);
+    assert!((with_icon.width - text.width - expected_increase).abs() < 0.5);
+    assert_eq!(with_icon.height, text.height);
+
+    app.click(app.trigger());
+    let request = app.window.chain().unwrap();
+    let list = request.declaration::<Decl>().unwrap();
+    assert_eq!(list.0.width, with_icon.width);
+    assert!(
+        list.0
+            .menu
+            .rows()
+            .iter()
+            .all(|row| { matches!(row, Row::Item(item) if item.icon.is_some()) })
+    );
+    app.click(app.option("Medium").center());
+    assert_eq!(app.app, [Message::Size(1)]);
+    assert_eq!(app.visible(&source).unwrap().width, with_icon.width);
+
+    app.picker.width = Some(128.0);
+    app.frame();
+    app.click(app.trigger());
+    let request = app.window.chain().unwrap();
+    let list = request.declaration::<Decl>().unwrap();
+    assert_eq!(app.visible(&source).unwrap().width, 128.0);
+    assert_eq!(list.0.width, 128.0);
+    assert_eq!(list.0.selected, Some(1));
+}
+
+#[test]
+fn disclosure_replaces_its_row_in_the_same_list_and_resets_on_reopen() {
+    use keyboard::key::Named;
+    let mut app = App::new();
+    app.picker.reveal = Some(1);
+    app.frame();
+    app.click(app.trigger());
+    let root = app.open_root();
+    assert!(app.visible_option("Medium").is_none());
+    let request = app.window.chain().unwrap();
+    let list = request.declaration::<Decl>().unwrap();
+    let [Row::Item(_), Row::Folder(label, hidden)] = list.0.menu.rows() else {
+        panic!("the declaration includes the choices behind the disclosure");
+    };
+    assert_eq!(label, "More sizes");
+    assert!(matches!(
+        hidden.rows(),
+        [Row::Item(medium), Row::Item(large)]
+            if medium.message == Message::Size(1) && large.message == Message::Size(2)
+    ));
+
+    let disclosure = app.option("More sizes").center();
+    app.cursor = mouse::Cursor::Available(disclosure);
+    app.send(&[Event::Mouse(mouse::Event::CursorMoved {
+        position: disclosure,
+    })]);
+    app.frame();
+    assert!(app.visible_option("Medium").is_none());
+    app.click(disclosure);
+    assert_eq!(app.open_root(), root);
+    assert_eq!(app.window.anchors().surfaces().len(), 1);
+    assert!(app.visible_option("More sizes").is_none());
+    assert!(app.option("Small").y < app.option("Medium").y);
+    assert!(app.option("Medium").y < app.option("Large").y);
+    assert_eq!(app.selected, 0);
+    assert!(app.app.is_empty());
+
+    app.named(Named::Escape);
+    assert!(app.window.chain().is_none());
+    app.focus(trigger_id("sizes"));
+    app.key(
+        keyboard::Key::Character(" ".into()),
+        keyboard::Modifiers::empty(),
+    );
+    let target = |label: &str| Some(row_id(NS, &[], row_key(label, false, 0)));
+    assert_eq!(app.focused(), target("Small"));
+    assert!(app.visible_option("Medium").is_none());
+    app.named(Named::End);
+    assert_eq!(app.focused(), target("More sizes"));
+    app.named(Named::Enter);
+    assert_eq!(app.window.anchors().surfaces().len(), 1);
+    assert_eq!(app.focused(), target("Medium"));
+    assert!(app.app.is_empty());
+    app.named(Named::End);
+    assert_eq!(app.focused(), target("Large"));
+    app.named(Named::Enter);
+    assert!(app.app.is_empty());
+    app.named(Named::ArrowUp);
+    assert_eq!(app.focused(), target("Medium"));
+    app.named(Named::Enter);
+    assert_eq!(app.app, [Message::Size(1)]);
+    assert!(app.window.chain().is_none());
+}
+
+#[test]
+fn locking_an_open_dropdown_removes_its_menu_and_activation() {
+    use keyboard::key::Named;
+    let mut app = App::new();
+    let trigger = app.trigger();
+    app.click(trigger);
+    assert!(app.is_dropdown_open());
+    app.picker.locked = true;
+    app.frame();
+    assert!(app.window.chain().is_none());
+    app.click(trigger);
+    app.focus(trigger_id("sizes"));
+    assert_ne!(app.focused(), Some(trigger_id("sizes")));
+    app.named(Named::Enter);
+    assert!(app.window.chain().is_none());
+    assert!(app.app.is_empty());
 }

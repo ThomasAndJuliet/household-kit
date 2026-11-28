@@ -8,8 +8,8 @@
 //! keyboard's target, Up and Down move, Enter chooses, Escape closes.
 //!
 //! The trigger is a [`menu_button`](crate::window::menu_button); the app's
-//! window adapter builds the list's panels from the [`DropdownMenu`] it
-//! declares, as whole rows with the selected value in a grey fill and
+//! window adapter builds the list's panels from [`DropdownMenu::rendered`],
+//! as whole rows with the selected value in a grey fill and
 //! semibold text ([`MenuSurface::choice_rows`](crate::menu_surface::MenuSurface::choice_rows)),
 //! as wide as the trigger ([`DropdownMenu::width`]), the keyboard's target
 //! the selected option ([`DropdownMenu::selected`]).
@@ -19,16 +19,14 @@
 //! 14 px in 1.2 line height, the 16 px `pan-down-symbolic` caret 4 px from
 //! the right edge.
 
-use crate::menu::{Menu, MenuItem, MenuMark, measured_width};
-use crate::window::{Declaration, Declared, Toggle, menu_button};
+use crate::menu::{ICON_SIZE, Menu, MenuItem, MenuMark, Row, measured_width};
+use crate::window::{ChainRequest, Declaration, Declared, Toggle, UiEvent, menu_button};
 use cosmic::Element;
 use cosmic::iced::advanced::widget::Tree;
-use cosmic::iced::advanced::{
-    Clipboard, Layout, Shell, Widget, layout, mouse, renderer, svg, text,
-};
+use cosmic::iced::advanced::{Layout, Widget, image, layout, mouse, renderer, svg, text};
 use cosmic::iced::widget::pick_list::{Catalog, Status};
-use cosmic::iced::{Event, Pixels, Rectangle, Size, alignment};
 use cosmic::iced::{Length, Padding};
+use cosmic::iced::{Pixels, Rectangle, Size, alignment};
 use cosmic::widget::{self, icon};
 use cosmic::{Renderer, Theme};
 use std::marker::PhantomData;
@@ -37,15 +35,73 @@ const TEXT_SIZE: f32 = 14.0;
 const PADDING: f32 = 8.0;
 const GAP: f32 = 4.0;
 const CARET: f32 = 16.0;
+const REVEAL: usize = 0;
 
 /// What a dropdown declares to its window: the list as a menu, and the
 /// width of its trigger, which the list is as wide as.
 #[derive(Clone)]
 pub struct DropdownMenu<M> {
+    /// All choices for declaration tracking. The optional tail is the final
+    /// `Row::Folder`, with its label and choices. Use [`Self::rendered`]
+    /// for the rows to display.
     pub menu: Menu<M>,
     pub width: f32,
     /// The selected option, which the keyboard's target starts on
     pub selected: Option<usize>,
+}
+
+impl<M: Clone> DropdownMenu<M> {
+    /// The choices visible in this open session, with the disclosure as a
+    /// window action. Activating it replaces the disclosure with its choices
+    /// in this same menu.
+    pub fn rendered<R: 'static, X>(
+        &self,
+        request: &ChainRequest<'_, R>,
+        lift: impl Fn(M) -> X,
+    ) -> Menu<UiEvent<R, X>> {
+        let application = |message| UiEvent::Application(lift(message));
+        let Some((Row::Folder(label, hidden), visible)) = self.menu.rows().split_last() else {
+            return self.menu.clone().map(application);
+        };
+        let menu = visible.iter().fold(Menu::new(), |menu, row| match row {
+            Row::Item(item) => menu.item(MenuItem {
+                label: item.label.clone(),
+                message: application(item.message.clone()),
+                icon: item.icon.clone(),
+                shortcut: item.shortcut.clone(),
+                mark: item.mark,
+                disabled_reason: item.disabled_reason.clone(),
+                destructive: item.destructive,
+            }),
+            Row::Divider => menu.divider(),
+            Row::Folder(label, submenu) => {
+                menu.folder(label.clone(), submenu.clone().map(application))
+            }
+        });
+        if request.is_expanded(REVEAL) {
+            let hidden = hidden.clone().map(application);
+            if menu.is_empty() {
+                hidden
+            } else {
+                menu.append(hidden)
+            }
+        } else {
+            let menu = if menu.is_empty() {
+                menu
+            } else {
+                menu.divider()
+            };
+            menu.item(MenuItem {
+                label: label.clone(),
+                message: request.expand(REVEAL, true),
+                icon: Some(icon::from_name("go-down-symbolic").handle()),
+                shortcut: None,
+                mark: None,
+                disabled_reason: None,
+                destructive: false,
+            })
+        }
+    }
 }
 
 /// One option of a dropdown
@@ -59,12 +115,19 @@ pub struct DropdownOption {
 /// The width a trigger needs to show any of `labels` whole: the widest, the
 /// caret, and the padding
 pub fn trigger_width(labels: &[DropdownOption]) -> f32 {
+    choice_width(labels.iter().map(|option| (option.label.as_str(), 0.0)))
+}
+
+fn choice_width<'a>(choices: impl Iterator<Item = (&'a str, f32)>) -> f32 {
     let font = cosmic::font::default();
-    let text = labels
-        .iter()
-        .map(|option| measured_width(&option.label, TEXT_SIZE, font))
+    let text = choices
+        .map(|(label, leading_width)| measured_width(label, TEXT_SIZE, font) + leading_width)
         .fold(0.0, f32::max);
     (text + GAP + CARET + 2.0 * PADDING).ceil()
+}
+
+fn leading_width() -> f32 {
+    ICON_SIZE + f32::from(cosmic::theme::spacing().space_xxs)
 }
 
 /// The list as a menu: every option a row, the selected one marked, a
@@ -76,15 +139,12 @@ pub fn dropdown_menu<M>(
 ) -> DropdownMenu<M> {
     let mut menu = Menu::new();
     for (i, option) in options.iter().enumerate() {
-        menu = menu.item(MenuItem {
-            label: option.label.clone(),
-            message: on(i),
-            icon: None,
-            shortcut: None,
-            mark: Some(MenuMark::Radio(selected == Some(i))),
-            disabled_reason: option.disabled_reason.clone(),
-            destructive: false,
-        });
+        menu = menu.item(choice_item(
+            option.clone(),
+            None,
+            selected == Some(i),
+            on(i),
+        ));
     }
     DropdownMenu {
         menu,
@@ -93,15 +153,39 @@ pub fn dropdown_menu<M>(
     }
 }
 
+fn choice_item<M>(
+    option: DropdownOption,
+    icon: Option<icon::Handle>,
+    selected: bool,
+    message: M,
+) -> MenuItem<M> {
+    MenuItem {
+        label: option.label,
+        message,
+        icon,
+        shortcut: None,
+        mark: Some(MenuMark::Radio(selected)),
+        disabled_reason: option.disabled_reason,
+        destructive: false,
+    }
+}
+
 /// A dropdown being made; turn it into an element with `.into()`. `R` is the
 /// app's root type, and `T` its declaration of a dropdown's list.
 pub struct Dropdown<'a, M, R, T> {
-    options: Vec<DropdownOption>,
+    choices: Vec<Choice>,
+    reveal: Option<(usize, String)>,
+    locked: bool,
     selected: Option<usize>,
     choose: Box<dyn Fn(usize) -> M + 'a>,
     width: Option<Length>,
     name: Option<String>,
     _kinds: PhantomData<fn() -> (R, T)>,
+}
+
+struct Choice {
+    option: DropdownOption,
+    icon: Option<icon::Handle>,
 }
 
 /// A dropdown of `labels` showing `selected`, choosing option `i` giving `on(i)`
@@ -111,13 +195,18 @@ pub fn dropdown<'a, M, R, T>(
     on: impl Fn(usize) -> M + 'a,
 ) -> Dropdown<'a, M, R, T> {
     Dropdown {
-        options: labels
+        choices: labels
             .into_iter()
-            .map(|label| DropdownOption {
-                label: label.as_ref().to_owned(),
-                disabled_reason: None,
+            .map(|label| Choice {
+                option: DropdownOption {
+                    label: label.as_ref().to_owned(),
+                    disabled_reason: None,
+                },
+                icon: None,
             })
             .collect(),
+        reveal: None,
+        locked: false,
         selected,
         choose: Box::new(on),
         width: None,
@@ -127,6 +216,21 @@ pub fn dropdown<'a, M, R, T>(
 }
 
 impl<'a, M, R, T> Dropdown<'a, M, R, T> {
+    /// The trigger width needed for the widest choice, including its icon
+    /// and gap. This includes choices behind the disclosure and is independent
+    /// of the current selection and any [`Self::width`] override.
+    pub fn preferred_width(&self) -> f32 {
+        let icon_width = leading_width();
+        choice_width(self.choices.iter().map(|choice| {
+            let leading = if choice.icon.is_some() {
+                icon_width
+            } else {
+                0.0
+            };
+            (choice.option.label.as_str(), leading)
+        }))
+    }
+
     /// The trigger's width, where not its options'
     pub fn width(mut self, width: impl Into<Length>) -> Self {
         self.width = Some(width.into());
@@ -137,9 +241,31 @@ impl<'a, M, R, T> Dropdown<'a, M, R, T> {
     pub fn disabled(mut self, index: usize, reason: impl Into<String>) -> Self {
         let reason = reason.into();
         assert!(!reason.trim().is_empty(), "a disabled option says why");
-        if let Some(option) = self.options.get_mut(index) {
-            option.disabled_reason = Some(reason);
+        if let Some(choice) = self.choices.get_mut(index) {
+            choice.option.disabled_reason = Some(reason);
         }
+        self
+    }
+
+    /// Show an icon with this option, including on the trigger when selected.
+    pub fn option_icon(mut self, index: usize, icon: icon::Handle) -> Self {
+        if let Some(choice) = self.choices.get_mut(index) {
+            choice.icon = Some(icon);
+        }
+        self
+    }
+
+    /// Initially hide the choices after `visible_count` under a disclosure
+    /// row. Place the selected choice in the visible group to focus it when
+    /// the dropdown opens.
+    pub fn reveal_after(mut self, visible_count: usize, label: impl Into<String>) -> Self {
+        self.reveal = Some((visible_count, label.into()));
+        self
+    }
+
+    /// Keep the current choice visible while preventing the list from opening.
+    pub fn locked(mut self, locked: bool) -> Self {
+        self.locked = locked;
         self
     }
 
@@ -159,27 +285,56 @@ where
     T: Declaration + From<DropdownMenu<M>>,
 {
     fn from(dropdown: Dropdown<'a, M, R, T>) -> Self {
+        let preferred = match dropdown.width {
+            Some(Length::Fixed(fixed)) => fixed,
+            _ => dropdown.preferred_width(),
+        };
         let Dropdown {
-            options,
+            choices,
+            reveal,
+            locked,
             selected,
             choose,
             width,
             name,
             ..
         } = dropdown;
-        let mut declared = dropdown_menu(&options, selected, choose);
-        // A fixed trigger gives its width to the list
-        if let Some(Length::Fixed(fixed)) = width {
-            declared.width = fixed;
+        let shown = selected.and_then(|i| choices.get(i));
+        let face = Face::new(
+            shown
+                .map(|choice| choice.option.label.clone())
+                .unwrap_or_default(),
+            shown.and_then(|choice| choice.icon.clone()),
+            width.unwrap_or(Length::Fixed(preferred)),
+            locked,
+        );
+        if locked {
+            return Element::new(face);
         }
-        let shown = selected
-            .and_then(|i| options.get(i))
-            .map(|option| option.label.clone())
-            .unwrap_or_default();
-        let width = width.unwrap_or(Length::Fixed(declared.width));
+
+        let reveal = reveal.filter(|(visible_count, _)| *visible_count < choices.len());
+        let mut visible = Menu::new();
+        let mut hidden = Menu::new();
+        for (index, Choice { option, icon }) in choices.into_iter().enumerate() {
+            let item = choice_item(option, icon, selected == Some(index), choose(index));
+            if reveal.as_ref().is_some_and(|(count, _)| index >= *count) {
+                hidden = hidden.item(item);
+            } else {
+                visible = visible.item(item);
+            }
+        }
+        let menu = match reveal {
+            Some((_, label)) => visible.folder(label, hidden),
+            None => visible,
+        };
+        let declared = DropdownMenu {
+            menu,
+            width: preferred,
+            selected,
+        };
         let source = name.clone().map(widget::Id::new);
         let button = name.as_deref().map(trigger_id);
-        menu_button::<M, R, T>(source, T::from(declared), trigger(shown, width, button))
+        menu_button::<M, R, T>(source, T::from(declared), trigger(face, button))
     }
 }
 
@@ -190,8 +345,10 @@ pub fn trigger_id(name: &str) -> widget::Id {
 
 /// The trigger: the selected value and a caret, publishing a [`Toggle`], a
 /// focus target Enter and Space open from
-fn trigger<'a>(shown: String, width: Length, id: Option<widget::Id>) -> Element<'a, Toggle> {
-    let face = Element::new(Face::new(shown, width));
+fn trigger<'a>(face: Face, id: Option<widget::Id>) -> Element<'a, Toggle> {
+    let face = widget::mouse_area(Element::new(face))
+        .interaction(mouse::Interaction::Pointer)
+        .on_press(Toggle);
     let id = id.unwrap_or_else(widget::Id::unique);
     crate::popup::focus_target(id, face)
         .on_activate(Toggle)
@@ -201,19 +358,29 @@ fn trigger<'a>(shown: String, width: Length, id: Option<widget::Id>) -> Element<
 /// libcosmic's dropdown trigger, drawn as it draws it
 pub struct Face {
     label: String,
+    leading: Option<icon::Handle>,
+    leading_width: f32,
     width: Length,
+    locked: bool,
     caret: Option<svg::Handle>,
 }
 
 impl Face {
-    fn new(label: String, width: Length) -> Self {
+    fn new(label: String, leading: Option<icon::Handle>, width: Length, locked: bool) -> Self {
         let caret = match icon::from_name("pan-down-symbolic").size(16).handle().data {
             icon::Data::Svg(handle) => Some(handle),
             icon::Data::Image(_) => None,
         };
         Self {
             label,
+            leading_width: if leading.is_some() {
+                leading_width()
+            } else {
+                0.0
+            },
+            leading,
             width,
+            locked,
             caret,
         }
     }
@@ -221,7 +388,7 @@ impl Face {
 
 const LINE: text::LineHeight = text::LineHeight::Relative(1.2);
 
-impl Widget<Toggle, Theme, Renderer> for Face {
+impl<M> Widget<M, Theme, Renderer> for Face {
     fn size(&self) -> Size<Length> {
         Size::new(self.width, Length::Shrink)
     }
@@ -244,7 +411,7 @@ impl Widget<Toggle, Theme, Renderer> for Face {
             _ => 0.0,
         };
         let intrinsic = Size::new(
-            text + GAP + CARET,
+            text + self.leading_width + GAP + CARET,
             f32::from(LINE.to_absolute(Pixels(TEXT_SIZE))),
         );
         layout::Node::new(
@@ -252,42 +419,6 @@ impl Widget<Toggle, Theme, Renderer> for Face {
                 .resolve(self.width, Length::Shrink, intrinsic)
                 .expand(padding),
         )
-    }
-
-    fn update(
-        &mut self,
-        _tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _renderer: &Renderer,
-        _clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, Toggle>,
-        _viewport: &Rectangle,
-    ) {
-        if matches!(
-            event,
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-        ) && cursor.is_over(layout.bounds())
-        {
-            shell.publish(Toggle);
-            shell.capture_event();
-        }
-    }
-
-    fn mouse_interaction(
-        &self,
-        _tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _viewport: &Rectangle,
-        _renderer: &Renderer,
-    ) -> mouse::Interaction {
-        if cursor.is_over(layout.bounds()) {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::default()
-        }
     }
 
     fn draw(
@@ -301,15 +432,26 @@ impl Widget<Toggle, Theme, Renderer> for Face {
         viewport: &Rectangle,
     ) {
         use cosmic::iced::advanced::Renderer as _;
+        use cosmic::iced::advanced::image::Renderer as _;
         use cosmic::iced::advanced::svg::Renderer as _;
         use cosmic::iced::advanced::text::Renderer as _;
         let bounds = layout.bounds();
-        let status = if cursor.is_over(bounds) {
+        let status = if !self.locked && cursor.is_over(bounds) {
             Status::Hovered
         } else {
             Status::Active
         };
         let style = Catalog::style(theme, &(), status);
+        let color = if self.locked {
+            theme
+                .cosmic()
+                .background(theme.transparent)
+                .component
+                .on_disabled
+                .into()
+        } else {
+            style.text_color
+        };
         renderer.fill_quad(
             renderer::Quad {
                 bounds,
@@ -326,12 +468,50 @@ impl Widget<Toggle, Theme, Renderer> for Face {
                 width: CARET,
                 height: CARET,
             };
-            renderer.draw_svg(svg::Svg::new(handle).color(style.text_color), at, at);
+            renderer.draw_svg(svg::Svg::new(handle).color(color), at, at);
         }
+        let (label_width, wrapping, ellipsize) = if let Some(icon) = &self.leading {
+            let width = bounds.width - 2.0 * PADDING - self.leading_width - GAP - CARET;
+            if width < 0.0 {
+                return;
+            }
+            let at = Rectangle {
+                x: bounds.x + PADDING,
+                y: bounds.center_y() - ICON_SIZE / 2.0,
+                width: ICON_SIZE,
+                height: ICON_SIZE,
+            };
+            let opacity: f32 = if self.locked { 0.5 } else { 1.0 };
+            match &icon.data {
+                icon::Data::Svg(handle) => {
+                    let svg = svg::Svg::new(handle.clone());
+                    let svg = if icon.symbolic {
+                        svg.color(color)
+                    } else {
+                        svg.opacity(opacity)
+                    };
+                    renderer.draw_svg(svg, at, at);
+                }
+                icon::Data::Image(handle) => {
+                    renderer.draw_image(image::Image::new(handle.clone()).opacity(opacity), at, at);
+                }
+            }
+            (
+                width,
+                text::Wrapping::None,
+                text::Ellipsize::End(text::EllipsizeHeightLimit::Lines(1)),
+            )
+        } else {
+            (
+                bounds.width - 2.0 * PADDING,
+                text::Wrapping::default(),
+                text::Ellipsize::default(),
+            )
+        };
         let area = Rectangle {
-            x: bounds.x + PADDING,
+            x: bounds.x + PADDING + self.leading_width,
             y: bounds.center_y(),
-            width: bounds.width - 2.0 * PADDING,
+            width: label_width,
             height: f32::from(LINE.to_absolute(Pixels(TEXT_SIZE))),
         };
         renderer.fill_text(
@@ -344,11 +524,11 @@ impl Widget<Toggle, Theme, Renderer> for Face {
                 align_x: text::Alignment::Left,
                 align_y: alignment::Vertical::Center,
                 shaping: text::Shaping::Advanced,
-                wrapping: text::Wrapping::default(),
-                ellipsize: text::Ellipsize::default(),
+                wrapping,
+                ellipsize,
             },
             area.position(),
-            style.text_color,
+            color,
             *viewport,
         );
     }

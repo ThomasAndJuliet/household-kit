@@ -13,8 +13,10 @@
 //! - [`short_text_box`]: the one-line text box, [`ShortTextBox`] and its
 //!   widget, sharing the text box's history, steps and keys.
 //! - [`dropdown`]: a dropdown whose list is the window's one menu chain.
+//! - [`outlined_list`]: rows in a form field with empty content and an error outline.
 //! - [`scroll_list`]: a scrollable list of boxes, optionally virtualised,
 //!   keeping the reader's place.
+//! - [`segmented_control`]: native single-choice controls in the household style.
 //! - [`tab_strip`]: the user-content tab strip (tabs the user opens and
 //!   closes), distinct from the fixed-section [`tabs`].
 //! - `content` (feature `content`): the content boxes, inline text and
@@ -42,6 +44,7 @@ pub mod menu_bar;
 pub mod menu_parts;
 pub mod menu_surface;
 pub mod navigation_style;
+pub mod outlined_list;
 pub mod panel_divider;
 pub mod panel_header;
 pub mod panel_layout;
@@ -51,6 +54,7 @@ pub mod popup;
 mod scroll;
 pub mod scroll_intent;
 pub mod scroll_list;
+pub mod segmented_control;
 pub mod short_text_box;
 mod switch;
 pub mod tab_strip;
