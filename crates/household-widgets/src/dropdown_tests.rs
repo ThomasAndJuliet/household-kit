@@ -492,6 +492,7 @@ fn a_narrow_icon_face_gives_the_label_room_and_keeps_the_caret_inside() {
         TEXT_SIZE,
         Some(Toggle),
     );
+    let prefix_width = face.prefix_width;
     let mut tree = Tree::empty();
     let mut layout_at = |width| {
         let limits = layout::Limits::new(Size::ZERO, Size::new(width, 100.0));
@@ -507,9 +508,9 @@ fn a_narrow_icon_face_gives_the_label_room_and_keeps_the_caret_inside() {
     assert_eq!(icon.x, normal.x + PADDING);
     assert_eq!(parts.label.x - (icon.x + icon.width), icon_gap());
 
-    let (narrow, parts) = layout_at(48.0);
+    let (narrow, parts) = layout_at(CARET + prefix_width);
     assert!(parts.leading.is_none());
-    assert!(parts.label.width >= 2.0 * TEXT_SIZE);
+    assert!(parts.label.width >= prefix_width);
     assert!(parts.label.x < narrow.x + PADDING);
     let caret = parts.caret.unwrap();
     assert!(caret.x >= parts.label.x + parts.label.width);
@@ -519,6 +520,29 @@ fn a_narrow_icon_face_gives_the_label_room_and_keeps_the_caret_inside() {
     assert_eq!(tiny.width, 12.0);
     assert!(parts.leading.is_none() && parts.caret.is_none());
     assert!(parts.label.width > 0.0 && parts.label.width <= tiny.width);
+}
+
+#[test]
+fn the_caret_waits_for_a_readable_prefix_at_each_text_size() {
+    for text_size in [TEXT_SIZE, 18.0] {
+        let prefix_width = measured_width("MM…", text_size, cosmic::font::default()).ceil();
+        let breakpoint = CARET + prefix_width;
+        for label in ["Default", "On"] {
+            let face = Face::new(label.into(), None, Length::Shrink, text_size, Some(Toggle));
+            let at = |width| face.parts(Rectangle::with_size(Size::new(width, 40.0)));
+            assert!(at(breakpoint - 1.0).caret.is_none());
+            assert!(at(breakpoint).caret.is_some());
+        }
+        let face = Face::new(
+            "A longer choice".into(),
+            None,
+            Length::Shrink,
+            text_size,
+            Some(Toggle),
+        );
+        let parts = face.parts(Rectangle::with_size(Size::new(breakpoint, 40.0)));
+        assert!(parts.label.width >= prefix_width);
+    }
 }
 
 #[test]

@@ -375,6 +375,7 @@ fn trigger<'a>(face: Face, id: Option<widget::Id>) -> Element<'a, Toggle> {
 pub struct Face<M = Toggle> {
     label: String,
     label_width: f32,
+    prefix_width: f32,
     text_size: f32,
     leading: Option<icon::Handle>,
     leading_width: f32,
@@ -401,8 +402,10 @@ impl<M> Face<M> {
             icon::Data::Svg(handle) => Some(handle),
             icon::Data::Image(_) => None,
         };
+        let font = cosmic::font::default();
         Self {
-            label_width: measured_width(&label, text_size, cosmic::font::default()),
+            label_width: measured_width(&label, text_size, font),
+            prefix_width: measured_width("MM…", text_size, font).ceil(),
             label,
             text_size,
             leading_width: if leading.is_some() {
@@ -422,16 +425,15 @@ impl<M> Face<M> {
     }
 
     fn parts(&self, bounds: Rectangle) -> FaceParts {
-        // Keep up to one em for the label before allocating room for
-        // the caret, and up to two ems before adding a leading icon.
-        let caret_fits =
-            bounds.width >= CARET + self.label_width.min(self.text_size) && bounds.height >= CARET;
+        // Reserve a readable prefix and ellipsis before showing the caret.
+        // Measure the same prefix for every choice at this text size.
+        let caret_fits = bounds.width >= CARET + self.prefix_width && bounds.height >= CARET;
         let (caret_width, edge_gap) = if caret_fits { (CARET, GAP) } else { (0.0, 0.0) };
         let padding = 2.0 * PADDING + edge_gap;
         let room = bounds.width - caret_width;
         let leading_fits = self.leading.is_some()
             && bounds.height >= ICON_SIZE
-            && room >= self.leading_width + padding + self.label_width.min(2.0 * self.text_size);
+            && room >= self.leading_width + padding + self.label_width.min(self.prefix_width);
         let leading_width = if leading_fits {
             self.leading_width
         } else {

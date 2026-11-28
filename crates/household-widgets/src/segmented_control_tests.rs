@@ -73,19 +73,25 @@ fn segment_bounds_fill_the_bar_and_scale_down_with_it() {
 }
 
 #[test]
-fn icon_slots_restore_only_when_an_ellipsis_fits_at_the_requested_size() {
+fn icon_slots_restore_only_when_the_widest_label_fits_in_full() {
     let renderer = renderer();
     let text_size = 22.0;
     let spacing = theme::spacing();
-    let ellipsis = label_width("…", text_size);
-    assert!(ellipsis > 1.0, "the ellipsis has a measurable width");
-    let breakpoint = 2.0 * f32::from(spacing.space_s)
-        + f32::from(ICON_SIZE)
-        + f32::from(spacing.space_xxs)
-        + ellipsis;
+    let padding = 2.0 * f32::from(spacing.space_s);
+    let icon_slot = f32::from(ICON_SIZE) + f32::from(spacing.space_xxs);
+    let widest_label = "Longest choice";
+    let widest_width = label_width(widest_label, text_size);
+    assert!(widest_width > label_width("…", text_size));
+    let breakpoint = preferred_part_width(widest_label, true, text_size);
+    assert_eq!(breakpoint, padding + icon_slot + widest_width);
+    assert_eq!(
+        preferred_part_width(widest_label, false, text_size),
+        padding + widest_width,
+    );
     let mut choices = choices(None);
     choices[0].icon = Some(icon::from_name("folder-symbolic").size(16).icon());
-    let mut control = Control::new(choices, Some(0), None, true, text_size);
+    choices[2].label = widest_label.into();
+    let mut control = Control::new(choices, Some(0), Some(breakpoint + 2.0), true, text_size);
     let mut tree = Tree::new(&control as &dyn Widget<usize, Theme, Renderer>);
 
     for (width, fits) in [
@@ -93,13 +99,25 @@ fn icon_slots_restore_only_when_an_ellipsis_fits_at_the_requested_size() {
         (breakpoint + 0.5, true),
         (breakpoint - 0.5, false),
     ] {
-        control.layout(
+        let node = control.layout(
             &mut tree,
             &renderer,
             &layout::Limits::new(Size::ZERO, Size::new(width * 3.0, 100.0)),
         );
-        for entity in control.model.iter() {
-            assert_eq!(control.model.icon(entity).is_some(), fits);
+        for (entity, region) in control
+            .model
+            .iter()
+            .zip(Layout::new(&node).children().skip(1))
+        {
+            let has_icon = control.model.icon(entity).is_some();
+            assert_eq!(has_icon, fits);
+            let text_budget =
+                region.bounds().width - padding - if has_icon { icon_slot } else { 0.0 };
+            let label = control.model.text(entity).expect("choice label");
+            assert!(
+                text_budget >= label_width(label, text_size),
+                "{label} must fit at segment width {width}, with icon slot {has_icon}",
+            );
         }
     }
 }

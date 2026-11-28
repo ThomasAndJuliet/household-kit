@@ -63,6 +63,26 @@ fn label_width(text: &str, text_size: f32) -> f32 {
     ))
 }
 
+/// Width for a full label in either font weight, including the theme's insets
+/// and, when reserved, the icon and gap.
+pub fn preferred_part_width(label: &str, has_icon_slot: bool, text_size: f32) -> f32 {
+    let spacing = theme::spacing();
+    let icon_slot = if has_icon_slot {
+        f32::from(ICON_SIZE) + f32::from(spacing.space_xxs)
+    } else {
+        0.0
+    };
+    2.0 * f32::from(spacing.space_s) + icon_slot + label_width(label, valid_text_size(text_size))
+}
+
+fn valid_text_size(text_size: f32) -> f32 {
+    if text_size.is_finite() && text_size > 0.0 {
+        text_size
+    } else {
+        TEXT_SIZE
+    }
+}
+
 fn tip_content<M: 'static>(text: String, text_size: f32) -> Element<'static, M> {
     widget::container(
         widget::text(text)
@@ -126,35 +146,27 @@ impl<M: Clone + 'static> Control<M> {
         text_size: f32,
     ) -> Self {
         let part_width = part_width.filter(|width| width.is_finite() && *width >= 0.0);
-        let text_size = if text_size.is_finite() && text_size > 0.0 {
-            text_size
-        } else {
-            TEXT_SIZE
-        };
+        let text_size = valid_text_size(text_size);
         let spacing = theme::spacing();
         let inset = spacing.space_s;
         let gap = spacing.space_xxs;
+        let has_icon_slot = reserve_icon || choices.iter().any(|choice| choice.icon.is_some());
+        let preferred_width = choices
+            .iter()
+            .map(|choice| preferred_part_width(&choice.label, has_icon_slot, text_size))
+            .fold(0.0, f32::max);
         let empty_icon = reserve_icon
             .then(|| icon::icon(icon::from_raster_pixels(1, 1, &[0, 0, 0, 0][..])).size(ICON_SIZE));
         let mut model = SingleSelectModel::default();
         let mut tips = Vec::with_capacity(choices.len());
         let mut icons = Vec::new();
         let mut disabled_reasons = Vec::new();
-        let mut widest = 0.0_f32;
         let mut can_activate = false;
-        let has_label = choices.iter().any(|choice| !choice.label.is_empty());
-        let padding = 2.0 * f32::from(inset);
-        let icon_slot = f32::from(ICON_SIZE) + f32::from(gap);
         for (index, choice) in choices.into_iter().enumerate() {
             let icon = choice
                 .icon
                 .map(|icon| icon.size(ICON_SIZE))
                 .or_else(|| empty_icon.clone());
-            if part_width.is_none() {
-                let label = label_width(&choice.label, text_size);
-                let leading = if icon.is_some() { icon_slot } else { 0.0 };
-                widest = widest.max(label + leading + padding);
-            }
             let enabled = choice.message.is_some();
             if !enabled && let Some(reason) = &choice.tip {
                 disabled_reasons.push(format!("{}\n{reason}", choice.label));
@@ -175,21 +187,16 @@ impl<M: Clone + 'static> Control<M> {
             }
             tips.push(tip_target(choice.tip, text_size));
         }
-        let part_width = part_width.unwrap_or_else(|| widest.ceil());
-        let ellipsis = if has_label && !icons.is_empty() {
-            label_width("…", text_size)
-        } else {
-            0.0
-        };
         Self {
             model,
             icons,
             tips,
             disabled_reasons: disabled_reasons.join("\n\n"),
             keyboard_help: widget::Space::new().into(),
-            part_width,
+            part_width: part_width.unwrap_or_else(|| preferred_width.ceil()),
             text_size,
-            icon_minimum_width: padding + icon_slot + ellipsis,
+            // Adding the icon slots must leave every label readable in full.
+            icon_minimum_width: preferred_width,
             inset,
             gap,
             can_activate,
