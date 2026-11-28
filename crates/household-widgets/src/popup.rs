@@ -627,11 +627,23 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Host<'a, Mess
             if !panel.reset_native
                 && let Some(plan) = &state.plans[i]
                 && let Some(stage) = panel.stages_for(span).get(plan.stage.stage_index)
-                && let Ok(geometry) = stage.content.query_at(
-                    stage.level,
-                    renderer,
-                    Size::new(plan.bounds.width, f32::INFINITY),
-                )
+                && let Ok(geometry) = stage
+                    .content
+                    .query_at(
+                        stage.level,
+                        renderer,
+                        Size::new(plan.bounds.width, f32::INFINITY),
+                    )
+                    // The new content can outgrow the previous offer. Reclaim
+                    // its state before iced clears the named map. The chain
+                    // still chooses the real geometry against the viewport.
+                    .or_else(|_| {
+                        stage.content.query_at(
+                            stage.level,
+                            renderer,
+                            Size::new(f32::INFINITY, f32::INFINITY),
+                        )
+                    })
             {
                 let mut current = plan.clone();
                 current.bounds.width = geometry.size.width;
@@ -915,7 +927,17 @@ impl<'a, Message: Clone + 'a> overlay::Overlay<Message, Theme, Renderer>
                         continue;
                     }
                     let named = tree.take_all_named();
-                    tree::NAMED.with(|registry| registry.borrow_mut().extend(named));
+                    tree::NAMED.with(|registry| {
+                        // A previous shape with no valid geometry can leave
+                        // placeholders after iced extracts its named state.
+                        // A placeholder cannot seed a stateful widget.
+                        registry.borrow_mut().extend(named.into_iter().filter(
+                            |(_, (tag, state, _))| {
+                                *tag == tree::Tag::stateless()
+                                    || !matches!(state, tree::State::None)
+                            },
+                        ));
+                    });
                     *tree = Tree::empty();
                 }
                 for panel in self.panels.iter_mut() {
