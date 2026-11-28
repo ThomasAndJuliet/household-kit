@@ -52,6 +52,65 @@ menu metadata. `MenuRow` also supplies the row contents and measured width
 for native menu-bar adapters; `measured_width` shares its bounded shaping cache
 with other interface text at any size and font.
 
+### Responsive forms and segmented choices
+
+`form::fields(fields, label_width)` keeps a common label column while the
+controls fit beside it. At a narrower width it places labels above their
+controls. It tries preferred controls first, then allows the stacked form to
+use the controls' mild alternatives. Pass a prepared `layout::Child` to
+`Field::new`, and attach help or validation beneath it with `.supporting`.
+Editable controls keep their value and native widget ID in the caller.
+For text inputs, declare a useful minimum and the width you would like the
+input to occupy when there is room.
+
+`segmented::choices(options, selected, font_size)` returns a child for a
+single selection. Choices form a joined bar at the preferred level. At the
+mild level they stack and labels can wrap. The selected choice uses the
+muted accent. Each choice can have an icon, stable native widget ID and
+tooltip. A choice with no action is disabled. The default and compact forms
+emit the same messages. Keep selection and labels in the caller, and rebuild
+from that state on each view.
+
+A dialog can give its machine choices and path input directly to the form.
+
+```rust,ignore
+use cosmic::iced::Length;
+use cosmic::widget;
+use household_widgets::{form, layout, segmented};
+
+let machines = segmented::choices(
+    vec![
+        segmented::Choice::new(local_label, Message::PickMachine(Local)),
+        segmented::Choice::new(remote_label, remote_action).tooltip(remote_tip),
+    ],
+    Some(selected_index),
+    interface_size,
+);
+let path = layout::child(move |_| {
+    widget::text_input(path_placeholder.clone(), path_value.clone())
+        .id(path_id.clone())
+        .on_input(Message::EditPath)
+        .width(Length::Fill)
+        .into()
+})
+.minimum_width(|_, _| 150.0)
+.preferred_width(320.0);
+
+let fields = form::fields(
+    vec![
+        form::Field::new(machine_field_label, machines).label_size(interface_size),
+        form::Field::new(path_field_label, path).label_size(interface_size),
+    ],
+    112.0,
+);
+```
+
+For a standalone filter use `layout::responsive_child(layout::Level::Mild,
+segmented::choices(options, selected, interface_size))`. To arrange it
+beside a search box in an adaptive header, pass the prepared choices to the
+header's own stages. Provide vertical scrolling where the compact layout may
+be taller than the viewport.
+
 ### Compositional menus and hover cards
 
 `menu_parts` and `popup` are an experimental alternative to the native menu
