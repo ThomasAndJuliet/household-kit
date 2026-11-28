@@ -52,6 +52,7 @@ pub mod popup;
 mod scroll;
 pub mod scroll_intent;
 pub mod scroll_list;
+pub mod segmented;
 pub mod short_text_box;
 mod switch;
 pub mod tab_strip;
