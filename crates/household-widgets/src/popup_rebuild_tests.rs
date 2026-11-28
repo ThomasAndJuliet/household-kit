@@ -18,6 +18,10 @@ enum Message {
 }
 
 fn view(anchors: &Anchors, expanded: bool) -> Host<'static, Message> {
+    view_with_width(anchors, expanded, 180)
+}
+
+fn view_with_width(anchors: &Anchors, expanded: bool, width: u16) -> Host<'static, Message> {
     let source = anchors.trigger("source", native::space().width(40).height(20));
     let base = native::column(vec![native::space().height(160).into(), source]);
     let content = child(move |_| {
@@ -49,7 +53,7 @@ fn view(anchors: &Anchors, expanded: bool) -> Host<'static, Message> {
             .padding([4, 8])
             .into(),
         );
-        native::container(native::column(rows)).width(180).into()
+        native::container(native::column(rows)).width(width).into()
     });
     let attachment = Attachment::new(
         Rectangle::default(),
@@ -169,4 +173,45 @@ fn named_popup_buttons_survive_per_event_rebuilds_and_expansion_requeries_geomet
         vec![Message::Choose],
         "the newly expanded native row dispatches once"
     );
+}
+
+#[test]
+fn a_popup_that_outgrows_its_old_width_keeps_the_pressed_named_button() {
+    let mut renderer = cosmic::iced::futures::executor::block_on(<Renderer as Headless>::new(
+        Font::default(),
+        Pixels(14.0),
+        Some("tiny-skia"),
+    ))
+    .expect("headless tiny-skia renderer");
+    let anchors = Anchors::default();
+    let (mut cache, button) = bounds(
+        &anchors,
+        false,
+        user_interface::Cache::new(),
+        &mut renderer,
+        "expand",
+    );
+    let old_width = anchors.surfaces()[0].width;
+    let mut messages = Vec::new();
+    for (width, event) in [
+        (180, mouse::Event::ButtonPressed(mouse::Button::Left)),
+        (240, mouse::Event::ButtonReleased(mouse::Button::Left)),
+    ] {
+        let mut ui = UserInterface::build(
+            view_with_width(&anchors, false, width),
+            WINDOW,
+            cache,
+            &mut renderer,
+        );
+        ui.update(
+            &[Event::Mouse(event)],
+            mouse::Cursor::Available(button.center()),
+            &mut renderer,
+            &mut cosmic::iced::advanced::clipboard::Null,
+            &mut messages,
+        );
+        cache = ui.into_cache();
+    }
+    assert!(anchors.surfaces()[0].width > old_width);
+    assert_eq!(messages, [Message::Expand]);
 }
