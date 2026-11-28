@@ -31,6 +31,7 @@ mod forward;
 pub mod content;
 pub mod dropdown;
 pub mod focus_regions;
+pub mod form;
 #[doc(hidden)]
 pub mod history;
 pub mod hover_card;
