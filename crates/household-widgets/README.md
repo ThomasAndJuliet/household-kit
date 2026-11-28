@@ -58,6 +58,71 @@ menu metadata. `MenuRow` also supplies the row contents and measured width
 for native menu-bar adapters; `measured_width` shares its bounded shaping cache
 with other interface text at any size and font.
 
+### Responsive labelled forms
+
+`form::fields(fields, label_width)` keeps a common label column while the
+controls fit beside it. At a narrower width it places labels above their
+controls. It tries preferred controls first, then allows the stacked form to
+use the controls' mild alternatives. Pass a prepared `layout::Child` to
+`Field::new`, and attach help or validation beneath it with `.supporting()`.
+Editable controls keep their value and native widget ID in the caller.
+
+Wrap the native `segmented_control::view` in `layout::child` to use it as
+a field. The wrapper can give it a narrower width floor at the mild level
+if the bar's native text ellipsis is appropriate at that width. Set the
+floor for the form's choices and expected labels.
+
+```rust,ignore
+use cosmic::iced::Length;
+use cosmic::widget;
+use household_widgets::{form, layout, segmented_control};
+
+let machines = layout::child(move |_| {
+    segmented_control::view(
+        vec![
+            segmented_control::Choice {
+                label: local_label.clone(),
+                icon: None,
+                message: Some(Message::PickMachine(Local)),
+                tip: None,
+            },
+            segmented_control::Choice {
+                label: remote_label.clone(),
+                icon: None,
+                message: remote_action.clone(),
+                tip: remote_tip.clone(),
+            },
+        ],
+        Some(selected_index),
+        None,
+        false,
+        interface_size,
+    )
+})
+.minimum_width(|level, preferred| match level {
+    layout::Level::Preferred => preferred.width,
+    _ => preferred.width.min(180.0),
+});
+
+let path = layout::child(move |_| {
+    widget::text_input(path_placeholder.clone(), path_value.clone())
+        .id(path_id.clone())
+        .on_input(Message::EditPath)
+        .width(Length::Fill)
+        .into()
+})
+.minimum_width(|_, _| 150.0)
+.preferred_width(320.0);
+
+let fields = form::fields(
+    vec![
+        form::Field::new(machine_field_label, machines).label_size(interface_size),
+        form::Field::new(path_field_label, path).label_size(interface_size),
+    ],
+    112.0,
+);
+```
+
 ### Compositional menus and hover cards
 
 `menu_parts` and `popup` are an experimental alternative to the native menu
