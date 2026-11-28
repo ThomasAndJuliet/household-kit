@@ -2,6 +2,7 @@
 
 use super::*;
 use cosmic::iced::advanced::renderer::Headless;
+use cosmic::iced::advanced::widget::operation;
 use cosmic::iced::runtime::{UserInterface, user_interface::Cache};
 use cosmic::iced::{Font, Pixels, keyboard, window};
 use std::time::Instant;
@@ -46,7 +47,7 @@ fn lay_out(
 fn segment_bounds_fill_the_bar_and_scale_down_with_it() {
     let renderer = renderer();
     let mut tree = Tree::empty();
-    let mut control = view(choices(None), Some(0), Some(70.0), true);
+    let mut control = view(choices(None), Some(0), Some(70.0), true, TEXT_SIZE);
     for (available, expected) in [(400.0, 210.0), (111.0, 111.0), (0.0, 0.0)] {
         let node = lay_out(&mut control, &mut tree, &renderer, available);
         assert_eq!(node.size(), Size::new(expected, 32.0));
@@ -64,6 +65,7 @@ fn segment_bounds_fill_the_bar_and_scale_down_with_it() {
             Some(5),
             Some(70.0),
             false,
+            TEXT_SIZE,
         );
         let node = lay_out(&mut control, &mut tree, &renderer, 400.0);
         assert_eq!(node.size(), Size::new(count as f32 * 70.0, 32.0));
@@ -71,10 +73,54 @@ fn segment_bounds_fill_the_bar_and_scale_down_with_it() {
 }
 
 #[test]
+fn icon_slots_restore_only_when_an_ellipsis_fits_at_the_requested_size() {
+    let renderer = renderer();
+    let text_size = 22.0;
+    let spacing = theme::spacing();
+    let ellipsis = label_width("…", text_size);
+    assert!(ellipsis > 1.0, "the ellipsis has a measurable width");
+    let breakpoint = 2.0 * f32::from(spacing.space_s)
+        + f32::from(ICON_SIZE)
+        + f32::from(spacing.space_xxs)
+        + ellipsis;
+    let mut choices = choices(None);
+    choices[0].icon = Some(icon::from_name("folder-symbolic").size(16).icon());
+    let mut control = Control::new(choices, Some(0), None, true, text_size);
+    let mut tree = Tree::new(&control as &dyn Widget<usize, Theme, Renderer>);
+
+    for (width, fits) in [
+        (breakpoint - 0.5, false),
+        (breakpoint + 0.5, true),
+        (breakpoint - 0.5, false),
+    ] {
+        control.layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(width * 3.0, 100.0)),
+        );
+        for entity in control.model.iter() {
+            assert_eq!(control.model.icon(entity).is_some(), fits);
+        }
+    }
+}
+
+#[test]
+fn natural_width_tracks_the_requested_interface_text_size() {
+    let renderer = renderer();
+    let mut tree = Tree::empty();
+    let mut small = view(choices(None), Some(0), None, false, 14.0);
+    let mut large = view(choices(None), Some(0), None, false, 22.0);
+    let small = lay_out(&mut small, &mut tree, &renderer, 400.0);
+    let large = lay_out(&mut large, &mut tree, &renderer, 400.0);
+    assert!(large.size().width > small.size().width);
+    assert_eq!(large.size().height, small.size().height);
+}
+
+#[test]
 fn disabled_choice_keeps_its_own_hover_region_at_narrow_width() {
     let mut renderer = renderer();
     let owner = crate::window::WindowUi::<()>::new();
-    let control = view(choices(None), Some(0), Some(70.0), true);
+    let control = view(choices(None), Some(0), Some(70.0), true, TEXT_SIZE);
     let root: Element<'_, _> = owner.mount(control, Vec::new()).into();
     let mut ui = UserInterface::build(
         root,
@@ -110,10 +156,55 @@ fn disabled_choice_keeps_its_own_hover_region_at_narrow_width() {
 }
 
 #[test]
+fn alt_h_on_the_bar_opens_disabled_reasons_without_an_extra_focus_stop() {
+    let mut renderer = renderer();
+    let owner = crate::window::WindowUi::<()>::new();
+    let control = view(choices(None), Some(0), Some(70.0), false, TEXT_SIZE);
+    let root: Element<'_, _> = owner.mount(control, Vec::new()).into();
+    let mut ui = UserInterface::build(
+        root,
+        Size::new(250.0, 300.0),
+        Cache::default(),
+        &mut renderer,
+    );
+    let mut probe = crate::popup::FocusProbe::default();
+    ui.operate(&renderer, &mut probe);
+    let [id] = probe.ids.as_slice() else {
+        panic!("the bar should have one native focus target");
+    };
+    ui.operate(
+        &renderer,
+        &mut operation::focusable::focus::<()>(id.clone()),
+    );
+
+    let key = keyboard::Key::Character("h".into());
+    let alt_h = Event::Keyboard(keyboard::Event::KeyPressed {
+        key: key.clone(),
+        modified_key: key,
+        physical_key: keyboard::key::Physical::Code(keyboard::key::Code::KeyH),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::ALT,
+        text: None,
+        repeat: false,
+    });
+    let mut published = Vec::new();
+    let (_, statuses) = ui.update(
+        &[alt_h],
+        mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut cosmic::iced::advanced::clipboard::Null,
+        &mut published,
+    );
+    assert_eq!(statuses, [cosmic::iced::event::Status::Captured]);
+    assert!(owner.anchors().information_visible(id));
+    assert!(published.is_empty());
+}
+
+#[test]
 fn native_pointer_and_keyboard_use_current_availability() {
     let renderer = renderer();
     let mut tree = Tree::empty();
-    let mut control = view(choices(Some(2)), Some(0), Some(70.0), false);
+    let mut control = view(choices(Some(2)), Some(0), Some(70.0), false, TEXT_SIZE);
     let mut node = lay_out(&mut control, &mut tree, &renderer, 400.0);
     let at = |x| mouse::Cursor::Available(Point::new(x, 16.0));
     let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
@@ -147,7 +238,7 @@ fn native_pointer_and_keyboard_use_current_availability() {
     send(&mut control, &mut tree, &node, &release, at(105.0));
 
     // Selection changes rebuild the view while native keyboard focus stays.
-    control = view(choices(Some(20)), Some(1), Some(70.0), false);
+    control = view(choices(Some(20)), Some(1), Some(70.0), false, TEXT_SIZE);
     node = lay_out(&mut control, &mut tree, &renderer, 400.0);
     send(
         &mut control,
@@ -158,7 +249,7 @@ fn native_pointer_and_keyboard_use_current_availability() {
     );
 
     // That same focused entity can be disabled in a later view.
-    control = view(choices(None), Some(1), Some(70.0), false);
+    control = view(choices(None), Some(1), Some(70.0), false, TEXT_SIZE);
     node = lay_out(&mut control, &mut tree, &renderer, 400.0);
     send(
         &mut control,

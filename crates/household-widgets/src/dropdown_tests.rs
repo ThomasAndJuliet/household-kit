@@ -91,7 +91,7 @@ fn panels<'a>(window: &'a WindowUi<Root>) -> Vec<Panel<'a, Ev>> {
                 MenuStyle { icon, body },
                 NS.into(),
             )
-            .choice_rows(chosen)
+            .dropdown_rows(chosen)
             .preferred_width(decl.0.width)
             .initial_target(decl.0.selected)
             .panels(
@@ -128,6 +128,7 @@ struct Picker {
     icons: bool,
     reveal: Option<usize>,
     locked: bool,
+    text_size: Option<f32>,
     width: Option<f32>,
 }
 
@@ -158,6 +159,9 @@ fn view<'w>(window: &'w WindowUi<Root>, selected: usize, picker: &Picker) -> Ele
     }
     if let Some(visible) = picker.reveal {
         sizes = sizes.reveal_after(visible, "More sizes");
+    }
+    if let Some(size) = picker.text_size {
+        sizes = sizes.text_size(size);
     }
     if let Some(width) = picker.width {
         sizes = sizes.width(width);
@@ -458,6 +462,89 @@ fn preferred_width_includes_hidden_icons_and_ignores_width_overrides() {
         .width(100.0);
     let icon_width = ICON_SIZE + f32::from(cosmic::theme::spacing().space_xxs);
     assert_eq!(decorated.preferred_width(), text_width + icon_width);
+}
+
+#[test]
+fn text_size_controls_the_trigger_height_and_preferred_width() {
+    let mut app = App::new();
+    let source = Id::new("sizes");
+    let default = app.visible(&source).unwrap();
+    let text_size = 18.0;
+    app.picker.text_size = Some(text_size);
+    app.frame();
+
+    let large = app.visible(&source).unwrap();
+    let sizes =
+        dropdown::<Message, Root, Decl>(["Small", "Medium", "Large"], Some(0), Message::Size)
+            .text_size(text_size);
+    assert_eq!(large.width, sizes.preferred_width());
+    assert!(large.width > default.width);
+    assert!((large.height - (1.2 * text_size + 2.0 * PADDING)).abs() < 0.5);
+}
+
+#[test]
+fn a_narrow_icon_face_gives_the_label_room_and_keeps_the_caret_inside() {
+    let app = App::new();
+    let mut face = Face::new(
+        "Medium".into(),
+        Some(icon("view-list-symbolic")),
+        Length::Fixed(160.0),
+        TEXT_SIZE,
+        Some(Toggle),
+    );
+    let mut tree = Tree::empty();
+    let mut layout_at = |width| {
+        let limits = layout::Limits::new(Size::ZERO, Size::new(width, 100.0));
+        let node = face.layout(&mut tree, &app.renderer, &limits);
+        (
+            Layout::new(&node).bounds(),
+            face.parts(Layout::new(&node).bounds()),
+        )
+    };
+
+    let (normal, parts) = layout_at(200.0);
+    let icon = parts.leading.unwrap();
+    assert_eq!(icon.x, normal.x + PADDING);
+    assert_eq!(parts.label.x - (icon.x + icon.width), icon_gap());
+
+    let (narrow, parts) = layout_at(48.0);
+    assert!(parts.leading.is_none());
+    assert!(parts.label.width >= 2.0 * TEXT_SIZE);
+    assert!(parts.label.x < narrow.x + PADDING);
+    let caret = parts.caret.unwrap();
+    assert!(caret.x >= parts.label.x + parts.label.width);
+    assert!(caret.x + caret.width <= narrow.x + narrow.width);
+
+    let (tiny, parts) = layout_at(12.0);
+    assert_eq!(tiny.width, 12.0);
+    assert!(parts.leading.is_none() && parts.caret.is_none());
+    assert!(parts.label.width > 0.0 && parts.label.width <= tiny.width);
+}
+
+#[test]
+fn a_text_trigger_captures_the_left_press_and_passes_through_the_release() {
+    use cosmic::iced::event::Status;
+    let mut app = App::new();
+    let face = Face::new("Small".into(), None, 100.0.into(), TEXT_SIZE, Some(Toggle));
+    let mut ui = UserInterface::build(
+        trigger(face, None),
+        SIZE,
+        Default::default(),
+        &mut app.renderer,
+    );
+    let mut messages = Vec::new();
+    let (_, statuses) = ui.update(
+        &[
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ],
+        mouse::Cursor::Available(Point::new(10.0, 10.0)),
+        &mut app.renderer,
+        &mut cosmic::iced::advanced::clipboard::Null,
+        &mut messages,
+    );
+    assert_eq!(statuses, [Status::Captured, Status::Ignored]);
+    assert_eq!(messages, [Toggle]);
 }
 
 #[test]

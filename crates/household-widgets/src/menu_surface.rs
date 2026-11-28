@@ -65,6 +65,7 @@ pub struct MenuSurface<M> {
     candidates: Vec<AnchorCandidate>,
     presentation: Presentation,
     choice_body: Option<fn(String) -> Element<'static, M>>,
+    row_gap: f32,
     emphasized_body: Option<fn(String) -> Element<'static, M>>,
     preferred_width: Option<f32>,
     root_region: Option<Rectangle>,
@@ -115,6 +116,7 @@ impl<M: Clone + 'static> MenuSurface<M> {
             candidates: Attachment::below(Rectangle::default()).candidates,
             presentation: Presentation::default(),
             choice_body: None,
+            row_gap: RowSlots::default().gap,
             emphasized_body: None,
             preferred_width: None,
             root_region: None,
@@ -177,6 +179,13 @@ impl<M: Clone + 'static> MenuSurface<M> {
         self
     }
 
+    /// Show dropdown choices using the same themed icon gap as the trigger.
+    pub fn dropdown_rows(self, selected_body: fn(String) -> Element<'static, M>) -> Self {
+        let mut surface = self.choice_rows(selected_body);
+        surface.row_gap = crate::dropdown::icon_gap();
+        surface
+    }
+
     /// Preserve the app's body typography for semibold open disclosure titles.
     /// The choice callback is used when this callback is not supplied.
     pub fn emphasized_body(mut self, body: fn(String) -> Element<'static, M>) -> Self {
@@ -216,6 +225,7 @@ impl<M: Clone + 'static> MenuSurface<M> {
             on_action: Rc::new(on_action),
             presentation: self.presentation,
             choice_body: self.choice_body,
+            row_gap: self.row_gap,
             emphasized_body: self.emphasized_body,
             preferred_width: self.preferred_width,
             hover: self.hover.clone(),
@@ -309,6 +319,7 @@ struct Content<M> {
     on_action: Rc<dyn Fn(M) -> M>,
     presentation: Presentation,
     choice_body: Option<fn(String) -> Element<'static, M>>,
+    row_gap: f32,
     emphasized_body: Option<fn(String) -> Element<'static, M>>,
     preferred_width: Option<f32>,
     hover: Option<Hover<M>>,
@@ -531,7 +542,7 @@ impl<M: Clone + 'static> Content<M> {
                 .iter()
                 .any(|row| matches!(row, Row::Item(item) if item.icon.is_some()))
                 .then_some(crate::menu::ICON_SIZE),
-            gap: 8.0,
+            gap: self.row_gap,
         };
         let mut groups = vec![Vec::new()];
         let ordered = crate::menu::ordered(rows);
@@ -1301,6 +1312,7 @@ mod presentation_tests {
             on_action: Rc::new(|_| ()),
             presentation: Presentation::default(),
             choice_body: Some(semibold),
+            row_gap: RowSlots::default().gap,
             emphasized_body: Some(semibold),
             preferred_width: None,
             hover: None,
@@ -1388,6 +1400,7 @@ mod presentation_tests {
             on_action: Rc::new(|_| ()),
             presentation: Presentation::default(),
             choice_body: None,
+            row_gap: RowSlots::default().gap,
             emphasized_body: None,
             preferred_width: None,
             hover: None,

@@ -30,8 +30,8 @@ The muted switch, rule 6: a switch that is on uses the muted accent ("yes use th
 
 ### Form controls
 
-- `dropdown` uses the window's shared menu. The caller supplies choices, the selected index, and the selection message. Choices can carry icons, and an explicit reveal row can show more choices in the same open list. The trigger uses libcosmic's pick-list styling and the shared text button's gap between icon and label.
-- `segmented_control` uses libcosmic's native single-selection control with the household muted accent on the selected part. The caller supplies choices, activation messages, and any disabled reasons. A form can pass a common segment width to line up multiple controls.
+- `dropdown` uses the window's shared menu. The caller supplies choices, the selected index, and the selection message. Choices can carry icons, and an explicit reveal row can show more choices in the same open list. The trigger uses libcosmic's pick-list styling and the shared text button's gap between icon and label. Apps can supply their interface text size and use the resulting preferred width for aligned fields.
+- `segmented_control` uses libcosmic's native single-selection control with the household muted accent on the selected part. The caller supplies choices, activation messages, and any disabled reasons. Hovering a choice shows its reason. Alt+H on the focused bar shows the reasons for its unavailable choices. A form can pass a common segment width to line up multiple controls.
 - `outlined_list` lays out caller-supplied rows or empty content with the standard field border. Its invalid state changes the border and lightly tints the list. The caller owns row actions and any message explaining the error.
 
 The shared tooltip functions own the 320 px wrap limit, theme spacing, bounded

@@ -4,7 +4,7 @@
 
 use cosmic::iced::advanced::clipboard::DndDestinationRectangles;
 use cosmic::iced::advanced::text::{Ellipsize, EllipsizeHeightLimit};
-use cosmic::iced::advanced::widget::{Operation, Tree, tree};
+use cosmic::iced::advanced::widget::{Id, Operation, Tree, tree};
 use cosmic::iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use cosmic::iced::{Alignment, Border, Color, Event, Length, Point, Rectangle, Size, Vector};
 use cosmic::widget::icon::{self, Icon};
@@ -13,7 +13,10 @@ use cosmic::widget::segmented_button::{
 };
 use cosmic::{Element, Renderer, Theme, theme, widget};
 
+use crate::hover_card::{TEXT_MIN_WIDTH, hover_box_owned};
+use crate::layout::{self as household_layout, AnchorCandidate, Side};
 use crate::menu::measured_width;
+use crate::window::Owner;
 use crate::{TIP_WIDTH, Tip, muted_colours, tooltip_with};
 
 const HEIGHT: u16 = 32;
@@ -31,95 +34,83 @@ pub struct Choice<M> {
 /// A single-selection control. Supply the same `part_width` and `reserve_icon`
 /// to align the segment edges and labels of neighbouring bars. With no width
 /// supplied, the widest choice sets the preferred width of each segment.
+/// Alt+H on a focused bar opens the reasons for its unavailable choices.
 pub fn view<'a, M: Clone + 'static>(
     choices: Vec<Choice<M>>,
     selected: Option<usize>,
     part_width: Option<f32>,
     reserve_icon: bool,
+    text_size: f32,
 ) -> Element<'a, M> {
     if choices.is_empty() {
         return widget::Space::new().width(0).height(HEIGHT).into();
     }
 
-    let part_width = part_width.filter(|width| width.is_finite() && *width >= 0.0);
-    let spacing = theme::spacing();
-    let inset = spacing.space_s;
-    let gap = spacing.space_xxs;
-    let empty_icon = reserve_icon
-        .then(|| icon::icon(icon::from_raster_pixels(1, 1, &[0, 0, 0, 0][..])).size(ICON_SIZE));
-    let mut model = SingleSelectModel::default();
-    let mut tips = Vec::with_capacity(choices.len());
-    let mut icons = Vec::new();
-    let mut widest = 0.0_f32;
-    let mut can_activate = false;
-    for (index, choice) in choices.into_iter().enumerate() {
-        let icon = choice
-            .icon
-            .map(|icon| icon.size(ICON_SIZE))
-            .or_else(|| empty_icon.clone());
-        if part_width.is_none() {
-            let label = measured_width(&choice.label, TEXT_SIZE, cosmic::font::semibold());
-            let leading = if icon.is_some() {
-                f32::from(ICON_SIZE + gap)
-            } else {
-                0.0
-            };
-            widest = widest.max(label + leading + 2.0 * f32::from(inset));
-        }
-        // Insertion order gives each index the same native entity on rebuild.
-        let id = model.insert().text(choice.label).id();
-        if let Some(icon) = icon {
-            model.icon_set(id, icon.clone());
-            icons.push((id, icon));
-        }
-        let enabled = choice.message.is_some();
-        can_activate |= enabled;
-        model.enable(id, enabled);
-        if let Some(message) = choice.message {
-            model.data_set(id, message);
-        }
-        if selected == Some(index) {
-            model.activate(id);
-        }
-        tips.push(tip_target(choice.tip));
-    }
-    let part_width = part_width.unwrap_or_else(|| widest.ceil());
-
-    Element::new(Control {
-        model,
-        icons,
-        tips,
+    Element::new(Control::new(
+        choices,
+        selected,
         part_width,
-        inset,
-        gap,
-        can_activate,
-        icons_fit: true,
-    })
+        reserve_icon,
+        text_size,
+    ))
 }
 
-fn tip_target<M: 'static>(text: Option<String>) -> Element<'static, M> {
+fn label_width(text: &str, text_size: f32) -> f32 {
+    measured_width(text, text_size, cosmic::font::default()).max(measured_width(
+        text,
+        text_size,
+        cosmic::font::semibold(),
+    ))
+}
+
+fn tip_content<M: 'static>(text: String, text_size: f32) -> Element<'static, M> {
+    widget::container(
+        widget::text(text)
+            .size(text_size)
+            .wrapping(cosmic::iced::widget::text::Wrapping::WordOrGlyph),
+    )
+    .max_width(TIP_WIDTH)
+    .into()
+}
+
+fn tip_target<M: 'static>(text: Option<String>, text_size: f32) -> Element<'static, M> {
     let space = widget::Space::new()
         .width(Length::Fill)
         .height(Length::Fill);
     match text {
         Some(text) => tooltip_with(
             space,
-            Tip::new(text.clone(), move || {
-                widget::container(widget::text(text.clone()))
-                    .max_width(TIP_WIDTH)
-                    .into()
-            }),
+            Tip::new(text.clone(), move || tip_content(text.clone(), text_size)),
             widget::tooltip::Position::Bottom,
         ),
         None => space.into(),
     }
 }
 
+fn keyboard_help<M: 'static>(id: Id, text: String, text_size: f32) -> Element<'static, M> {
+    let content = household_layout::child(move |_| tip_content(text.clone(), text_size))
+        .minimum_width(|_, preferred| preferred.width.min(TEXT_MIN_WIDTH));
+    hover_box_owned(
+        Owner::Legacy,
+        id,
+        widget::Space::new().into(),
+        content,
+        [Side::Below, Side::Above]
+            .into_iter()
+            .map(|side| AnchorCandidate::new(side, household_layout::Alignment::CenterBounded))
+            .collect(),
+    )
+}
+
 struct Control<M> {
     model: SingleSelectModel,
     icons: Vec<(Entity, Icon)>,
     tips: Vec<Element<'static, M>>,
+    disabled_reasons: String,
+    keyboard_help: Element<'static, M>,
     part_width: f32,
+    text_size: f32,
+    icon_minimum_width: f32,
     inset: u16,
     gap: u16,
     can_activate: bool,
@@ -127,6 +118,84 @@ struct Control<M> {
 }
 
 impl<M: Clone + 'static> Control<M> {
+    fn new(
+        choices: Vec<Choice<M>>,
+        selected: Option<usize>,
+        part_width: Option<f32>,
+        reserve_icon: bool,
+        text_size: f32,
+    ) -> Self {
+        let part_width = part_width.filter(|width| width.is_finite() && *width >= 0.0);
+        let text_size = if text_size.is_finite() && text_size > 0.0 {
+            text_size
+        } else {
+            TEXT_SIZE
+        };
+        let spacing = theme::spacing();
+        let inset = spacing.space_s;
+        let gap = spacing.space_xxs;
+        let empty_icon = reserve_icon
+            .then(|| icon::icon(icon::from_raster_pixels(1, 1, &[0, 0, 0, 0][..])).size(ICON_SIZE));
+        let mut model = SingleSelectModel::default();
+        let mut tips = Vec::with_capacity(choices.len());
+        let mut icons = Vec::new();
+        let mut disabled_reasons = Vec::new();
+        let mut widest = 0.0_f32;
+        let mut can_activate = false;
+        let has_label = choices.iter().any(|choice| !choice.label.is_empty());
+        let padding = 2.0 * f32::from(inset);
+        let icon_slot = f32::from(ICON_SIZE) + f32::from(gap);
+        for (index, choice) in choices.into_iter().enumerate() {
+            let icon = choice
+                .icon
+                .map(|icon| icon.size(ICON_SIZE))
+                .or_else(|| empty_icon.clone());
+            if part_width.is_none() {
+                let label = label_width(&choice.label, text_size);
+                let leading = if icon.is_some() { icon_slot } else { 0.0 };
+                widest = widest.max(label + leading + padding);
+            }
+            let enabled = choice.message.is_some();
+            if !enabled && let Some(reason) = &choice.tip {
+                disabled_reasons.push(format!("{}\n{reason}", choice.label));
+            }
+            // Insertion order gives each index the same native entity on rebuild.
+            let id = model.insert().text(choice.label).id();
+            if let Some(icon) = icon {
+                model.icon_set(id, icon.clone());
+                icons.push((id, icon));
+            }
+            can_activate |= enabled;
+            model.enable(id, enabled);
+            if let Some(message) = choice.message {
+                model.data_set(id, message);
+            }
+            if selected == Some(index) {
+                model.activate(id);
+            }
+            tips.push(tip_target(choice.tip, text_size));
+        }
+        let part_width = part_width.unwrap_or_else(|| widest.ceil());
+        let ellipsis = if has_label && !icons.is_empty() {
+            label_width("…", text_size)
+        } else {
+            0.0
+        };
+        Self {
+            model,
+            icons,
+            tips,
+            disabled_reasons: disabled_reasons.join("\n\n"),
+            keyboard_help: widget::Space::new().into(),
+            part_width,
+            text_size,
+            icon_minimum_width: padding + icon_slot + ellipsis,
+            inset,
+            gap,
+            can_activate,
+            icons_fit: true,
+        }
+    }
     fn native(
         &self,
         tree: Option<&Tree>,
@@ -143,7 +212,7 @@ impl<M: Clone + 'static> Control<M> {
             .button_padding([inset, 0, inset, 0])
             .button_spacing(self.gap)
             .font_active(cosmic::font::semibold())
-            .font_size(TEXT_SIZE)
+            .font_size(self.text_size)
             .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
             // Paint separators inside the allocated width. Native horizontal
             // dividers add a pixel to each stride after dividing the width.
@@ -182,7 +251,7 @@ impl<M: Clone + 'static> Control<M> {
     }
 
     fn fit_icons(&mut self, segment_width: f32) {
-        let fits = segment_width >= f32::from(2 * self.inset + ICON_SIZE + self.gap);
+        let fits = segment_width >= self.icon_minimum_width;
         if self.icons_fit != fits {
             self.icons_fit = fits;
             for (entity, icon) in &self.icons {
@@ -201,6 +270,10 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Control<M> {
         tree::Tag::of::<Self>()
     }
 
+    fn state(&self) -> tree::State {
+        tree::State::new(self.text_size)
+    }
+
     fn children(&self) -> Vec<Tree> {
         let native = self.native(None, f32::INFINITY);
         let mut tips = Tree::empty();
@@ -212,13 +285,21 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Control<M> {
         vec![
             Tree::new(&native as &dyn Widget<Entity, Theme, Renderer>),
             tips,
+            Tree::empty(),
         ]
     }
 
     fn diff(&mut self, tree: &mut Tree) {
         let native_tree = &mut tree.children[0];
-        self.native(Some(native_tree), f32::INFINITY)
-            .diff(native_tree);
+        let mut native = self.native(Some(native_tree), f32::INFINITY);
+        let old_size = tree.state.downcast_mut::<f32>();
+        if *old_size != self.text_size {
+            // The native paragraph cache keys on label and font. Recreate
+            // its state when the size changes so unchanged labels reshape.
+            *native_tree = Tree::new(&native as &dyn Widget<Entity, Theme, Renderer>);
+            *old_size = self.text_size;
+        }
+        native.diff(native_tree);
         tree.children[1].diff_children(&mut self.tips);
     }
 
@@ -244,10 +325,10 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Control<M> {
         let control = native.layout(native_tree, renderer, &layout::Limits::new(size, size));
         let size = control.size();
 
-        // The native geometry hook reports each visible segment, including
-        // disabled ones, in model order. With a zero native minimum width all
-        // choices stay visible as the bar narrows. This scratch list does
-        // not register any drag targets with the window.
+        // The drag hook reports visible rectangles in model order, including
+        // disabled segments, without entity IDs. Positional matching relies
+        // on that order and the zero minimum width keeping pagination off.
+        // This scratch list stays local to layout.
         let mut geometry = DndDestinationRectangles::new();
         native.drag_destinations(native_tree, Layout::new(&control), renderer, &mut geometry);
         let mut children = Vec::with_capacity(1 + self.tips.len());
@@ -261,6 +342,12 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Control<M> {
                 layout::Node::new(size).move_to(Point::new(bounds.x as f32, bounds.y as f32)),
             );
         }
+        if !self.disabled_reasons.is_empty()
+            && let Some(id) = native_tree.id.clone()
+        {
+            self.keyboard_help = keyboard_help(id, self.disabled_reasons.clone(), self.text_size);
+        }
+        tree.children[2].diff(self.keyboard_help.as_widget_mut());
         layout::Node::with_children(size, children)
     }
 
@@ -422,16 +509,26 @@ impl<M: Clone + 'static> Widget<M, Theme, Renderer> for Control<M> {
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, M, Theme, Renderer>> {
-        let tips: Vec<_> = self
+        let (base, help) = tree.children.split_at_mut(2);
+        let mut tips: Vec<_> = self
             .tips
             .iter_mut()
-            .zip(&mut tree.children[1].children)
+            .zip(&mut base[1].children)
             .zip(layout.children().skip(1))
             .filter_map(|((tip, tree), region)| {
                 tip.as_widget_mut()
                     .overlay(tree, region, renderer, viewport, translation)
             })
             .collect();
+        // This help source shares the bar's native focus ID and bounds.
+        // Only segment tips receive pointer events.
+        tips.extend(self.keyboard_help.as_widget_mut().overlay(
+            &mut help[0],
+            layout.child(0),
+            renderer,
+            viewport,
+            translation,
+        ));
         (!tips.is_empty()).then(|| overlay::Group::with_children(tips).overlay())
     }
 }
