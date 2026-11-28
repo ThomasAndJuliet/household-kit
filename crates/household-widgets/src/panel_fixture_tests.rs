@@ -585,7 +585,9 @@ fn native_composition_preserves_drag_through_rebuild_and_restores_collapsed_pane
         h.model.boundary()
     );
     assert!(h.model.bounds[&1].height > original.before);
-    let second = Point::new(start.x, start.y + 180.0);
+    // The second movement must exceed the breakthrough threshold and
+    // resize by over 20 px even if rebuilding let the first tug decay.
+    let second = Point::new(start.x, start.y + 200.0);
     let messages = h.dispatch(
         &[Event::Mouse(mouse::Event::CursorMoved { position: second })],
         mouse::Cursor::Available(second),
